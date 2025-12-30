@@ -1,0 +1,51 @@
+# Build directories
+build/
+cmake-build-debug/
+cmake-build-release/
+**/build/
+**/build-debug/
+**/build-release/
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Log files
+*.log
+build.log
+
+# Compiled binaries
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+
+# CMake files
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+DuckDBConfig.cmake
+DuckDBConfigVersion.cmake
+DuckDBExports.cmake
+compile_commands.json
+
+# vcpkg
+vcpkg_installed/
+vcpkg-manifest-install.log
+
+# Temporary files
+*.tmp
+*.temp
+
+# Extension binaries
+*.duckdb_extension
+duckdb_platform_*

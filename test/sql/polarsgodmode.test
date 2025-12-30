@@ -1,0 +1,23 @@
+# name: test/sql/polarsgodmode.test
+# description: test polarsgodmode extension
+# group: [sql]
+
+# Before we load the extension, this will fail
+statement error
+SELECT polarsgodmode('Sam');
+----
+Catalog Error: Scalar Function with name polarsgodmode does not exist!
+
+# Require statement will ensure this test is run with this extension loaded
+require polarsgodmode
+
+# Confirm the extension works
+query I
+SELECT polarsgodmode('Sam');
+----
+Polarsgodmode Sam 🐥
+
+query I
+SELECT polarsgodmode_openssl_version('Michael') ILIKE 'Polarsgodmode Michael, my linked OpenSSL version is OpenSSL%';
+----
+true
