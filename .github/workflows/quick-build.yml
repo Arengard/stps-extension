@@ -62,14 +62,56 @@ jobs:
 
       - name: Fast build
         run: |
-          make debug 2>&1 | head -100
+          echo "Starting build process..."
+          make debug
+
+      - name: Debug build output
+        run: |
+          echo "=== Build directory contents ==="
+          find build -name "*.duckdb_extension" -type f || echo "No .duckdb_extension files found"
+          echo ""
+          echo "=== Full build directory structure ==="
+          ls -la build/ || echo "build/ directory not found"
+          echo ""
+          if [ -d "build/debug" ]; then
+            echo "=== build/debug contents ==="
+            find build/debug -type f -name "*extension*" || echo "No extension files in build/debug"
+          fi
+          echo ""
+          if [ -d "build/release" ]; then
+            echo "=== build/release contents ==="
+            find build/release -type f -name "*extension*" || echo "No extension files in build/release"
+          fi
 
       - name: Build status
         run: |
+          # Check multiple possible locations for the extension
+          EXTENSION_FOUND=false
+          
+          # Check debug build location
           if [ -f "build/debug/extension/polarsgodmode/polarsgodmode.duckdb_extension" ]; then
-            echo "✅ Build successful! Extension file created."
+            echo "✅ Extension found in debug/extension/polarsgodmode/"
             ls -la build/debug/extension/polarsgodmode/
-          else
-            echo "❌ Build failed - extension file not found"
+            EXTENSION_FOUND=true
+          fi
+          
+          # Check alternative debug location
+          if [ -f "build/debug/polarsgodmode.duckdb_extension" ]; then
+            echo "✅ Extension found in debug/ root"
+            ls -la build/debug/polarsgodmode.duckdb_extension
+            EXTENSION_FOUND=true
+          fi
+          
+          # Check if any .duckdb_extension files exist anywhere
+          EXTENSION_FILES=$(find build -name "*.duckdb_extension" -type f 2>/dev/null || true)
+          if [ -n "$EXTENSION_FILES" ]; then
+            echo "✅ Extension files found:"
+            echo "$EXTENSION_FILES"
+            EXTENSION_FOUND=true
+          fi
+          
+          if [ "$EXTENSION_FOUND" = "false" ]; then
+            echo "❌ Build failed - no extension files found anywhere"
+            echo "Build may have completed but extension was not generated"
             exit 1
           fi

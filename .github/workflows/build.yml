@@ -54,11 +54,36 @@ jobs:
 
       - name: Build extension
         run: |
+          echo "Starting Linux build process..."
           make debug
+
+      - name: Debug build output
+        run: |
+          echo "=== Extension files search ==="
+          find build -name "*.duckdb_extension" -type f || echo "No .duckdb_extension files found"
+          echo ""
+          echo "=== Build directory structure ==="
+          find build -type f -name "*extension*" || echo "No extension files found"
 
       - name: Test extension
         run: |
-          build/debug/duckdb -c "INSTALL './build/debug/extension/polarsgodmode/polarsgodmode.duckdb_extension'; LOAD polarsgodmode; SELECT 'Extension loaded successfully';"
+          # Find the extension file
+          EXTENSION_FILE=$(find build -name "*.duckdb_extension" -type f | head -1)
+          
+          if [ -z "$EXTENSION_FILE" ]; then
+            echo "❌ No extension file found for testing"
+            exit 1
+          fi
+          
+          echo "Found extension file: $EXTENSION_FILE"
+          echo "Testing extension loading..."
+          
+          build/debug/duckdb -c "INSTALL '$EXTENSION_FILE'; LOAD polarsgodmode; SELECT 'Extension loaded successfully';" || {
+            echo "❌ Extension failed to load"
+            exit 1
+          }
+          
+          echo "✅ Extension loaded and tested successfully!"
 
   macos:
     name: MacOS
@@ -93,8 +118,33 @@ jobs:
 
       - name: Build extension
         run: |
+          echo "Starting macOS build process..."
           make debug
+
+      - name: Debug build output
+        run: |
+          echo "=== Extension files search ==="
+          find build -name "*.duckdb_extension" -type f || echo "No .duckdb_extension files found"
+          echo ""
+          echo "=== Build directory structure ==="
+          find build -type f -name "*extension*" || echo "No extension files found"
 
       - name: Test extension
         run: |
-          build/debug/duckdb -c "INSTALL './build/debug/extension/polarsgodmode/polarsgodmode.duckdb_extension'; LOAD polarsgodmode; SELECT 'Extension loaded successfully';"
+          # Find the extension file
+          EXTENSION_FILE=$(find build -name "*.duckdb_extension" -type f | head -1)
+          
+          if [ -z "$EXTENSION_FILE" ]; then
+            echo "❌ No extension file found for testing"
+            exit 1
+          fi
+          
+          echo "Found extension file: $EXTENSION_FILE"
+          echo "Testing extension loading..."
+          
+          build/debug/duckdb -c "INSTALL '$EXTENSION_FILE'; LOAD polarsgodmode; SELECT 'Extension loaded successfully';" || {
+            echo "❌ Extension failed to load"
+            exit 1
+          }
+          
+          echo "✅ Extension loaded and tested successfully!"

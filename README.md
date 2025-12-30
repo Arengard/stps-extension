@@ -1,102 +1,113 @@
-# Polarsgodmode
+# STPS Extension for DuckDB
 
-This repository is based on https://github.com/duckdb/extension-template, check it out if you want to build and ship your own DuckDB extension.
+A comprehensive DuckDB extension providing various utility functions for data processing and analysis.
 
----
+## Features
 
-This extension, Polarsgodmode, allow you to ... <extension_goal>.
+This extension includes the following function categories:
 
+### Text Processing
+- **Case Transformation**: Functions for converting text case
+- **Text Normalization**: Functions for normalizing text data
+- **XML Parsing**: XML document parsing capabilities
 
-## Building
-### Managing dependencies
-DuckDB extensions uses VCPKG for dependency management. Enabling VCPKG is very simple: follow the [installation instructions](https://vcpkg.io/en/getting-started) or just run the following:
-```shell
-git clone https://github.com/Microsoft/vcpkg.git
-./vcpkg/bootstrap-vcpkg.sh
-export VCPKG_TOOLCHAIN_PATH=`pwd`/vcpkg/scripts/buildsystems/vcpkg.cmake
-```
-Note: VCPKG is only required for extensions that want to rely on it for dependency management. If you want to develop an extension without dependencies, or want to do your own dependency management, just skip this step. Note that the example extension uses VCPKG to build with a dependency for instructive purposes, so when skipping this step the build may not work without removing the dependency.
+### Data Operations  
+- **GOBD Reader**: Specialized data reading functionality
+- **Null Handling**: Advanced null value processing
+- **I/O Operations**: File and data input/output utilities
 
-### Build steps
-Now to build the extension, run:
-```sh
-make
-```
-The main binaries that will be built are:
-```sh
-./build/release/duckdb
-./build/release/test/unittest
-./build/release/extension/polarsgodmode/polarsgodmode.duckdb_extension
-```
-- `duckdb` is the binary for the duckdb shell with the extension code automatically loaded.
-- `unittest` is the test runner of duckdb. Again, the extension is already linked into the binary.
-- `polarsgodmode.duckdb_extension` is the loadable binary as it would be distributed.
+### Validation & Generation
+- **IBAN Validation**: International Bank Account Number validation
+- **UUID Functions**: UUID generation and manipulation utilities
 
-## Running the extension
-To run the extension code, simply start the shell with `./build/release/duckdb`.
+## Building the Extension
 
-Now we can use the features from the extension directly in DuckDB. The template contains a single scalar function `polarsgodmode()` that takes a string arguments and returns a string:
-```
-D select polarsgodmode('Jane') as result;
-┌───────────────┐
-│    result     │
-│    varchar    │
-├───────────────┤
-│ Polarsgodmode Jane 🐥 │
-└───────────────┘
+### Prerequisites
+- CMake 3.5 or higher
+- C++ compiler with C++11 support
+- Git (for submodules)
+
+### Quick Build
+```bash
+# Clone with submodules
+git clone --recursive <your-repo-url>
+cd stps-extension
+
+# Or if already cloned, initialize submodules
+git submodule update --init --recursive
+
+# Build the extension
+make debug
 ```
 
-## Running the tests
-Different tests can be created for DuckDB extensions. The primary way of testing DuckDB extensions should be the SQL tests in `./test/sql`. These SQL tests can be run using:
-```sh
-make test
+### Manual Build
+```bash
+mkdir build
+cd build
+cmake -DCMAKE_BUILD_TYPE=Debug ..
+make -j$(nproc)
 ```
 
-### Installing the deployed binaries
-To install your extension binaries from S3, you will need to do two things. Firstly, DuckDB should be launched with the
-`allow_unsigned_extensions` option set to true. How to set this will depend on the client you're using. Some examples:
+## Usage
 
-CLI:
-```shell
-duckdb -unsigned
-```
+After building, load the extension in DuckDB:
 
-Python:
-```python
-con = duckdb.connect(':memory:', config={'allow_unsigned_extensions' : 'true'})
-```
-
-NodeJS:
-```js
-db = new duckdb.Database(':memory:', {"allow_unsigned_extensions": "true"});
-```
-
-Secondly, you will need to set the repository endpoint in DuckDB to the HTTP url of your bucket + version of the extension
-you want to install. To do this run the following SQL query in DuckDB:
 ```sql
-SET custom_extension_repository='bucket.s3.eu-west-1.amazonaws.com/<your_extension_name>/latest';
-```
-Note that the `/latest` path will allow you to install the latest extension version available for your current version of
-DuckDB. To specify a specific version, you can pass the version instead.
+-- Install the extension
+INSTALL './build/debug/extension/polarsgodmode/polarsgodmode.duckdb_extension';
 
-After running these steps, you can install and load your extension using the regular INSTALL/LOAD commands in DuckDB:
-```sql
-INSTALL polarsgodmode;
+-- Load the extension
 LOAD polarsgodmode;
+
+-- Use extension functions
+SELECT uuid_generate_v4();
 ```
 
-## Setting up CLion
+## Development
 
-### Opening project
-Configuring CLion with this extension requires a little work. Firstly, make sure that the DuckDB submodule is available.
-Then make sure to open `./duckdb/CMakeLists.txt` (so not the top level `CMakeLists.txt` file from this repo) as a project in CLion.
-Now to fix your project path go to `tools->CMake->Change Project Root`([docs](https://www.jetbrains.com/help/clion/change-project-root-directory.html)) to set the project root to the root dir of this repo.
-
-### Debugging
-To set up debugging in CLion, there are two simple steps required. Firstly, in `CLion -> Settings / Preferences -> Build, Execution, Deploy -> CMake` you will need to add the desired builds (e.g. Debug, Release, RelDebug, etc). There's different ways to configure this, but the easiest is to leave all empty, except the `build path`, which needs to be set to `../build/{build type}`, and CMake Options to which the following flag should be added, with the path to the extension CMakeList:
-
+### Project Structure
 ```
--DDUCKDB_EXTENSION_CONFIGS=<path_to_the_exentension_CMakeLists.txt>
+├── src/                    # Source files
+│   ├── include/           # Header files
+│   ├── polarsgodmode_extension.cpp  # Main extension file
+│   ├── case_transform.cpp # Case transformation functions
+│   ├── text_normalize.cpp # Text normalization functions
+│   ├── xml_parser.cpp     # XML parsing functions
+│   ├── gobd_reader.cpp    # GOBD reader implementation
+│   ├── null_handling.cpp  # Null handling utilities
+│   ├── io_operations.cpp  # I/O operation functions
+│   ├── iban_validation.cpp # IBAN validation functions
+│   ├── uuid_functions.cpp # UUID generation functions
+│   └── utils.cpp          # Utility functions
+├── test/                  # Test files
+├── docs/                  # Documentation
+├── duckdb/               # DuckDB submodule
+└── extension-ci-tools/   # CI/CD tools submodule
 ```
 
-The second step is to configure the unittest runner as a run/debug configuration. To do this, go to `Run -> Edit Configurations` and click `+ -> Cmake Application`. The target and executable should be `unittest`. This will run all the DuckDB tests. To specify only running the extension specific tests, add `--test-dir ../../.. [sql]` to the `Program Arguments`. Note that it is recommended to use the `unittest` executable for testing/development within CLion. The actual DuckDB CLI currently does not reliably work as a run target in CLion.
+### Contributing
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Add tests for new functionality
+5. Submit a pull request
+
+## CI/CD
+
+This repository includes GitHub Actions workflows that automatically:
+- Build the extension on Linux and macOS
+- Run tests
+- Validate the build output
+
+The workflows trigger on pushes to `main`, `master`, `develop`, and `dev` branches.
+
+## License
+
+[Add your license information here]
+
+## Functions Reference
+
+For detailed function documentation, see:
+- [STPS Functions Documentation](STPS_FUNCTIONS.md)
+- [GOBD Usage Guide](GOBD_USAGE.md)
+- [General Usage Guide](USAGE.md)

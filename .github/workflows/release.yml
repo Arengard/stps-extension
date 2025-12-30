@@ -1,0 +1,98 @@
+name: Release Build
+
+on:
+  push:
+    tags:
+      - 'v*'
+  release:
+    types: [created]
+
+jobs:
+  build:
+    name: Build Extension
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux_amd64
+            container: ubuntu:22.04
+          - os: macos-latest
+            platform: osx_arm64
+          - os: macos-13
+            platform: osx_amd64
+
+    runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container }}
+
+    steps:
+      - name: Install packages (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          apt-get update -y -qq
+          apt-get install -y -qq ninja-build make gcc g++ git curl zip unzip tar pkg-config
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: false
+
+      - name: Fix Git ownership (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          git config --global --add safe.directory /__w/stps-extension/stps-extension
+          git config --global --add safe.directory '*'
+
+      - name: Setup submodules
+        run: |
+          # Create .gitmodules if it doesn't exist
+          if [ ! -f ".gitmodules" ]; then
+            cat > .gitmodules << 'EOF'
+          [submodule "duckdb"]
+          	path = duckdb
+          	url = https://github.com/duckdb/duckdb.git
+          [submodule "extension-ci-tools"]
+          	path = extension-ci-tools
+          	url = https://github.com/duckdb/extension-ci-tools.git
+          EOF
+          fi
+          
+          # Initialize and update submodules
+          git submodule add https://github.com/duckdb/duckdb.git duckdb || true
+          git submodule add https://github.com/duckdb/extension-ci-tools.git extension-ci-tools || true
+          git submodule update --init --recursive
+
+      - name: Build extension (Release)
+        run: |
+          make release
+
+      - name: Package extension
+        run: |
+          mkdir -p dist
+          cp build/release/extension/polarsgodmode/polarsgodmode.duckdb_extension dist/
+          cd dist
+          tar -czf polarsgodmode-${{ matrix.platform }}.tar.gz polarsgodmode.duckdb_extension
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: extension-${{ matrix.platform }}
+          path: dist/polarsgodmode-${{ matrix.platform }}.tar.gz
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release'
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v3
+
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            extension-*/polarsgodmode-*.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
