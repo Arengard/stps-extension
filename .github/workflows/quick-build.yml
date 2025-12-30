@@ -1,0 +1,75 @@
+name: Quick Build (Development)
+
+on:
+  push:
+    branches: [ master, main, develop, dev ]
+
+jobs:
+  quick-build:
+    name: Quick Linux Build Only
+    runs-on: ubuntu-latest
+    container: ubuntu:22.04
+    env:
+      GEN: ninja
+      MAKEFLAGS: -j$(nproc)
+
+    steps:
+      - name: Install minimal packages
+        run: |
+          apt-get update -y -qq
+          apt-get install -y -qq ninja-build make gcc g++ git
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: false
+
+      - name: Fix Git ownership
+        run: |
+          git config --global --add safe.directory /__w/stps-extension/stps-extension
+          git config --global --add safe.directory '*'
+
+      - name: Setup submodules
+        run: |
+          # Create .gitmodules if it doesn't exist
+          if [ ! -f ".gitmodules" ]; then
+            cat > .gitmodules << 'EOF'
+          [submodule "duckdb"]
+          	path = duckdb
+          	url = https://github.com/duckdb/duckdb.git
+          [submodule "extension-ci-tools"]
+          	path = extension-ci-tools
+          	url = https://github.com/duckdb/extension-ci-tools.git
+          EOF
+          fi
+          
+          # Initialize and update submodules
+          git submodule add https://github.com/duckdb/duckdb.git duckdb || true
+          git submodule add https://github.com/duckdb/extension-ci-tools.git extension-ci-tools || true
+          git submodule update --init --recursive
+
+      - name: Cache build
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.ccache
+            build/
+            duckdb/build/
+          key: dev-build-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            dev-build-${{ runner.os }}-
+
+      - name: Fast build
+        run: |
+          make debug 2>&1 | head -100
+
+      - name: Build status
+        run: |
+          if [ -f "build/debug/extension/polarsgodmode/polarsgodmode.duckdb_extension" ]; then
+            echo "✅ Build successful! Extension file created."
+            ls -la build/debug/extension/polarsgodmode/
+          else
+            echo "❌ Build failed - extension file not found"
+            exit 1
+          fi
