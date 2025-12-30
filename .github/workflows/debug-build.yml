@@ -18,7 +18,7 @@ jobs:
       - name: Install packages
         run: |
           apt-get update -y -qq
-          apt-get install -y -qq ninja-build make gcc g++ git tree
+          apt-get install -y -qq cmake ninja-build make gcc g++ git tree
 
       - name: Checkout
         uses: actions/checkout@v4
@@ -103,3 +103,109 @@ jobs:
           
           echo "Testing extension..."
           $DUCKDB_BINARY -c "INSTALL '$EXTENSION_FILE'; LOAD polarsgodmode; SELECT 'Success!' as result;"
+
+  debug-windows:
+    name: Debug Build Process (Windows)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: false
+
+      - name: Install build dependencies
+        shell: pwsh
+        run: |
+          choco install -y cmake ninja
+
+      - name: Setup MSVC
+        uses: microsoft/setup-msbuild@v1.0.2
+
+      - name: Setup submodules
+        shell: bash
+        run: |
+          # Create .gitmodules if it doesn't exist
+          if [ ! -f ".gitmodules" ]; then
+            cat > .gitmodules << 'EOF'
+          [submodule "duckdb"]
+          	path = duckdb
+          	url = https://github.com/duckdb/duckdb.git
+          [submodule "extension-ci-tools"]
+          	path = extension-ci-tools
+          	url = https://github.com/duckdb/extension-ci-tools.git
+          EOF
+          fi
+          
+          # Initialize and update submodules
+          git submodule add https://github.com/duckdb/duckdb.git duckdb || true
+          git submodule add https://github.com/duckdb/extension-ci-tools.git extension-ci-tools || true
+          git submodule update --init --recursive
+
+      - name: Show project structure before build
+        shell: bash
+        run: |
+          echo "=== Root directory ==="
+          ls -la
+          echo ""
+          echo "=== Source files ==="
+          ls -la src/ || echo "src/ not found"
+          echo ""
+          echo "=== Extension config ==="
+          cat extension_config.cmake
+          echo ""
+          echo "=== CMakeLists.txt ==="
+          cat CMakeLists.txt
+
+      - name: Build extension with verbose output
+        shell: bash
+        run: |
+          echo "Starting Windows build with full output..."
+          make debug VERBOSE=1
+
+      - name: Show complete directory tree after build
+        shell: bash
+        run: |
+          echo "=== Complete directory tree ==="
+          find build/ -type f 2>/dev/null || echo "Build directory exploration failed"
+          echo ""
+          echo "=== All files containing 'extension' ==="
+          find . -name "*extension*" -type f 2>/dev/null || echo "No extension files found"
+          echo ""
+          echo "=== All .duckdb_extension files ==="
+          find . -name "*.duckdb_extension" -type f 2>/dev/null || echo "No .duckdb_extension files found"
+          echo ""
+          echo "=== DuckDB binary location ==="
+          find build/ -name "duckdb*" -type f 2>/dev/null || echo "No duckdb binaries found"
+
+      - name: Test extension if found
+        shell: bash
+        run: |
+          EXTENSION_FILE=$(find . -name "*.duckdb_extension" -type f | head -1)
+          DUCKDB_BINARY=$(find build/ -name "duckdb*" -executable -type f | head -1)
+          
+          # Try common Windows paths if not found
+          if [ -z "$DUCKDB_BINARY" ]; then
+            if [ -f "build/debug/duckdb.exe" ]; then
+              DUCKDB_BINARY="build/debug/duckdb.exe"
+            elif [ -f "build/Debug/duckdb.exe" ]; then
+              DUCKDB_BINARY="build/Debug/duckdb.exe"
+            fi
+          fi
+          
+          if [ -z "$EXTENSION_FILE" ]; then
+            echo "❌ No extension file found"
+            exit 1
+          fi
+          
+          if [ -z "$DUCKDB_BINARY" ]; then
+            echo "❌ No duckdb binary found"
+            exit 1
+          fi
+          
+          echo "Extension file: $EXTENSION_FILE"
+          echo "DuckDB binary: $DUCKDB_BINARY"
+          
+          echo "Testing extension..."
+          "$DUCKDB_BINARY" -c "INSTALL '$EXTENSION_FILE'; LOAD polarsgodmode; SELECT 'Success!' as result;"

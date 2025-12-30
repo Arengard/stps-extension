@@ -17,7 +17,7 @@ jobs:
       - name: Install minimal packages
         run: |
           apt-get update -y -qq
-          apt-get install -y -qq ninja-build make gcc g++ git
+          apt-get install -y -qq cmake ninja-build make gcc g++ git pkg-config curl
 
       - name: Checkout
         uses: actions/checkout@v4

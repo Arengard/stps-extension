@@ -40,6 +40,16 @@ git submodule update --init --recursive
 make debug
 ```
 
+### Windows Build
+```batch
+# Windows Command Prompt or PowerShell
+build-windows.bat
+
+# Or manually:
+git submodule update --init --recursive
+make debug
+```
+
 ### Manual Build
 ```bash
 mkdir build

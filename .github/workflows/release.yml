@@ -20,6 +20,8 @@ jobs:
             platform: osx_arm64
           - os: macos-13
             platform: osx_amd64
+          - os: windows-latest
+            platform: windows_amd64
 
     runs-on: ${{ matrix.os }}
     container: ${{ matrix.container }}
@@ -29,7 +31,16 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: |
           apt-get update -y -qq
-          apt-get install -y -qq ninja-build make gcc g++ git curl zip unzip tar pkg-config
+          apt-get install -y -qq cmake ninja-build make gcc g++ git curl zip unzip tar pkg-config
+
+      - name: Install build dependencies (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          choco install -y cmake ninja
+
+      - name: Setup MSVC (Windows)
+        if: matrix.os == 'windows-latest'
+        uses: microsoft/setup-msbuild@v1.0.2
 
       - name: Checkout
         uses: actions/checkout@v4
@@ -44,6 +55,7 @@ jobs:
           git config --global --add safe.directory '*'
 
       - name: Setup submodules
+        shell: ${{ matrix.os == 'windows-latest' && 'bash' || 'sh' }}
         run: |
           # Create .gitmodules if it doesn't exist
           if [ ! -f ".gitmodules" ]; then
@@ -63,21 +75,40 @@ jobs:
           git submodule update --init --recursive
 
       - name: Build extension (Release)
+        shell: ${{ matrix.os == 'windows-latest' && 'bash' || 'sh' }}
         run: |
           make release
 
       - name: Package extension
+        shell: ${{ matrix.os == 'windows-latest' && 'bash' || 'sh' }}
         run: |
           mkdir -p dist
-          cp build/release/extension/polarsgodmode/polarsgodmode.duckdb_extension dist/
+          
+          # Find the extension file dynamically
+          EXTENSION_FILE=$(find build -name "*.duckdb_extension" -type f | head -1)
+          
+          if [ -z "$EXTENSION_FILE" ]; then
+            echo "❌ No extension file found for packaging"
+            exit 1
+          fi
+          
+          echo "Found extension file: $EXTENSION_FILE"
+          cp "$EXTENSION_FILE" dist/polarsgodmode.duckdb_extension
+          
           cd dist
-          tar -czf polarsgodmode-${{ matrix.platform }}.tar.gz polarsgodmode.duckdb_extension
+          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
+            # Use zip for Windows
+            7z a polarsgodmode-${{ matrix.platform }}.zip polarsgodmode.duckdb_extension
+          else
+            # Use tar for Unix systems
+            tar -czf polarsgodmode-${{ matrix.platform }}.tar.gz polarsgodmode.duckdb_extension
+          fi
 
       - name: Upload artifact
         uses: actions/upload-artifact@v3
         with:
           name: extension-${{ matrix.platform }}
-          path: dist/polarsgodmode-${{ matrix.platform }}.tar.gz
+          path: dist/polarsgodmode-${{ matrix.platform }}.*
 
   release:
     name: Create Release
@@ -87,12 +118,13 @@ jobs:
 
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
 
       - name: Upload release assets
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           files: |
             extension-*/polarsgodmode-*.tar.gz
+            extension-*/polarsgodmode-*.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

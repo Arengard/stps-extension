@@ -23,8 +23,15 @@
 ## Testing Locally
 
 Run the test script to make sure everything works:
+
+**Linux/macOS:**
 ```bash
 ./test-extension.sh
+```
+
+**Windows:**
+```batch
+build-windows.bat
 ```
 
 ## GitHub Actions Workflows
@@ -39,17 +46,17 @@ Your repository now includes four workflows:
 
 ### 2. **Full Build** (`.github/workflows/build.yml`) 
 - Runs on pushes and pull requests
-- Builds on both Linux and macOS
+- Builds on Linux, macOS, and Windows
 - Includes testing and comprehensive file location debugging
 - Automatically finds extension files regardless of build location
 
 ### 3. **Release Build** (`.github/workflows/release.yml`)
 - Runs on git tags (e.g., `v1.0.0`)
-- Creates release artifacts for multiple platforms
+- Creates release artifacts for Linux, macOS, and Windows
 - Automatically uploads to GitHub releases
 
 ### 4. **Debug Build** (`.github/workflows/debug-build.yml`)
-- Manual workflow for deep debugging build issues
+- Manual workflow for deep debugging build issues on all platforms
 - Shows complete directory trees and file locations
 - Can be triggered manually from GitHub Actions tab
 

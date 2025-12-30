@@ -19,7 +19,7 @@ jobs:
       - name: Install packages
         run: |
           apt-get update -y -qq
-          apt-get install -y -qq ninja-build make gcc g++ git curl zip unzip tar pkg-config
+          apt-get install -y -qq cmake ninja-build make gcc g++ git curl zip unzip tar pkg-config
 
       - name: Checkout
         uses: actions/checkout@v4
@@ -143,6 +143,87 @@ jobs:
           echo "Testing extension loading..."
           
           build/debug/duckdb -c "INSTALL '$EXTENSION_FILE'; LOAD polarsgodmode; SELECT 'Extension loaded successfully';" || {
+            echo "❌ Extension failed to load"
+            exit 1
+          }
+          
+          echo "✅ Extension loaded and tested successfully!"
+
+  windows:
+    name: Windows
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: false
+
+      - name: Install build dependencies
+        run: |
+          choco install -y cmake ninja
+
+      - name: Setup MSVC
+        uses: microsoft/setup-msbuild@v1.0.2
+
+      - name: Setup submodules
+        shell: bash
+        run: |
+          # Initialize submodules if they don't exist
+          if [ ! -f ".gitmodules" ]; then
+            echo "Creating .gitmodules file"
+            cat > .gitmodules << 'EOF'
+          [submodule "duckdb"]
+          	path = duckdb
+          	url = https://github.com/duckdb/duckdb.git
+          [submodule "extension-ci-tools"]
+          	path = extension-ci-tools
+          	url = https://github.com/duckdb/extension-ci-tools.git
+          EOF
+          fi
+          
+          # Initialize and update submodules
+          git submodule add https://github.com/duckdb/duckdb.git duckdb || true
+          git submodule add https://github.com/duckdb/extension-ci-tools.git extension-ci-tools || true
+          git submodule update --init --recursive
+
+      - name: Build extension
+        shell: bash
+        run: |
+          echo "Starting Windows build process..."
+          make debug
+
+      - name: Debug build output
+        shell: bash
+        run: |
+          echo "=== Extension files search ==="
+          find build -name "*.duckdb_extension" -type f 2>/dev/null || echo "No .duckdb_extension files found"
+          echo ""
+          echo "=== Build directory structure ==="
+          find build -type f -name "*extension*" 2>/dev/null || echo "No extension files found"
+
+      - name: Test extension
+        shell: bash
+        run: |
+          # Find the extension file
+          EXTENSION_FILE=$(find build -name "*.duckdb_extension" -type f | head -1)
+          
+          if [ -z "$EXTENSION_FILE" ]; then
+            echo "❌ No extension file found for testing"
+            exit 1
+          fi
+          
+          echo "Found extension file: $EXTENSION_FILE"
+          echo "Testing extension loading..."
+          
+          # Find DuckDB executable (could be .exe on Windows)
+          DUCKDB_EXE=$(find build -name "duckdb*" -executable -type f | head -1)
+          if [ -z "$DUCKDB_EXE" ]; then
+            DUCKDB_EXE="build/debug/duckdb.exe"
+          fi
+          
+          "$DUCKDB_EXE" -c "INSTALL '$EXTENSION_FILE'; LOAD polarsgodmode; SELECT 'Extension loaded successfully';" || {
             echo "❌ Extension failed to load"
             exit 1
           }
