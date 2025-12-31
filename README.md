@@ -53,7 +53,7 @@ Available platforms in `binaries/` directory:
 - `osx_amd64` - macOS Intel
 - `windows_amd64` - Windows x86_64
 
-See [binaries/README.md](binaries/README.md) for more details.
+See [binaries/README.md](binaries/README.md) for more details, or [BINARIES.md](BINARIES.md) for how the automated build system works.
 
 ## Building the Extension (Optional)
 
