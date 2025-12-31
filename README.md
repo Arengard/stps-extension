@@ -44,7 +44,7 @@ INSTALL './binaries/linux_amd64/polarsgodmode.duckdb_extension';
 LOAD polarsgodmode;
 
 # Start using functions
-SELECT uuid_generate_v4();
+SELECT stps_uuid();
 ```
 
 Available platforms in `binaries/` directory:
@@ -107,7 +107,7 @@ INSTALL './binaries/linux_amd64/polarsgodmode.duckdb_extension';
 LOAD polarsgodmode;
 
 -- Use extension functions
-SELECT uuid_generate_v4();
+SELECT stps_uuid();
 ```
 
 ### Using Self-built Extension
@@ -122,7 +122,7 @@ INSTALL './build/debug/extension/polarsgodmode/polarsgodmode.duckdb_extension';
 LOAD polarsgodmode;
 
 -- Use extension functions
-SELECT uuid_generate_v4();
+SELECT stps_uuid();
 ```
 
 ## Development

@@ -33,7 +33,7 @@ duckdb
 # In DuckDB:
 INSTALL './binaries/linux_amd64/polarsgodmode.duckdb_extension';
 LOAD polarsgodmode;
-SELECT uuid_generate_v4();
+SELECT stps_uuid();
 ```
 
 ### Windows Example:
@@ -44,7 +44,7 @@ duckdb.exe
 # In DuckDB:
 INSTALL './binaries/windows_amd64/polarsgodmode.duckdb_extension';
 LOAD polarsgodmode;
-SELECT uuid_generate_v4();
+SELECT stps_uuid();
 ```
 
 ## Build Information

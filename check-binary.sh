@@ -54,7 +54,7 @@ if [ -f "$BINARY_PATH" ]; then
     echo ""
     echo "  INSTALL './$BINARY_PATH';"
     echo "  LOAD polarsgodmode;"
-    echo "  SELECT uuid_generate_v4();"
+    echo "  SELECT stps_uuid();"
     echo ""
 else
     echo "❌ Pre-built binary not found at: $BINARY_PATH"

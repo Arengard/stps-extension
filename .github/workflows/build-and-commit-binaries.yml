@@ -100,15 +100,18 @@ jobs:
           echo "Found extension file: $EXTENSION_FILE"
           cp "$EXTENSION_FILE" binary-output/${{ matrix.platform }}/polarsgodmode.duckdb_extension
           
+          # Get build date
+          BUILD_DATE=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
+          
           # Create a README for this platform
-          cat > binary-output/${{ matrix.platform }}/README.md << 'EOF'
+          cat > binary-output/${{ matrix.platform }}/README.md << EOF
           # Pre-built Binary for ${{ matrix.platform }}
 
           This is a pre-built extension binary for the STPS Extension.
 
           ## Usage
 
-          ```sql
+          \`\`\`sql
           -- Install the extension
           INSTALL './binaries/${{ matrix.platform }}/polarsgodmode.duckdb_extension';
 
@@ -116,15 +119,15 @@ jobs:
           LOAD polarsgodmode;
 
           -- Use extension functions
-          SELECT uuid_generate_v4();
-          ```
+          SELECT stps_uuid();
+          \`\`\`
 
           ## Build Information
           - Platform: ${{ matrix.platform }}
           - Built by: GitHub Actions
           - Repository: ${{ github.repository }}
           - Commit: ${{ github.sha }}
-          - Build Date: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+          - Build Date: ${BUILD_DATE}
           EOF
 
       - name: Upload binary artifact
@@ -195,7 +198,7 @@ jobs:
           # In DuckDB:
           INSTALL './binaries/linux_amd64/polarsgodmode.duckdb_extension';
           LOAD polarsgodmode;
-          SELECT uuid_generate_v4();
+          SELECT stps_uuid();
           ```
 
           ### Windows Example:
@@ -206,7 +209,7 @@ jobs:
           # In DuckDB:
           INSTALL './binaries/windows_amd64/polarsgodmode.duckdb_extension';
           LOAD polarsgodmode;
-          SELECT uuid_generate_v4();
+          SELECT stps_uuid();
           ```
 
           ## Build Information
