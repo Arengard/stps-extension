@@ -25,10 +25,65 @@ The **STPS Extension** is a developer productivity extension that integrates STP
 
 If you have a prebuilt extension package (e.g., `.vsix` or similar):
 
-1. Open the **Extensions** or **Plugins** view.
-2. Choose **Install from VSIX / local file** (exact wording depends on your IDE).
-3. Select the downloaded STPS Extension binary.
-4. Confirm and reload the IDE.
+# Or if already cloned, initialize submodules
+git submodule update --init --recursive
+
+# Build the extension
+make debug
+```
+
+### Multi-Version Build System (Recommended)
+
+Build the extension for specific DuckDB versions to ensure compatibility with your installed DuckDB:
+
+```bash
+# Build for a specific DuckDB version (e.g., v1.4.3)
+./scripts/build-for-version.sh v1.4.3
+
+# Run automated tests
+./scripts/test-version.sh v1.4.3
+
+# Use with system DuckDB
+duckdb -unsigned
+> LOAD './build/v1.4.3/extension/polarsgodmode/polarsgodmode.duckdb_extension';
+> SELECT stps_is_valid_iban('DE89370400440532013000');
+```
+
+**Benefits:**
+- ✅ Build against stable DuckDB releases (matches your system DuckDB)
+- ✅ Test multiple versions simultaneously
+- ✅ Automatic submodule management (restores development state after build)
+- ✅ Easy to add new versions
+
+**Adding more versions:**
+```bash
+# When DuckDB v1.5.0 releases
+./scripts/build-for-version.sh v1.5.0
+./scripts/test-version.sh v1.5.0
+
+# Or test against development version
+./scripts/build-for-version.sh main
+```
+
+See [Multi-Version Build Design](docs/plans/2025-12-31-multi-version-build-system.md) for details.
+
+### Windows Build
+```batch
+# Windows Command Prompt or PowerShell
+build-windows.bat
+
+# Or manually:
+git submodule update --init --recursive
+make debug
+```
+
+### Manual Build
+```bash
+mkdir build
+cd build
+cmake -DCMAKE_BUILD_TYPE=Debug ..
+make -j$(nproc)
+```
 
 ## Usage
 
