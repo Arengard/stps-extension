@@ -9,9 +9,12 @@ on:
       - 'extension_config.cmake'
       - 'Makefile'
 
+permissions:
+  contents: write
+
 jobs:
   build-binaries:
-    name: Build and Commit Binaries
+    name: Build Binaries
     strategy:
       matrix:
         include:
@@ -49,19 +52,12 @@ jobs:
         with:
           fetch-depth: 0
           submodules: false
-          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Fix Git ownership (Ubuntu)
         if: matrix.os == 'ubuntu-latest'
         run: |
           git config --global --add safe.directory /__w/stps-extension/stps-extension
           git config --global --add safe.directory '*'
-
-      - name: Setup Git
-        shell: ${{ matrix.os == 'windows-latest' && 'bash' || 'sh' }}
-        run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Setup submodules
         shell: ${{ matrix.os == 'windows-latest' && 'bash' || 'sh' }}
@@ -88,24 +84,24 @@ jobs:
         run: |
           make release
 
-      - name: Prepare binaries directory
+      - name: Prepare binary artifact
         shell: ${{ matrix.os == 'windows-latest' && 'bash' || 'sh' }}
         run: |
-          mkdir -p binaries/${{ matrix.platform }}
+          mkdir -p binary-output/${{ matrix.platform }}
           
           # Find the extension file dynamically
           EXTENSION_FILE=$(find build -name "*.duckdb_extension" -type f | head -1)
           
           if [ -z "$EXTENSION_FILE" ]; then
-            echo "❌ No extension file found for packaging"
+            echo "❌ No extension file found"
             exit 1
           fi
           
           echo "Found extension file: $EXTENSION_FILE"
-          cp "$EXTENSION_FILE" binaries/${{ matrix.platform }}/polarsgodmode.duckdb_extension
+          cp "$EXTENSION_FILE" binary-output/${{ matrix.platform }}/polarsgodmode.duckdb_extension
           
-          # Create a README for the binaries directory
-          cat > binaries/${{ matrix.platform }}/README.md << 'EOF'
+          # Create a README for this platform
+          cat > binary-output/${{ matrix.platform }}/README.md << 'EOF'
           # Pre-built Binary for ${{ matrix.platform }}
 
           This is a pre-built extension binary for the STPS Extension.
@@ -128,24 +124,17 @@ jobs:
           - Built by: GitHub Actions
           - Repository: ${{ github.repository }}
           - Commit: ${{ github.sha }}
+          - Build Date: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
           EOF
 
-      - name: Commit binaries
-        shell: ${{ matrix.os == 'windows-latest' && 'bash' || 'sh' }}
-        run: |
-          git add binaries/${{ matrix.platform }}/
-          
-          # Only commit if there are changes
-          if git diff --staged --quiet; then
-            echo "No changes to commit"
-          else
-            git commit -m "chore: update pre-built binary for ${{ matrix.platform }} [skip ci]"
-            git pull --rebase origin ${{ github.ref_name }}
-            git push origin ${{ github.ref_name }}
-          fi
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.platform }}
+          path: binary-output/${{ matrix.platform }}/
 
-  consolidate:
-    name: Create Consolidated README
+  commit-binaries:
+    name: Commit Binaries to Repository
     needs: build-binaries
     runs-on: ubuntu-latest
     
@@ -156,17 +145,32 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Pull latest changes
-        run: |
-          git pull origin ${{ github.ref_name }}
-
       - name: Setup Git
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Create binaries README
+      - name: Download all binary artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: downloaded-binaries
+
+      - name: Organize binaries
         run: |
+          # Create binaries directory structure
+          mkdir -p binaries
+          
+          # Move each platform's binaries to the correct location
+          for platform_dir in downloaded-binaries/binary-*; do
+            if [ -d "$platform_dir" ]; then
+              platform_name=$(basename "$platform_dir" | sed 's/^binary-//')
+              echo "Processing platform: $platform_name"
+              mkdir -p "binaries/$platform_name"
+              cp -r "$platform_dir"/* "binaries/$platform_name/"
+            fi
+          done
+          
+          # Update main binaries README
           cat > binaries/README.md << 'EOF'
           # Pre-built Binaries
 
@@ -214,13 +218,15 @@ jobs:
           If you prefer to build the extension yourself or need a different platform, see the main [README.md](../README.md) for build instructions.
           EOF
 
-      - name: Commit consolidated README
+      - name: Commit and push binaries
         run: |
-          git add binaries/README.md
+          git add binaries/
           
+          # Only commit if there are changes
           if git diff --staged --quiet; then
             echo "No changes to commit"
           else
-            git commit -m "chore: update binaries README [skip ci]"
+            git commit -m "chore: update pre-built binaries [skip ci]"
             git push origin ${{ github.ref_name }}
           fi
+
