@@ -2,9 +2,11 @@
 #include "duckdb/function/scalar_function.hpp"
 #include "duckdb/common/types/data_chunk.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
+#include "duckdb/main/extension/extension_loader.hpp"
 #include <string>
 #include <algorithm>
 #include <cctype>
+#include <unordered_map>
 
 namespace duckdb {
 namespace polarsgodmode {
@@ -109,6 +111,91 @@ bool validate_iban(const std::string& iban) {
     return (mod_result == "1");
 }
 
+// Helper function to format IBAN with spaces (every 4 characters)
+std::string format_iban(const std::string& iban) {
+    // Remove all spaces first
+    std::string cleaned;
+    for (char c : iban) {
+        if (!std::isspace(c)) {
+            cleaned += std::toupper(c);
+        }
+    }
+
+    // Add space every 4 characters
+    std::string formatted;
+    for (size_t i = 0; i < cleaned.length(); i++) {
+        if (i > 0 && i % 4 == 0) {
+            formatted += ' ';
+        }
+        formatted += cleaned[i];
+    }
+
+    return formatted;
+}
+
+// Helper function to get country code from IBAN
+std::string get_country_code(const std::string& iban) {
+    // Remove spaces and convert to uppercase
+    std::string cleaned;
+    for (char c : iban) {
+        if (!std::isspace(c)) {
+            cleaned += std::toupper(c);
+        }
+    }
+
+    // Country code is first 2 characters
+    if (cleaned.length() >= 2 && std::isalpha(cleaned[0]) && std::isalpha(cleaned[1])) {
+        return cleaned.substr(0, 2);
+    }
+
+    return "";
+}
+
+// Helper function to get check digits from IBAN
+std::string get_check_digits(const std::string& iban) {
+    // Remove spaces and convert to uppercase
+    std::string cleaned;
+    for (char c : iban) {
+        if (!std::isspace(c)) {
+            cleaned += std::toupper(c);
+        }
+    }
+
+    // Check digits are characters 3-4 (positions 2-3)
+    if (cleaned.length() >= 4 && std::isdigit(cleaned[2]) && std::isdigit(cleaned[3])) {
+        return cleaned.substr(2, 2);
+    }
+
+    return "";
+}
+
+// Helper function to get BBAN (Basic Bank Account Number) from IBAN
+std::string get_bban(const std::string& iban) {
+    // Remove spaces and convert to uppercase
+    std::string cleaned;
+    for (char c : iban) {
+        if (!std::isspace(c)) {
+            cleaned += std::toupper(c);
+        }
+    }
+
+    // BBAN is everything after the first 4 characters (country code + check digits)
+    if (cleaned.length() > 4) {
+        return cleaned.substr(4);
+    }
+
+    return "";
+}
+
+// Simple test function
+static void StpsIbanTestFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+    UnaryExecutor::Execute<string_t, string_t>(
+        args.data[0], result, args.size(),
+        [&](string_t input) {
+            return StringVector::AddString(result, "TEST_OK");
+        });
+}
+
 // DuckDB scalar function wrapper
 static void StpsIsValidIbanFunction(DataChunk &args, ExpressionState &state, Vector &result) {
     UnaryExecutor::Execute<string_t, bool>(
@@ -119,6 +206,50 @@ static void StpsIsValidIbanFunction(DataChunk &args, ExpressionState &state, Vec
         });
 }
 
+// DuckDB scalar function for formatting IBAN
+static void StpsFormatIbanFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+    UnaryExecutor::Execute<string_t, string_t>(
+        args.data[0], result, args.size(),
+        [&](string_t iban) {
+            std::string iban_str = iban.GetString();
+            std::string formatted = format_iban(iban_str);
+            return StringVector::AddString(result, formatted);
+        });
+}
+
+// DuckDB scalar function for getting country code
+static void StpsGetIbanCountryCodeFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+    UnaryExecutor::Execute<string_t, string_t>(
+        args.data[0], result, args.size(),
+        [&](string_t iban) {
+            std::string iban_str = iban.GetString();
+            std::string country_code = get_country_code(iban_str);
+            return StringVector::AddString(result, country_code);
+        });
+}
+
+// DuckDB scalar function for getting check digits
+static void StpsGetIbanCheckDigitsFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+    UnaryExecutor::Execute<string_t, string_t>(
+        args.data[0], result, args.size(),
+        [&](string_t iban) {
+            std::string iban_str = iban.GetString();
+            std::string check_digits = get_check_digits(iban_str);
+            return StringVector::AddString(result, check_digits);
+        });
+}
+
+// DuckDB scalar function for getting BBAN
+static void StpsGetBbanFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+    UnaryExecutor::Execute<string_t, string_t>(
+        args.data[0], result, args.size(),
+        [&](string_t iban) {
+            std::string iban_str = iban.GetString();
+            std::string bban = get_bban(iban_str);
+            return StringVector::AddString(result, bban);
+        });
+}
+
 void RegisterIbanValidationFunctions(ExtensionLoader &loader) {
     // stps_is_valid_iban(iban) - Returns true if IBAN is valid
     ScalarFunctionSet is_valid_iban_set("stps_is_valid_iban");
@@ -126,6 +257,26 @@ void RegisterIbanValidationFunctions(ExtensionLoader &loader) {
                                                   LogicalType::BOOLEAN,
                                                   StpsIsValidIbanFunction));
     loader.RegisterFunction(is_valid_iban_set);
+
+    // stps_format_iban(iban) - Format IBAN with spaces every 4 characters
+    ScalarFunctionSet format_iban_set("stps_format_iban");
+    format_iban_set.AddFunction(ScalarFunction({LogicalType::VARCHAR}, LogicalType::VARCHAR, StpsFormatIbanFunction));
+    loader.RegisterFunction(format_iban_set);
+
+    // stps_get_iban_country_code(iban) - Extract country code from IBAN
+    ScalarFunctionSet get_country_code_set("stps_get_iban_country_code");
+    get_country_code_set.AddFunction(ScalarFunction({LogicalType::VARCHAR}, LogicalType::VARCHAR, StpsGetIbanCountryCodeFunction));
+    loader.RegisterFunction(get_country_code_set);
+
+    // stps_get_iban_check_digits(iban) - Extract check digits from IBAN
+    ScalarFunctionSet get_check_digits_set("stps_get_iban_check_digits");
+    get_check_digits_set.AddFunction(ScalarFunction({LogicalType::VARCHAR}, LogicalType::VARCHAR, StpsGetIbanCheckDigitsFunction));
+    loader.RegisterFunction(get_check_digits_set);
+
+    // stps_get_bban(iban) - Extract BBAN (Basic Bank Account Number) from IBAN
+    ScalarFunctionSet get_bban_set("stps_get_bban");
+    get_bban_set.AddFunction(ScalarFunction({LogicalType::VARCHAR}, LogicalType::VARCHAR, StpsGetBbanFunction));
+    loader.RegisterFunction(get_bban_set);
 }
 
 } // namespace polarsgodmode
