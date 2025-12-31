@@ -20,7 +20,35 @@ This extension includes the following function categories:
 - **IBAN Validation**: International Bank Account Number validation
 - **UUID Functions**: UUID generation and manipulation utilities
 
-## Building the Extension
+## Using Pre-built Binaries (Recommended)
+
+**No build required!** Pre-built binaries are automatically built and committed to this repository.
+
+After cloning or pulling, you can immediately use the extension:
+
+```bash
+# Start DuckDB
+duckdb
+
+# Install and load the extension (Linux example)
+INSTALL './binaries/linux_amd64/polarsgodmode.duckdb_extension';
+LOAD polarsgodmode;
+
+# Start using functions
+SELECT uuid_generate_v4();
+```
+
+Available platforms in `binaries/` directory:
+- `linux_amd64` - Linux x86_64
+- `osx_arm64` - macOS Apple Silicon
+- `osx_amd64` - macOS Intel
+- `windows_amd64` - Windows x86_64
+
+See [binaries/README.md](binaries/README.md) for more details.
+
+## Building the Extension (Optional)
+
+If you prefer to build from source:
 
 ### Prerequisites
 - CMake 3.5 or higher
@@ -60,7 +88,22 @@ make -j$(nproc)
 
 ## Usage
 
-After building, load the extension in DuckDB:
+### Using Pre-built Binaries (No Build Required)
+
+```sql
+-- Install the pre-built extension (Linux example - adjust path for your platform)
+INSTALL './binaries/linux_amd64/polarsgodmode.duckdb_extension';
+
+-- Load the extension
+LOAD polarsgodmode;
+
+-- Use extension functions
+SELECT uuid_generate_v4();
+```
+
+### Using Self-built Extension
+
+If you built the extension yourself:
 
 ```sql
 -- Install the extension

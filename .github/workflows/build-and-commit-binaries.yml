@@ -1,0 +1,226 @@
+name: Build and Commit Binaries
+
+on:
+  push:
+    branches: [ master, main, develop, dev ]
+    paths:
+      - 'src/**'
+      - 'CMakeLists.txt'
+      - 'extension_config.cmake'
+      - 'Makefile'
+
+jobs:
+  build-binaries:
+    name: Build and Commit Binaries
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux_amd64
+            container: ubuntu:22.04
+          - os: macos-latest
+            platform: osx_arm64
+          - os: macos-13
+            platform: osx_amd64
+          - os: windows-latest
+            platform: windows_amd64
+
+    runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container }}
+
+    steps:
+      - name: Install packages (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          apt-get update -y -qq
+          apt-get install -y -qq cmake ninja-build make gcc g++ git curl zip unzip tar pkg-config
+
+      - name: Install build dependencies (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          choco install -y cmake ninja
+
+      - name: Setup MSVC (Windows)
+        if: matrix.os == 'windows-latest'
+        uses: microsoft/setup-msbuild@v1.0.2
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: false
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Fix Git ownership (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          git config --global --add safe.directory /__w/stps-extension/stps-extension
+          git config --global --add safe.directory '*'
+
+      - name: Setup Git
+        shell: ${{ matrix.os == 'windows-latest' && 'bash' || 'sh' }}
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Setup submodules
+        shell: ${{ matrix.os == 'windows-latest' && 'bash' || 'sh' }}
+        run: |
+          # Create .gitmodules if it doesn't exist
+          if [ ! -f ".gitmodules" ]; then
+            cat > .gitmodules << 'EOF'
+          [submodule "duckdb"]
+          	path = duckdb
+          	url = https://github.com/duckdb/duckdb.git
+          [submodule "extension-ci-tools"]
+          	path = extension-ci-tools
+          	url = https://github.com/duckdb/extension-ci-tools.git
+          EOF
+          fi
+          
+          # Initialize and update submodules
+          git submodule add https://github.com/duckdb/duckdb.git duckdb || true
+          git submodule add https://github.com/duckdb/extension-ci-tools.git extension-ci-tools || true
+          git submodule update --init --recursive
+
+      - name: Build extension (Release)
+        shell: ${{ matrix.os == 'windows-latest' && 'bash' || 'sh' }}
+        run: |
+          make release
+
+      - name: Prepare binaries directory
+        shell: ${{ matrix.os == 'windows-latest' && 'bash' || 'sh' }}
+        run: |
+          mkdir -p binaries/${{ matrix.platform }}
+          
+          # Find the extension file dynamically
+          EXTENSION_FILE=$(find build -name "*.duckdb_extension" -type f | head -1)
+          
+          if [ -z "$EXTENSION_FILE" ]; then
+            echo "❌ No extension file found for packaging"
+            exit 1
+          fi
+          
+          echo "Found extension file: $EXTENSION_FILE"
+          cp "$EXTENSION_FILE" binaries/${{ matrix.platform }}/polarsgodmode.duckdb_extension
+          
+          # Create a README for the binaries directory
+          cat > binaries/${{ matrix.platform }}/README.md << 'EOF'
+          # Pre-built Binary for ${{ matrix.platform }}
+
+          This is a pre-built extension binary for the STPS Extension.
+
+          ## Usage
+
+          ```sql
+          -- Install the extension
+          INSTALL './binaries/${{ matrix.platform }}/polarsgodmode.duckdb_extension';
+
+          -- Load the extension
+          LOAD polarsgodmode;
+
+          -- Use extension functions
+          SELECT uuid_generate_v4();
+          ```
+
+          ## Build Information
+          - Platform: ${{ matrix.platform }}
+          - Built by: GitHub Actions
+          - Repository: ${{ github.repository }}
+          - Commit: ${{ github.sha }}
+          EOF
+
+      - name: Commit binaries
+        shell: ${{ matrix.os == 'windows-latest' && 'bash' || 'sh' }}
+        run: |
+          git add binaries/${{ matrix.platform }}/
+          
+          # Only commit if there are changes
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "chore: update pre-built binary for ${{ matrix.platform }} [skip ci]"
+            git pull --rebase origin ${{ github.ref_name }}
+            git push origin ${{ github.ref_name }}
+          fi
+
+  consolidate:
+    name: Create Consolidated README
+    needs: build-binaries
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull latest changes
+        run: |
+          git pull origin ${{ github.ref_name }}
+
+      - name: Setup Git
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Create binaries README
+        run: |
+          cat > binaries/README.md << 'EOF'
+          # Pre-built Binaries
+
+          This directory contains pre-built binaries for the STPS Extension, automatically built by GitHub Actions.
+
+          ## Available Platforms
+
+          - **linux_amd64**: Linux x86_64 systems
+          - **osx_arm64**: macOS Apple Silicon (M1/M2/M3)
+          - **osx_amd64**: macOS Intel systems
+          - **windows_amd64**: Windows x86_64 systems
+
+          ## Quick Start
+
+          After cloning or pulling the repository, you can immediately use the pre-built extension without building:
+
+          ### Linux/macOS Example:
+          ```bash
+          # Start DuckDB
+          duckdb
+
+          # In DuckDB:
+          INSTALL './binaries/linux_amd64/polarsgodmode.duckdb_extension';
+          LOAD polarsgodmode;
+          SELECT uuid_generate_v4();
+          ```
+
+          ### Windows Example:
+          ```bash
+          # Start DuckDB
+          duckdb.exe
+
+          # In DuckDB:
+          INSTALL './binaries/windows_amd64/polarsgodmode.duckdb_extension';
+          LOAD polarsgodmode;
+          SELECT uuid_generate_v4();
+          ```
+
+          ## Build Information
+
+          These binaries are automatically rebuilt whenever source code changes are pushed to the repository.
+
+          ## Manual Building
+
+          If you prefer to build the extension yourself or need a different platform, see the main [README.md](../README.md) for build instructions.
+          EOF
+
+      - name: Commit consolidated README
+        run: |
+          git add binaries/README.md
+          
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "chore: update binaries README [skip ci]"
+            git push origin ${{ github.ref_name }}
+          fi
