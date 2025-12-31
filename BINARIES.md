@@ -37,19 +37,11 @@ The workflow (`.github/workflows/build-and-commit-binaries.yml`) is triggered wh
 
 ```
 binaries/
-├── README.md                          # User-facing documentation
-├── linux_amd64/
-│   ├── polarsgodmode.duckdb_extension # The binary
-│   └── README.md                      # Platform-specific info
-├── osx_arm64/
-│   ├── polarsgodmode.duckdb_extension
-│   └── README.md
-├── osx_amd64/
-│   ├── polarsgodmode.duckdb_extension
-│   └── README.md
-└── windows_amd64/
-    ├── polarsgodmode.duckdb_extension
-    └── README.md
+├── README.md                             # User-facing documentation
+├── stps_linux_amd64.duckdb_extension     # Linux (x86_64) binary
+├── stps_osx_arm64.duckdb_extension       # macOS Apple Silicon (ARM64) binary
+├── stps_osx_amd64.duckdb_extension       # macOS Intel (x86_64) binary
+└── stps_windows_amd64.duckdb_extension   # Windows (x86_64) binary
 ```
 
 ## For Users
