@@ -3,6 +3,9 @@
 
 set -e
 
+# Get the directory where this script is located
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+
 # Detect platform
 OS="$(uname -s)"
 ARCH="$(uname -m)"
@@ -38,13 +41,13 @@ case "$OS" in
         ;;
 esac
 
-BINARY_PATH="binaries/$PLATFORM/polarsgodmode.duckdb_extension"
+BINARY_PATH="$SCRIPT_DIR/binaries/$PLATFORM/polarsgodmode.duckdb_extension"
 
 echo "🔍 Detected platform: $PLATFORM"
 echo ""
 
 if [ -f "$BINARY_PATH" ]; then
-    echo "✅ Pre-built binary found at: $BINARY_PATH"
+    echo "✅ Pre-built binary found at: binaries/$PLATFORM/polarsgodmode.duckdb_extension"
     echo ""
     echo "To use this extension in DuckDB, run:"
     echo ""
@@ -52,12 +55,12 @@ if [ -f "$BINARY_PATH" ]; then
     echo ""
     echo "Then in DuckDB:"
     echo ""
-    echo "  INSTALL './$BINARY_PATH';"
+    echo "  INSTALL './binaries/$PLATFORM/polarsgodmode.duckdb_extension';"
     echo "  LOAD polarsgodmode;"
     echo "  SELECT stps_uuid();"
     echo ""
 else
-    echo "❌ Pre-built binary not found at: $BINARY_PATH"
+    echo "❌ Pre-built binary not found at: binaries/$PLATFORM/polarsgodmode.duckdb_extension"
     echo ""
     echo "The binary might not have been built yet. Please:"
     echo "  1. Pull the latest changes: git pull"
