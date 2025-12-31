@@ -13,7 +13,7 @@ jobs:
     container: ubuntu:22.04
     env:
       GEN: ninja
-      MAKEFLAGS: -j$(nproc)
+      MAKEFLAGS: -j2
 
     steps:
       - name: Install packages
@@ -34,8 +34,11 @@ jobs:
 
       - name: Setup submodules
         run: |
-          # Initialize submodules if they don't exist
-          if [ ! -f ".gitmodules" ]; then
+          # Check if .gitmodules exists
+          if [ -f ".gitmodules" ]; then
+            git submodule sync
+            git submodule update --init --recursive
+          else
             echo "Creating .gitmodules file"
             cat > .gitmodules << 'EOF'
           [submodule "duckdb"]
@@ -45,12 +48,9 @@ jobs:
           	path = extension-ci-tools
           	url = https://github.com/duckdb/extension-ci-tools.git
           EOF
+            git submodule sync
+            git submodule update --init --recursive
           fi
-          
-          # Initialize and update submodules
-          git submodule add https://github.com/duckdb/duckdb.git duckdb || true
-          git submodule add https://github.com/duckdb/extension-ci-tools.git extension-ci-tools || true
-          git submodule update --init --recursive
 
       - name: Build extension
         run: |
@@ -98,8 +98,11 @@ jobs:
 
       - name: Setup submodules
         run: |
-          # Initialize submodules if they don't exist
-          if [ ! -f ".gitmodules" ]; then
+          # Check if .gitmodules exists
+          if [ -f ".gitmodules" ]; then
+            git submodule sync
+            git submodule update --init --recursive
+          else
             echo "Creating .gitmodules file"
             cat > .gitmodules << 'EOF'
           [submodule "duckdb"]
@@ -109,12 +112,9 @@ jobs:
           	path = extension-ci-tools
           	url = https://github.com/duckdb/extension-ci-tools.git
           EOF
+            git submodule sync
+            git submodule update --init --recursive
           fi
-          
-          # Initialize and update submodules
-          git submodule add https://github.com/duckdb/duckdb.git duckdb || true
-          git submodule add https://github.com/duckdb/extension-ci-tools.git extension-ci-tools || true
-          git submodule update --init --recursive
 
       - name: Build extension
         run: |
@@ -170,8 +170,11 @@ jobs:
       - name: Setup submodules
         shell: bash
         run: |
-          # Initialize submodules if they don't exist
-          if [ ! -f ".gitmodules" ]; then
+          # Check if .gitmodules exists
+          if [ -f ".gitmodules" ]; then
+            git submodule sync
+            git submodule update --init --recursive
+          else
             echo "Creating .gitmodules file"
             cat > .gitmodules << 'EOF'
           [submodule "duckdb"]
@@ -181,12 +184,9 @@ jobs:
           	path = extension-ci-tools
           	url = https://github.com/duckdb/extension-ci-tools.git
           EOF
+            git submodule sync
+            git submodule update --init --recursive
           fi
-          
-          # Initialize and update submodules
-          git submodule add https://github.com/duckdb/duckdb.git duckdb || true
-          git submodule add https://github.com/duckdb/extension-ci-tools.git extension-ci-tools || true
-          git submodule update --init --recursive
 
       - name: Build extension
         shell: bash
