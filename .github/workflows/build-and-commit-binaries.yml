@@ -1,63 +1,59 @@
-name: Build and Commit Binaries
-
+name: Build and Commit Binaries for Pull Request
 on:
-  push:
-    branches: [ master, main, develop, dev ]
-    paths:
-      - 'src/**'
-      - 'CMakeLists.txt'
-      - 'extension_config.cmake'
-      - 'Makefile'
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches:
+      - main
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
-  build-binaries:
-    name: Build Binaries
+  build:
+    name: Build on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
         include:
           - os: ubuntu-latest
-            platform: linux_amd64
-            container: ubuntu:22.04
+            artifact_name: linux_amd64
+            binary_extension: .duckdb_extension
           - os: macos-latest
-            platform: osx_arm64
-          - os: macos-13
-            platform: osx_amd64
+            artifact_name: osx_arm64
+            binary_extension: .duckdb_extension
           - os: windows-latest
-            platform: windows_amd64
-
-    runs-on: ${{ matrix.os }}
-    container: ${{ matrix.container }}
+            artifact_name: windows_amd64
+            binary_extension: .duckdb_extension.exe
 
     steps:
-      - name: Install packages (Ubuntu)
-        if: matrix.os == 'ubuntu-latest'
-        run: |
-          apt-get update -y -qq
-          apt-get install -y -qq cmake ninja-build make gcc g++ git curl zip unzip tar pkg-config
-
-      - name: Install build dependencies (Windows)
-        if: matrix.os == 'windows-latest'
-        run: |
-          choco install -y cmake ninja
-
-      - name: Setup MSVC (Windows)
-        if: matrix.os == 'windows-latest'
-        uses: microsoft/setup-msbuild@v1.0.2
-
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Checkout PR branch
+        uses: actions/checkout@v3
         with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
-          submodules: false
 
-      - name: Fix Git ownership (Ubuntu)
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Setup Conda (macOS)
+        if: matrix.os == 'macos-latest'
+        uses: conda-incubator/setup-miniconda@v2
+        with:
+          auto-activate-base: true
+          activate-environment: ""
+
+      - name: Install build dependencies (Ubuntu)
         if: matrix.os == 'ubuntu-latest'
         run: |
-          git config --global --add safe.directory /__w/stps-extension/stps-extension
-          git config --global --add safe.directory '*'
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build
 
       - name: Setup submodules
         shell: ${{ matrix.os == 'windows-latest' && 'bash' || 'sh' }}
@@ -74,162 +70,90 @@ jobs:
           EOF
           fi
           
+          # Clean any existing submodule references from index
+          git rm --cached duckdb || true
+          git rm --cached extension-ci-tools || true
+          
           # Initialize and update submodules
-          git submodule add https://github.com/duckdb/duckdb.git duckdb || true
-          git submodule add https://github.com/duckdb/extension-ci-tools.git extension-ci-tools || true
           git submodule update --init --recursive
 
       - name: Build extension (Release)
         shell: ${{ matrix.os == 'windows-latest' && 'bash' || 'sh' }}
+        env:
+          MAKEFLAGS: -j2
         run: |
           make release
 
-      - name: Prepare binary artifact
-        shell: ${{ matrix.os == 'windows-latest' && 'bash' || 'sh' }}
+      - name: Verify binary exists
+        shell: bash
         run: |
-          mkdir -p binary-output/${{ matrix.platform }}
-          
-          # Find the extension file dynamically
-          EXTENSION_FILE=$(find build -name "*.duckdb_extension" -type f | head -1)
-          
-          if [ -z "$EXTENSION_FILE" ]; then
-            echo "❌ No extension file found"
-            exit 1
+          if [ "${{ matrix.os }}" == "windows-latest" ]; then
+            ls -la build/release/extension/stps/stps.duckdb_extension || echo "Binary not found"
+          else
+            ls -la build/release/extension/stps/stps.duckdb_extension || echo "Binary not found"
           fi
-          
-          echo "Found extension file: $EXTENSION_FILE"
-          cp "$EXTENSION_FILE" binary-output/${{ matrix.platform }}/polarsgodmode.duckdb_extension
-          
-          # Get build date
-          BUILD_DATE=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
-          
-          # Create a README for this platform
-          cat > binary-output/${{ matrix.platform }}/README.md << EOF
-          # Pre-built Binary for ${{ matrix.platform }}
 
-          This is a pre-built extension binary for the STPS Extension.
-
-          ## Usage
-
-          \`\`\`sql
-          -- Install the extension
-          INSTALL './binaries/${{ matrix.platform }}/polarsgodmode.duckdb_extension';
-
-          -- Load the extension
-          LOAD polarsgodmode;
-
-          -- Use extension functions
-          SELECT stps_uuid();
-          \`\`\`
-
-          ## Build Information
-          - Platform: ${{ matrix.platform }}
-          - Built by: GitHub Actions
-          - Repository: ${{ github.repository }}
-          - Commit: ${{ github.sha }}
-          - Build Date: ${BUILD_DATE}
-          EOF
-
-      - name: Upload binary artifact
-        uses: actions/upload-artifact@v4
+      - name: Upload artifact
+        uses: actions/upload-artifact@v3
         with:
-          name: binary-${{ matrix.platform }}
-          path: binary-output/${{ matrix.platform }}/
+          name: ${{ matrix.artifact_name }}
+          path: build/release/extension/stps/stps${{ matrix.binary_extension }}
+          if-no-files-found: error
 
   commit-binaries:
-    name: Commit Binaries to Repository
-    needs: build-binaries
+    name: Commit binaries to PR
+    needs: build
     runs-on: ubuntu-latest
-    
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Checkout PR branch
+        uses: actions/checkout@v3
         with:
-          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.ref }}
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
           token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
 
-      - name: Setup Git
-        run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-
-      - name: Download all binary artifacts
-        uses: actions/download-artifact@v4
+      - name: Download all artifacts
+        uses: actions/download-artifact@v3
         with:
-          path: downloaded-binaries
+          path: ./binaries
 
       - name: Organize binaries
         run: |
-          # Create binaries directory structure
-          mkdir -p binaries
+          mkdir -p binaries_organized
           
-          # Move each platform's binaries to the correct location
-          for platform_dir in downloaded-binaries/binary-*; do
-            if [ -d "$platform_dir" ]; then
-              platform_name=$(basename "$platform_dir" | sed 's/^binary-//')
-              echo "Processing platform: $platform_name"
-              mkdir -p "binaries/$platform_name"
-              cp -r "$platform_dir"/* "binaries/$platform_name/"
-            fi
-          done
+          # Move and rename binaries
+          if [ -f binaries/linux_amd64/stps.duckdb_extension ]; then
+            cp binaries/linux_amd64/stps.duckdb_extension binaries_organized/stps_linux_amd64.duckdb_extension
+          fi
           
-          # Update main binaries README
-          cat > binaries/README.md << 'EOF'
-          # Pre-built Binaries
-
-          This directory contains pre-built binaries for the STPS Extension, automatically built by GitHub Actions.
-
-          ## Available Platforms
-
-          - **linux_amd64**: Linux x86_64 systems
-          - **osx_arm64**: macOS Apple Silicon (M1/M2/M3)
-          - **osx_amd64**: macOS Intel systems
-          - **windows_amd64**: Windows x86_64 systems
-
-          ## Quick Start
-
-          After cloning or pulling the repository, you can immediately use the pre-built extension without building:
-
-          ### Linux/macOS Example:
-          ```bash
-          # Start DuckDB
-          duckdb
-
-          # In DuckDB:
-          INSTALL './binaries/linux_amd64/polarsgodmode.duckdb_extension';
-          LOAD polarsgodmode;
-          SELECT stps_uuid();
-          ```
-
-          ### Windows Example:
-          ```bash
-          # Start DuckDB
-          duckdb.exe
-
-          # In DuckDB:
-          INSTALL './binaries/windows_amd64/polarsgodmode.duckdb_extension';
-          LOAD polarsgodmode;
-          SELECT stps_uuid();
-          ```
-
-          ## Build Information
-
-          These binaries are automatically rebuilt whenever source code changes are pushed to the repository.
-
-          ## Manual Building
-
-          If you prefer to build the extension yourself or need a different platform, see the main [README.md](../README.md) for build instructions.
-          EOF
+          if [ -f binaries/osx_arm64/stps.duckdb_extension ]; then
+            cp binaries/osx_arm64/stps.duckdb_extension binaries_organized/stps_osx_arm64.duckdb_extension
+          fi
+          
+          if [ -f binaries/windows_amd64/stps.duckdb_extension.exe ]; then
+            cp binaries/windows_amd64/stps.duckdb_extension.exe binaries_organized/stps_windows_amd64.duckdb_extension
+          fi
+          
+          ls -la binaries_organized/
 
       - name: Commit and push binaries
         run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Create binaries directory if it doesn't exist
+          mkdir -p binaries
+          
+          # Copy organized binaries
+          cp binaries_organized/* binaries/ || true
+          
+          # Add and commit
           git add binaries/
           
-          # Only commit if there are changes
           if git diff --staged --quiet; then
             echo "No changes to commit"
           else
-            git commit -m "chore: update pre-built binaries [skip ci]"
-            git push origin ${{ github.ref_name }}
+            git commit -m "Add compiled binaries for ${{ github.event.pull_request.head.sha }}"
+            git push
           fi
-
