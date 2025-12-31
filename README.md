@@ -26,6 +26,15 @@ This extension includes the following function categories:
 
 After cloning or pulling, you can immediately use the extension:
 
+### Quick Start Script
+
+```bash
+# Run the helper script to detect your platform
+./check-binary.sh
+```
+
+### Manual Usage
+
 ```bash
 # Start DuckDB
 duckdb

@@ -2,6 +2,16 @@
 
 This directory contains pre-built binaries for the STPS Extension, automatically built by GitHub Actions.
 
+## Quick Start with Helper Script
+
+The easiest way to get started is to use the platform detection script:
+
+```bash
+./check-binary.sh
+```
+
+This will automatically detect your platform and show you the correct installation command.
+
 ## Available Platforms
 
 Pre-built binaries will be available for the following platforms after the first build:
