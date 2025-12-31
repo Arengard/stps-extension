@@ -21,3 +21,6 @@ vcpkg_installed/
 # Temporary files
 *.tmp
 *.temp
+
+# Downloaded tools
+actionlint
