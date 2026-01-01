@@ -1,0 +1,27 @@
+# name: test/sql/stps.test
+# description: Test stps extension loads correctly
+# group: [stps]
+
+require stps
+
+# Verify extension is loaded by calling a simple function
+query T
+SELECT stps_to_snake_case('HelloWorld');
+----
+hello_world
+
+# Smoke test - verify multiple function categories are available
+query T
+SELECT stps_normalize('  hello   world  ');
+----
+hello world
+
+query I
+SELECT stps_is_valid_iban('DE89370400440532013000');
+----
+true
+
+query T
+SELECT stps_format_iban('DE89370400440532013000');
+----
+DE89 3704 0044 0532 0130 00

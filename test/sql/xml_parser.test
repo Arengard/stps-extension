@@ -1,0 +1,31 @@
+# name: test/sql/xml_parser.test
+# description: Test XML parser functions
+# group: [stps]
+
+require stps
+
+# stps_read_xml - read XML file and return JSON string
+# Test with non-existent file to verify error handling
+query T
+SELECT stps_read_xml('/nonexistent/file.xml') LIKE '%error%';
+----
+true
+
+# Verify function returns VARCHAR
+query I
+SELECT typeof(stps_read_xml('/tmp/test.xml')) = 'VARCHAR';
+----
+true
+
+# stps_read_xml_json - read XML file and return JSON type
+# Test with non-existent file
+query T
+SELECT stps_read_xml_json('/nonexistent/file.xml')::VARCHAR LIKE '%error%';
+----
+true
+
+# Verify function returns JSON type
+query I
+SELECT typeof(stps_read_xml_json('/tmp/test.xml')) = 'JSON';
+----
+true

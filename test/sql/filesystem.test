@@ -1,0 +1,59 @@
+# name: test/sql/filesystem.test
+# description: Test filesystem table functions (stps_path, stps_scan)
+# group: [stps]
+
+require stps
+
+# stps_path - basic directory listing
+# Test with current directory (should work)
+query I
+SELECT count(*) >= 0 FROM stps_path('.');
+----
+true
+
+# Verify stps_path returns expected columns
+query IIIIIII
+SELECT
+    typeof(name) = 'VARCHAR',
+    typeof(path) = 'VARCHAR',
+    typeof(type) = 'VARCHAR',
+    typeof(size) = 'BIGINT',
+    typeof(modified_time) = 'BIGINT',
+    typeof(extension) = 'VARCHAR',
+    typeof(parent_directory) = 'VARCHAR'
+FROM stps_path('.') LIMIT 1;
+----
+true	true	true	true	true	true	true
+
+# stps_path with recursive option
+query I
+SELECT count(*) >= 0 FROM stps_path('.', recursive := false);
+----
+true
+
+# stps_scan - basic directory scan
+query I
+SELECT count(*) >= 0 FROM stps_scan('.');
+----
+true
+
+# Verify stps_scan returns expected columns (same as stps_path)
+query IIIIIII
+SELECT
+    typeof(name) = 'VARCHAR',
+    typeof(path) = 'VARCHAR',
+    typeof(type) = 'VARCHAR',
+    typeof(size) = 'BIGINT',
+    typeof(modified_time) = 'BIGINT',
+    typeof(extension) = 'VARCHAR',
+    typeof(parent_directory) = 'VARCHAR'
+FROM stps_scan('.') LIMIT 1;
+----
+true	true	true	true	true	true	true
+
+# stps_scan with filtering options
+query I
+SELECT count(*) >= 0 FROM stps_scan('.', recursive := false);
+----
+true
+

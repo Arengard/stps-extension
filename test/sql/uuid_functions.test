@@ -1,0 +1,66 @@
+# name: test/sql/uuid_functions.test
+# description: Test UUID generation functions
+# group: [stps]
+
+require stps
+
+# stps_uuid - generates random UUID v4
+# We can only verify format, not exact value
+query I
+SELECT length(stps_uuid()) = 36;
+----
+true
+
+query I
+SELECT stps_uuid() LIKE '________-____-4___-____-____________';
+----
+true
+
+# stps_uuid_from_string - deterministic UUID v5 from string
+# Same input should always produce same output
+query T
+SELECT stps_uuid_from_string('test');
+----
+f9e6e6ef-197c-5b25-9f2c-d9c79423ab75
+
+query T
+SELECT stps_uuid_from_string('hello');
+----
+a430d846-80aa-5d0b-b695-136cbd22ce9b
+
+query I
+SELECT stps_uuid_from_string('test') = stps_uuid_from_string('test');
+----
+true
+
+query I
+SELECT stps_uuid_from_string('a') != stps_uuid_from_string('b');
+----
+true
+
+query T
+SELECT stps_uuid_from_string('');
+----
+cbf29ce4-8422-5325-9e37-79b97f4a7c15
+
+# stps_get_guid - deterministic UUID from multiple columns
+query T
+SELECT stps_get_guid('col1');
+----
+0bd0b391-1963-54e0-997a-677942646d30
+
+query T
+SELECT stps_get_guid('col1', 'col2');
+----
+c8ee2fd9-e115-5da0-9d26-b6c622bb1bd0
+
+query T
+SELECT stps_get_guid('col1', 'col2', 'col3');
+----
+5ffd981c-560e-5a93-8a98-887a0d439223
+
+# Same inputs should produce same GUID
+query I
+SELECT stps_get_guid('a', 'b') = stps_get_guid('a', 'b');
+----
+true

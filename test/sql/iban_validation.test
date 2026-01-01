@@ -1,0 +1,116 @@
+# name: test/sql/iban_validation.test
+# description: Test IBAN validation and parsing functions
+# group: [stps]
+
+require stps
+
+# stps_is_valid_iban - validate IBAN according to ISO 13616
+query I
+SELECT stps_is_valid_iban('DE89370400440532013000');
+----
+true
+
+query I
+SELECT stps_is_valid_iban('DE89 3704 0044 0532 0130 00');
+----
+true
+
+query I
+SELECT stps_is_valid_iban('GB82WEST12345698765432');
+----
+true
+
+query I
+SELECT stps_is_valid_iban('FR1420041010050500013M02606');
+----
+true
+
+# Invalid IBANs
+query I
+SELECT stps_is_valid_iban('DE00000000000000000000');
+----
+false
+
+query I
+SELECT stps_is_valid_iban('INVALID');
+----
+false
+
+query I
+SELECT stps_is_valid_iban('');
+----
+false
+
+query I
+SELECT stps_is_valid_iban('XX89370400440532013000');
+----
+false
+
+# stps_format_iban - format with spaces every 4 chars
+query T
+SELECT stps_format_iban('DE89370400440532013000');
+----
+DE89 3704 0044 0532 0130 00
+
+query T
+SELECT stps_format_iban('de89370400440532013000');
+----
+DE89 3704 0044 0532 0130 00
+
+query T
+SELECT stps_format_iban('DE89 3704 0044 0532 0130 00');
+----
+DE89 3704 0044 0532 0130 00
+
+# stps_get_iban_country_code
+query T
+SELECT stps_get_iban_country_code('DE89370400440532013000');
+----
+DE
+
+query T
+SELECT stps_get_iban_country_code('GB82WEST12345698765432');
+----
+GB
+
+query T
+SELECT stps_get_iban_country_code('fr1420041010050500013m02606');
+----
+FR
+
+query T
+SELECT stps_get_iban_country_code('');
+----
+(empty)
+
+# stps_get_iban_check_digits
+query T
+SELECT stps_get_iban_check_digits('DE89370400440532013000');
+----
+89
+
+query T
+SELECT stps_get_iban_check_digits('GB82WEST12345698765432');
+----
+82
+
+query T
+SELECT stps_get_iban_check_digits('');
+----
+(empty)
+
+# stps_get_bban - Basic Bank Account Number
+query T
+SELECT stps_get_bban('DE89370400440532013000');
+----
+370400440532013000
+
+query T
+SELECT stps_get_bban('GB82WEST12345698765432');
+----
+WEST12345698765432
+
+query T
+SELECT stps_get_bban('');
+----
+(empty)

@@ -1,0 +1,127 @@
+# name: test/sql/case_transform.test
+# description: Test case transformation functions
+# group: [stps]
+
+require stps
+
+# stps_to_snake_case
+query T
+SELECT stps_to_snake_case('HelloWorld');
+----
+hello_world
+
+query T
+SELECT stps_to_snake_case('hello world');
+----
+hello_world
+
+query T
+SELECT stps_to_snake_case('HELLO_WORLD');
+----
+hello_world
+
+query T
+SELECT stps_to_snake_case('');
+----
+(empty)
+
+# stps_to_camel_case
+query T
+SELECT stps_to_camel_case('hello_world');
+----
+helloWorld
+
+query T
+SELECT stps_to_camel_case('Hello World');
+----
+helloWorld
+
+query T
+SELECT stps_to_camel_case('HELLO_WORLD');
+----
+helloWorld
+
+query T
+SELECT stps_to_camel_case('');
+----
+(empty)
+
+# stps_to_pascal_case
+query T
+SELECT stps_to_pascal_case('hello_world');
+----
+HelloWorld
+
+query T
+SELECT stps_to_pascal_case('hello world');
+----
+HelloWorld
+
+query T
+SELECT stps_to_pascal_case('');
+----
+(empty)
+
+# stps_to_kebab_case
+query T
+SELECT stps_to_kebab_case('HelloWorld');
+----
+hello-world
+
+query T
+SELECT stps_to_kebab_case('hello_world');
+----
+hello-world
+
+query T
+SELECT stps_to_kebab_case('');
+----
+(empty)
+
+# stps_to_const_case
+query T
+SELECT stps_to_const_case('HelloWorld');
+----
+HELLO_WORLD
+
+query T
+SELECT stps_to_const_case('hello world');
+----
+HELLO_WORLD
+
+query T
+SELECT stps_to_const_case('');
+----
+(empty)
+
+# stps_to_sentence_case
+query T
+SELECT stps_to_sentence_case('hello_world');
+----
+Hello world
+
+query T
+SELECT stps_to_sentence_case('HELLO WORLD');
+----
+Hello world
+
+query T
+SELECT stps_to_sentence_case('');
+----
+(empty)
+
+# stps_to_title_case
+query T
+SELECT stps_to_title_case('hello_world');
+----
+Hello World
+
+query T
+SELECT stps_to_title_case('HELLO WORLD');
+----
+Hello World
+
+query T
+SELECT stps_to_title_case('');
+----
+(empty)

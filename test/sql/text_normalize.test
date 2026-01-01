@@ -1,0 +1,95 @@
+# name: test/sql/text_normalize.test
+# description: Test text normalization functions
+# group: [stps]
+
+require stps
+
+# stps_remove_accents (single parameter - removes umlauts too)
+query T
+SELECT stps_remove_accents('café');
+----
+cafe
+
+query T
+SELECT stps_remove_accents('naïve');
+----
+naive
+
+query T
+SELECT stps_remove_accents('Müller');
+----
+Mueller
+
+query T
+SELECT stps_remove_accents('');
+----
+(empty)
+
+# stps_remove_accents with keep_umlauts=true
+query T
+SELECT stps_remove_accents('Müller', true);
+----
+Müller
+
+query T
+SELECT stps_remove_accents('café Müller', true);
+----
+cafe Müller
+
+query T
+SELECT stps_remove_accents('naïve', false);
+----
+naive
+
+# stps_restore_umlauts
+query T
+SELECT stps_restore_umlauts('Mueller');
+----
+Müller
+
+query T
+SELECT stps_restore_umlauts('Koeln');
+----
+Köln
+
+query T
+SELECT stps_restore_umlauts('Gruesse');
+----
+Grüße
+
+query T
+SELECT stps_restore_umlauts('');
+----
+(empty)
+
+# stps_clean_string
+query T
+SELECT stps_clean_string('  hello   world  ');
+----
+hello world
+
+query T
+SELECT stps_clean_string('hello');
+----
+hello
+
+query T
+SELECT stps_clean_string('   ');
+----
+(empty)
+
+# stps_normalize
+query T
+SELECT stps_normalize('  hello   world  ');
+----
+hello world
+
+query T
+SELECT stps_normalize('hello    world');
+----
+hello world
+
+query T
+SELECT stps_normalize('');
+----
+(empty)

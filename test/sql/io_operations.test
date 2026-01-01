@@ -1,0 +1,53 @@
+# name: test/sql/io_operations.test
+# description: Test I/O operation functions
+# group: [stps]
+
+require stps
+
+# Note: These functions perform actual file operations
+# Testing with non-existent files to verify error handling
+
+# stps_copy_io - copy file (source doesn't exist)
+query T
+SELECT stps_copy_io('/nonexistent/source.txt', '/tmp/dest.txt') LIKE 'ERROR%';
+----
+true
+
+# stps_move_io - move file (source doesn't exist)
+query T
+SELECT stps_move_io('/nonexistent/source.txt', '/tmp/dest.txt') LIKE 'ERROR%';
+----
+true
+
+# stps_delete_io - delete file (file doesn't exist)
+query T
+SELECT stps_delete_io('/nonexistent/file.txt') LIKE 'ERROR%';
+----
+true
+
+# stps_io_rename - rename file (source doesn't exist)
+query T
+SELECT stps_io_rename('/nonexistent/old.txt', '/nonexistent/new.txt') LIKE 'ERROR%';
+----
+true
+
+# Verify function signatures work
+query I
+SELECT typeof(stps_copy_io('a', 'b')) = 'VARCHAR';
+----
+true
+
+query I
+SELECT typeof(stps_move_io('a', 'b')) = 'VARCHAR';
+----
+true
+
+query I
+SELECT typeof(stps_delete_io('a')) = 'VARCHAR';
+----
+true
+
+query I
+SELECT typeof(stps_io_rename('a', 'b')) = 'VARCHAR';
+----
+true

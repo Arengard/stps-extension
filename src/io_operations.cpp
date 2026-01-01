@@ -1,4 +1,4 @@
-#include "include/io_operations.hpp"
+#include "io_operations.hpp"
 #include "duckdb/function/scalar_function.hpp"
 #include "duckdb/common/types/data_chunk.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
@@ -91,6 +91,61 @@ std::string stps_move_file_impl(const std::string& source, const std::string& de
     }
 }
 
+// Helper function to rename file with error handling
+std::string stps_rename_file_impl(const std::string& old_name, const std::string& new_name) {
+    try {
+        // Check if source exists
+        if (!file_exists(old_name)) {
+            return "ERROR: File does not exist: " + old_name;
+        }
+
+        // Check if destination already exists
+        if (file_exists(new_name)) {
+            return "ERROR: Destination file already exists: " + new_name;
+        }
+
+        // Try to rename the file
+        #ifdef _WIN32
+        if (!MoveFileA(old_name.c_str(), new_name.c_str())) {
+            return "ERROR: Cannot rename file from " + old_name + " to " + new_name;
+        }
+        #else
+        if (rename(old_name.c_str(), new_name.c_str()) != 0) {
+            return "ERROR: Cannot rename file from " + old_name + " to " + new_name;
+        }
+        #endif
+
+        return "SUCCESS: Renamed " + old_name + " to " + new_name;
+    } catch (const std::exception& e) {
+        return "ERROR: " + std::string(e.what());
+    }
+}
+
+// Helper function to delete file with error handling
+std::string stps_delete_file_impl(const std::string& path) {
+    try {
+        // Check if file exists
+        if (!file_exists(path)) {
+            return "ERROR: File does not exist: " + path;
+        }
+
+        // Try to delete the file
+        #ifdef _WIN32
+        if (!DeleteFileA(path.c_str())) {
+            return "ERROR: Cannot delete file: " + path;
+        }
+        #else
+        if (unlink(path.c_str()) != 0) {
+            return "ERROR: Cannot delete file: " + path;
+        }
+        #endif
+
+        return "SUCCESS: Deleted " + path;
+    } catch (const std::exception& e) {
+        return "ERROR: " + std::string(e.what());
+    }
+}
+
 // DuckDB scalar function wrappers
 static void StpsCopyIoFunction(DataChunk &args, ExpressionState &state, Vector &result) {
     BinaryExecutor::Execute<string_t, string_t, string_t>(
@@ -114,6 +169,27 @@ static void StpsMoveIoFunction(DataChunk &args, ExpressionState &state, Vector &
         });
 }
 
+static void StpsDeleteIoFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+    UnaryExecutor::Execute<string_t, string_t>(
+        args.data[0], result, args.size(),
+        [&](string_t path) {
+            std::string path_str = path.GetString();
+            std::string result_msg = stps_delete_file_impl(path_str);
+            return StringVector::AddString(result, result_msg);
+        });
+}
+
+static void StpsRenameIoFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+    BinaryExecutor::Execute<string_t, string_t, string_t>(
+        args.data[0], args.data[1], result, args.size(),
+        [&](string_t old_name, string_t new_name) {
+            std::string old_str = old_name.GetString();
+            std::string new_str = new_name.GetString();
+            std::string result_msg = stps_rename_file_impl(old_str, new_str);
+            return StringVector::AddString(result, result_msg);
+        });
+}
+
 void RegisterIoOperationFunctions(ExtensionLoader &loader) {
     // stps_copy_io(source_path, destination_path)
     ScalarFunctionSet copy_io_set("stps_copy_io");
@@ -126,6 +202,18 @@ void RegisterIoOperationFunctions(ExtensionLoader &loader) {
     move_io_set.AddFunction(ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR},
                                            LogicalType::VARCHAR, StpsMoveIoFunction));
     loader.RegisterFunction(move_io_set);
+
+    // stps_delete_io(path)
+    ScalarFunctionSet delete_io_set("stps_delete_io");
+    delete_io_set.AddFunction(ScalarFunction({LogicalType::VARCHAR},
+                                             LogicalType::VARCHAR, StpsDeleteIoFunction));
+    loader.RegisterFunction(delete_io_set);
+
+    // stps_io_rename(old_name, new_name)
+    ScalarFunctionSet rename_io_set("stps_io_rename");
+    rename_io_set.AddFunction(ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR},
+                                             LogicalType::VARCHAR, StpsRenameIoFunction));
+    loader.RegisterFunction(rename_io_set);
 }
 
 } // namespace polarsgodmode
