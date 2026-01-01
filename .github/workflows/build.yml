@@ -10,7 +10,6 @@ jobs:
   linux:
     name: Linux
     runs-on: ubuntu-latest
-    container: ubuntu:22.04
     env:
       GEN: ninja
       MAKEFLAGS: -j2
@@ -18,8 +17,8 @@ jobs:
     steps:
       - name: Install packages
         run: |
-          apt-get update -y -qq
-          apt-get install -y -qq cmake ninja-build make gcc g++ git curl zip unzip tar pkg-config
+          sudo apt-get update -y -qq
+          sudo apt-get install -y -qq cmake ninja-build make gcc g++ git curl zip unzip tar pkg-config
 
       - name: Checkout
         uses: actions/checkout@v4
@@ -29,7 +28,7 @@ jobs:
 
       - name: Fix Git ownership
         run: |
-          git config --global --add safe.directory /__w/stps-extension/stps-extension
+          git config --global --add safe.directory /home/runner/work/stps-extension/stps-extension
           git config --global --add safe.directory '*'
 
       - name: Setup submodules
@@ -51,6 +50,15 @@ jobs:
             git submodule sync
             git submodule update --init --recursive
           fi
+
+      - name: Create swap space
+        run: |
+          sudo fallocate -l 8G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          echo "Swap created:"
+          sudo swapon --show
 
       - name: Build extension
         run: |
