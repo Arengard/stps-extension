@@ -78,8 +78,8 @@ def get_duckdb_connection(database: Union[str, Path] = ':memory:') -> duckdb.Duc
         - Run DuckDB with -unsigned flag when using from CLI: duckdb -unsigned
         - This function automatically detects the platform (macOS/Linux/Windows)
     """
-    # Create connection
-    conn = duckdb.connect(str(database))
+    # Create connection with unsigned extensions allowed
+    conn = duckdb.connect(str(database), config={'allow_unsigned_extensions': 'true'})
 
     # Determine extension base path (works on macOS, Linux, and Windows)
     home = Path.home()
