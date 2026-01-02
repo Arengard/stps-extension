@@ -8,7 +8,7 @@
 #include <sstream>
 
 namespace duckdb {
-namespace polarsgodmode {
+namespace stps {
 
 // Helper function to extract directory from file path
 static string GetDirectory(const string &filepath) {
@@ -56,5 +56,5 @@ void RegisterGobdReaderFunctions(ExtensionLoader &loader) {
     // which is proven to work and is simpler
 }
 
-} // namespace polarsgodmode
+} // namespace stps
 } // namespace duckdb

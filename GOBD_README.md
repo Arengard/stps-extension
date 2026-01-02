@@ -28,7 +28,7 @@ Successfully implemented a custom DuckDB function `stps_read_gobd` for reading G
 6. `test_gobd.sql` - Test script
 
 #### Modified Files:
-1. `src/polarsgodmode_extension.cpp` - Registered new function
+1. `src/stps_extension.cpp` - Registered new function
 2. `CMakeLists.txt` - Added gobd_reader.cpp to build
 
 ## Usage
@@ -37,7 +37,7 @@ Successfully implemented a custom DuckDB function `stps_read_gobd` for reading G
 
 ```sql
 -- Load the extension
-LOAD 'build/release/extension/polarsgodmode/polarsgodmode.duckdb_extension';
+LOAD 'build/release/extension/stps/stps.duckdb_extension';
 
 -- Load macros (optional)
 .read gobd_macros.sql
@@ -101,7 +101,7 @@ Or test manually:
 ./build/release/duckdb
 
 # Load extension
-LOAD 'build/release/extension/polarsgodmode/polarsgodmode.duckdb_extension';
+LOAD 'build/release/extension/stps/stps.duckdb_extension';
 
 # Test the function
 SELECT * FROM stps_read_gobd(
@@ -113,7 +113,7 @@ SELECT * FROM stps_read_gobd(
 ## Build Status
 
 ✅ **Successfully Built**
-- Extension file: `build/release/extension/polarsgodmode/polarsgodmode.duckdb_extension` (26MB)
+- Extension file: `build/release/extension/stps/stps.duckdb_extension` (26MB)
 - Build completed at 100%
 - All compilation errors fixed
 

@@ -97,7 +97,7 @@ jobs:
           echo "Found extension file: $EXTENSION_FILE"
           echo "Testing extension loading..."
           
-          build/debug/duckdb -c "INSTALL '$EXTENSION_FILE'; LOAD polarsgodmode; SELECT 'Extension loaded successfully';" || {
+          build/debug/duckdb -c "INSTALL '$EXTENSION_FILE'; LOAD stps; SELECT 'Extension loaded successfully';" || {
             echo "❌ Extension failed to load"
             exit 1
           }
@@ -161,7 +161,7 @@ jobs:
           echo "Found extension file: $EXTENSION_FILE"
           echo "Testing extension loading..."
           
-          build/debug/duckdb -c "INSTALL '$EXTENSION_FILE'; LOAD polarsgodmode; SELECT 'Extension loaded successfully';" || {
+          build/debug/duckdb -c "INSTALL '$EXTENSION_FILE'; LOAD stps; SELECT 'Extension loaded successfully';" || {
             echo "❌ Extension failed to load"
             exit 1
           }
@@ -242,7 +242,7 @@ jobs:
             DUCKDB_EXE="build/debug/duckdb.exe"
           fi
           
-          "$DUCKDB_EXE" -c "INSTALL '$EXTENSION_FILE'; LOAD polarsgodmode; SELECT 'Extension loaded successfully';" || {
+          "$DUCKDB_EXE" -c "INSTALL '$EXTENSION_FILE'; LOAD stps; SELECT 'Extension loaded successfully';" || {
             echo "❌ Extension failed to load"
             exit 1
           }

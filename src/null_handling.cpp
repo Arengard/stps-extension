@@ -1,11 +1,11 @@
-#include "include/null_handling.hpp"
-#include "include/utils.hpp"
+#include "null_handling.hpp"
+#include "utils.hpp"
 #include "duckdb/function/scalar_function.hpp"
 #include "duckdb/common/types/data_chunk.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 
 namespace duckdb {
-namespace polarsgodmode {
+namespace stps {
 
 std::string map_null_to_empty(const string_t& input, bool is_null) {
     if (is_null) {
@@ -79,5 +79,5 @@ void RegisterNullHandlingFunctions(ExtensionLoader &loader) {
     loader.RegisterFunction(map_null_to_empty_set);
 }
 
-} // namespace polarsgodmode
+} // namespace stps
 } // namespace duckdb

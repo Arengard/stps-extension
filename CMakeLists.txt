@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.5)
 
 # Set extension name here
-set(TARGET_NAME polarsgodmode)
+set(TARGET_NAME stps)
 
 # No external dependencies needed
 set(EXTENSION_NAME ${TARGET_NAME}_extension)
@@ -11,7 +11,7 @@ project(${TARGET_NAME})
 include_directories(src/include)
 
 set(EXTENSION_SOURCES
-    src/polarsgodmode_extension.cpp
+    src/stps_unified_extension.cpp
     src/utils.cpp
     src/case_transform.cpp
     src/text_normalize.cpp
@@ -21,6 +21,13 @@ set(EXTENSION_SOURCES
     src/iban_validation.cpp
     src/xml_parser.cpp
     src/gobd_reader.cpp
+    # Filesystem functions using DuckDB's FileSystem API
+    src/path_function.cpp
+    src/scan_function.cpp
+    src/filesystem_functions.cpp
+    src/shared/filesystem_utils.cpp
+    src/shared/pattern_matcher.cpp
+    src/shared/content_searcher.cpp
 )
 
 build_static_extension(${TARGET_NAME} ${EXTENSION_SOURCES})

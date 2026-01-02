@@ -143,7 +143,7 @@ cp -r build/release/* "$BUILD_DIR/"
 success "Build complete!"
 
 # Verify extension was built
-EXTENSION_PATH="$BUILD_DIR/extension/polarsgodmode/polarsgodmode.duckdb_extension"
+EXTENSION_PATH="$BUILD_DIR/extension/stps/stps.duckdb_extension"
 if [[ ! -f "$EXTENSION_PATH" ]]; then
     error "Extension not found at expected path: $EXTENSION_PATH"
     exit 1

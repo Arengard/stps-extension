@@ -4,6 +4,7 @@
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 #include <fstream>
 #include <sys/stat.h>
+#include <cerrno>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -12,12 +13,53 @@
 #endif
 
 namespace duckdb {
-namespace polarsgodmode {
+namespace stps {
 
 // Check if file exists
 bool file_exists(const std::string& path) {
     struct stat buffer;
     return (stat(path.c_str(), &buffer) == 0);
+}
+
+// Check if directory exists
+bool directory_exists(const std::string& path) {
+    struct stat buffer;
+    return (stat(path.c_str(), &buffer) == 0 && S_ISDIR(buffer.st_mode));
+}
+
+// Get parent directory from path
+std::string get_parent_directory(const std::string& path) {
+    size_t pos = path.find_last_of("/\\");
+    if (pos == std::string::npos) {
+        return "";
+    }
+    return path.substr(0, pos);
+}
+
+// Create directory and all parent directories recursively
+bool create_directories(const std::string& path) {
+    if (path.empty()) {
+        return true;
+    }
+
+    if (directory_exists(path)) {
+        return true;
+    }
+
+    // Create parent directories first
+    std::string parent = get_parent_directory(path);
+    if (!parent.empty() && !directory_exists(parent)) {
+        if (!create_directories(parent)) {
+            return false;
+        }
+    }
+
+    // Create this directory
+    #ifdef _WIN32
+    return CreateDirectoryA(path.c_str(), nullptr) != 0 || GetLastError() == ERROR_ALREADY_EXISTS;
+    #else
+    return mkdir(path.c_str(), 0755) == 0 || errno == EEXIST;
+    #endif
 }
 
 // Helper function to copy file with error handling
@@ -32,6 +74,15 @@ std::string stps_copy_file_impl(const std::string& source, const std::string& de
         std::ifstream src(source, std::ios::binary);
         if (!src.is_open()) {
             return "ERROR: Cannot open source file: " + source;
+        }
+
+        // Create parent directories if they don't exist
+        std::string parent_dir = get_parent_directory(destination);
+        if (!parent_dir.empty() && !directory_exists(parent_dir)) {
+            if (!create_directories(parent_dir)) {
+                src.close();
+                return "ERROR: Cannot create destination directory: " + parent_dir;
+            }
         }
 
         // Open destination file (truncate if exists)
@@ -65,6 +116,14 @@ std::string stps_move_file_impl(const std::string& source, const std::string& de
         // Check if source exists
         if (!file_exists(source)) {
             return "ERROR: Source file does not exist: " + source;
+        }
+
+        // Create parent directories if they don't exist
+        std::string parent_dir = get_parent_directory(destination);
+        if (!parent_dir.empty() && !directory_exists(parent_dir)) {
+            if (!create_directories(parent_dir)) {
+                return "ERROR: Cannot create destination directory: " + parent_dir;
+            }
         }
 
         // Try to rename (move) the file
@@ -216,5 +275,5 @@ void RegisterIoOperationFunctions(ExtensionLoader &loader) {
     loader.RegisterFunction(rename_io_set);
 }
 
-} // namespace polarsgodmode
+} // namespace stps
 } // namespace duckdb

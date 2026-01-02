@@ -59,7 +59,7 @@ cd stps-extension
 ./check-binary.sh
 
 # Or use directly
-duckdb -c "INSTALL './binaries/linux_amd64/polarsgodmode.duckdb_extension'; LOAD polarsgodmode;"
+duckdb -c "INSTALL './binaries/linux_amd64/stps.duckdb_extension'; LOAD stps;"
 ```
 
 ### Updating Binaries

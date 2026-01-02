@@ -37,11 +37,11 @@ time make -j$CORES
 # Check if build was successful
 if [ $? -eq 0 ]; then
     echo "✅ Build completed successfully!"
-    echo "🎯 Extension built: build/release/extension/polarsgodmode/polarsgodmode.duckdb_extension"
+    echo "🎯 Extension built: build/release/extension/stps/stps.duckdb_extension"
 
     # Show build artifacts
-    if [ -f "build/release/extension/polarsgodmode/polarsgodmode.duckdb_extension" ]; then
-        echo "📦 Extension size: $(du -h build/release/extension/polarsgodmode/polarsgodmode.duckdb_extension | cut -f1)"
+    if [ -f "build/release/extension/stps/stps.duckdb_extension" ]; then
+        echo "📦 Extension size: $(du -h build/release/extension/stps/stps.duckdb_extension | cut -f1)"
     fi
 else
     echo "❌ Build failed!"

@@ -3,10 +3,10 @@
 #include "duckdb.hpp"
 
 namespace duckdb {
-namespace polarsgodmode {
+namespace stps {
 
 // Register IBAN validation functions
 void RegisterIbanValidationFunctions(ExtensionLoader &loader);
 
-} // namespace polarsgodmode
+} // namespace stps
 } // namespace duckdb

@@ -3,10 +3,10 @@
 #include "duckdb.hpp"
 
 namespace duckdb {
-namespace polarsgodmode {
+namespace stps {
 
 // Register XML parsing functions
 void RegisterXmlParserFunctions(ExtensionLoader &loader);
 
-} // namespace polarsgodmode
+} // namespace stps
 } // namespace duckdb

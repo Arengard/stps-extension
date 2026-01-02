@@ -1,4 +1,4 @@
-#include "include/uuid_functions.hpp"
+#include "uuid_functions.hpp"
 #include "duckdb/function/scalar_function.hpp"
 #include "duckdb/common/types/data_chunk.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
@@ -8,7 +8,7 @@
 #include <cstring>
 
 namespace duckdb {
-namespace polarsgodmode {
+namespace stps {
 
 // Simple UUID v4 generation (random)
 std::string generate_uuid_v4() {
@@ -67,6 +67,36 @@ std::string generate_uuid_v5(const std::string& name) {
     return oss.str();
 }
 
+// Convert GUID to 4-level folder path with decimal folder names (0-255)
+std::string stps_guid_to_path_impl(const std::string& guid) {
+    // Strip hyphens and collect hex characters
+    std::string hex;
+    for (char c : guid) {
+        if (c != '-') {
+            if (!std::isxdigit(static_cast<unsigned char>(c))) {
+                return "ERROR: Invalid GUID";
+            }
+            hex += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        }
+    }
+
+    // Need at least 8 hex characters for 4 levels
+    if (hex.length() < 8) {
+        return "ERROR: Invalid GUID";
+    }
+
+    // Convert 4 pairs of hex to decimal folder names
+    std::string path;
+    for (int i = 0; i < 4; i++) {
+        std::string hex_pair = hex.substr(i * 2, 2);
+        int value = std::stoi(hex_pair, nullptr, 16);
+        if (i > 0) path += "/";
+        path += std::to_string(value);
+    }
+
+    return path;
+}
+
 // DuckDB scalar function wrappers
 static void PgmUuidFunction(DataChunk &args, ExpressionState &state, Vector &result) {
     // Generate UUID v4 for each row
@@ -116,6 +146,16 @@ static void PgmGetGuidFunction(DataChunk &args, ExpressionState &state, Vector &
     }
 }
 
+static void StpsGuidToPathFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+    UnaryExecutor::Execute<string_t, string_t>(
+        args.data[0], result, args.size(),
+        [&](string_t input) {
+            std::string guid = input.GetString();
+            std::string path = stps_guid_to_path_impl(guid);
+            return StringVector::AddString(result, path);
+        });
+}
+
 void RegisterUuidFunctions(ExtensionLoader &loader) {
     // stps_uuid() - Generate random UUID v4
     ScalarFunctionSet uuid_set("stps_uuid");
@@ -138,7 +178,13 @@ void RegisterUuidFunctions(ExtensionLoader &loader) {
     get_guid_set.AddFunction(ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR},
                                             LogicalType::VARCHAR, PgmGetGuidFunction));
     loader.RegisterFunction(get_guid_set);
+
+    // stps_guid_to_path(guid) - Convert GUID to 4-level folder path
+    ScalarFunctionSet guid_to_path_set("stps_guid_to_path");
+    guid_to_path_set.AddFunction(ScalarFunction({LogicalType::VARCHAR}, LogicalType::VARCHAR,
+                                                 StpsGuidToPathFunction));
+    loader.RegisterFunction(guid_to_path_set);
 }
 
-} // namespace polarsgodmode
+} // namespace stps
 } // namespace duckdb

@@ -1,5 +1,5 @@
-#include "include/text_normalize.hpp"
-#include "include/utils.hpp"
+#include "text_normalize.hpp"
+#include "utils.hpp"
 #include "duckdb/function/scalar_function.hpp"
 #include "duckdb/common/types/data_chunk.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
@@ -7,7 +7,7 @@
 #include <regex>
 
 namespace duckdb {
-namespace polarsgodmode {
+namespace stps {
 
 // Accent to ASCII mapping (comprehensive)
 static const std::unordered_map<std::string, std::string> ACCENT_MAP = {
@@ -213,5 +213,5 @@ void RegisterTextNormalizeFunctions(ExtensionLoader &loader) {
     loader.RegisterFunction(normalize_set);
 }
 
-} // namespace polarsgodmode
+} // namespace stps
 } // namespace duckdb

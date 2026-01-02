@@ -13,7 +13,7 @@ duckdb -unsigned
 ```
 
 ```sql
-LOAD '/Users/ramonljevo/Documents/python_path/duckdb-polarsgodmode/build/release/extension/polarsgodmode/polarsgodmode.duckdb_extension';
+LOAD '/Users/ramonljevo/Documents/python_path/duckdb-stps/build/release/extension/stps/stps.duckdb_extension';
 
 -- Test it works
 SELECT stps_get_guid('test', 'data');
@@ -156,7 +156,7 @@ SELECT stps_map_null_to_empty('test');
 
 ### Example 1: Data Deduplication with stps_get_guid
 ```sql
-LOAD 'build/release/extension/polarsgodmode/polarsgodmode.duckdb_extension';
+LOAD 'build/release/extension/stps/stps.duckdb_extension';
 
 -- Create deterministic IDs for deduplication
 SELECT DISTINCT
@@ -214,7 +214,7 @@ conn = duckdb.connect(config={'allow_unsigned_extensions': 'true'})
 
 # Load extension
 conn.execute("""
-    LOAD '/Users/ramonljevo/Documents/python_path/duckdb-polarsgodmode/build/release/extension/polarsgodmode/polarsgodmode.duckdb_extension'
+    LOAD '/Users/ramonljevo/Documents/python_path/duckdb-stps/build/release/extension/stps/stps.duckdb_extension'
 """)
 
 # Use stps_ functions
@@ -234,16 +234,16 @@ print(result)
 
 ### Option 1: Direct Load
 ```bash
-duckdb -unsigned -c "LOAD 'build/release/extension/polarsgodmode/polarsgodmode.duckdb_extension'; SELECT stps_get_guid('test');"
+duckdb -unsigned -c "LOAD 'build/release/extension/stps/stps.duckdb_extension'; SELECT stps_get_guid('test');"
 ```
 
 ### Option 2: Interactive Session
 ```bash
-cd /Users/ramonljevo/Documents/python_path/duckdb-polarsgodmode
+cd /Users/ramonljevo/Documents/python_path/duckdb-stps
 duckdb -unsigned
 ```
 ```sql
-LOAD 'build/release/extension/polarsgodmode/polarsgodmode.duckdb_extension';
+LOAD 'build/release/extension/stps/stps.duckdb_extension';
 SELECT stps_uuid();
 ```
 
@@ -270,7 +270,7 @@ Now you can use `duckdb` without the `-unsigned` flag!
 
 ## ✅ Why `stps_` prefix?
 
-- **Matches your original class**: `Stps` class from `polarsgodmode/ldf.py`
+- **Matches your original class**: `Stps` class from `stps/ldf.py`
 - **Consistent naming**: All 17 functions use the same prefix
 - **Avoids conflicts**: Unique prefix prevents collisions with other extensions
 - **Recognizable**: Easy to find with tab completion: `stps_<TAB>`
@@ -278,5 +278,5 @@ Now you can use `duckdb` without the `-unsigned` flag!
 ---
 
 **Built:** December 27, 2025
-**Extension:** polarsgodmode.duckdb_extension (5.5 MB)
+**Extension:** stps.duckdb_extension (5.5 MB)
 **Platform:** macOS ARM64

@@ -1,9 +1,9 @@
-#include "include/utils.hpp"
+#include "utils.hpp"
 #include <sstream>
 #include <regex>
 
 namespace duckdb {
-namespace polarsgodmode {
+namespace stps {
 
 std::string trim(const std::string& str) {
     if (str.empty()) return str;
@@ -127,5 +127,5 @@ std::string join_strings(const std::vector<std::string>& strings, const std::str
     return result.str();
 }
 
-} // namespace polarsgodmode
+} // namespace stps
 } // namespace duckdb

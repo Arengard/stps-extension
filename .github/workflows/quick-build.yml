@@ -89,16 +89,16 @@ jobs:
           EXTENSION_FOUND=false
           
           # Check debug build location
-          if [ -f "build/debug/extension/polarsgodmode/polarsgodmode.duckdb_extension" ]; then
-            echo "✅ Extension found in debug/extension/polarsgodmode/"
-            ls -la build/debug/extension/polarsgodmode/
+          if [ -f "build/debug/extension/stps/stps.duckdb_extension" ]; then
+            echo "✅ Extension found in debug/extension/stps/"
+            ls -la build/debug/extension/stps/
             EXTENSION_FOUND=true
           fi
           
           # Check alternative debug location
-          if [ -f "build/debug/polarsgodmode.duckdb_extension" ]; then
+          if [ -f "build/debug/stps.duckdb_extension" ]; then
             echo "✅ Extension found in debug/ root"
-            ls -la build/debug/polarsgodmode.duckdb_extension
+            ls -la build/debug/stps.duckdb_extension
             EXTENSION_FOUND=true
           fi
           

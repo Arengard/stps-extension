@@ -1,11 +1,11 @@
-#include "include/case_transform.hpp"
-#include "include/utils.hpp"
+#include "case_transform.hpp"
+#include "utils.hpp"
 #include "duckdb/function/scalar_function.hpp"
 #include "duckdb/common/types/data_chunk.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 
 namespace duckdb {
-namespace polarsgodmode {
+namespace stps {
 
 std::string to_snake_case(const std::string& input) {
     auto words = split_words(input);
@@ -186,5 +186,5 @@ void RegisterCaseTransformFunctions(ExtensionLoader &loader) {
     loader.RegisterFunction(title_case_set);
 }
 
-} // namespace polarsgodmode
+} // namespace stps
 } // namespace duckdb

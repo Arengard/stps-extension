@@ -1,0 +1,63 @@
+#pragma once
+
+#include "duckdb.hpp"
+#include "duckdb/main/extension.hpp"
+#include <string>
+#include <vector>
+#include <filesystem>
+#include <regex>
+
+namespace duckdb {
+
+// Forward declarations
+class Connection;
+class DatabaseInstance;
+
+} // namespace duckdb
+
+namespace stps {
+
+namespace fs = std::filesystem;
+
+struct FileEntry {
+    std::string name;
+    std::string path;
+    std::string type;
+    int64_t size;
+    int64_t modified_time;
+    std::string extension;
+    std::string parent_directory;
+};
+
+struct ScanOptions {
+    std::string base_path;
+    bool recursive = false;
+    std::string file_type;  // Extension filter (e.g., "pdf")
+    int64_t min_size = -1;
+    int64_t max_size = -1;
+    int64_t min_date = -1;
+    int64_t max_date = -1;
+    std::string pattern;  // Glob or regex pattern
+    std::string content_search;  // Text to search in files
+    int max_depth = -1;
+    bool include_hidden = false;
+};
+
+class FileSystemScanner {
+public:
+    static std::vector<FileEntry> ScanDirectory(const ScanOptions& options);
+
+private:
+    static bool MatchesFilter(const fs::directory_entry& entry, const ScanOptions& options);
+    static bool MatchesPattern(const std::string& filename, const std::string& pattern);
+    static bool SearchFileContent(const fs::path& file_path, const std::string& search_text);
+    static FileEntry CreateEntry(const fs::directory_entry& entry);
+    static void ScanRecursive(
+        const fs::path& path,
+        const ScanOptions& options,
+        std::vector<FileEntry>& results,
+        int current_depth = 0
+    );
+};
+
+} // namespace stps

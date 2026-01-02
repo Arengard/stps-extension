@@ -1,8 +1,8 @@
-# polarsgodmode DuckDB Extension - Usage Guide
+# stps DuckDB Extension - Usage Guide
 
 ## ✅ Build Complete!
 
-**Extension Location:** `build/release/extension/polarsgodmode/polarsgodmode.duckdb_extension`
+**Extension Location:** `build/release/extension/stps/stps.duckdb_extension`
 **File Size:** 5.5 MB
 **Functions:** 17 (14 original + 3 UUID/GUID functions)
 
@@ -13,12 +13,12 @@
 ### Load the Extension
 
 ```sql
-LOAD 'build/release/extension/polarsgodmode/polarsgodmode.duckdb_extension';
+LOAD 'build/release/extension/stps/stps.duckdb_extension';
 ```
 
 Or with full path:
 ```sql
-LOAD '/Users/ramonljevo/Documents/python_path/duckdb-polarsgodmode/build/release/extension/polarsgodmode/polarsgodmode.duckdb_extension';
+LOAD '/Users/ramonljevo/Documents/python_path/duckdb-stps/build/release/extension/stps/stps.duckdb_extension';
 ```
 
 ---
@@ -94,7 +94,7 @@ SELECT pgm_map_null_to_empty('test'); -- test
 ### Data Cleaning Pipeline
 
 ```sql
-LOAD 'build/release/extension/polarsgodmode/polarsgodmode.duckdb_extension';
+LOAD 'build/release/extension/stps/stps.duckdb_extension';
 
 -- Clean and normalize customer data
 SELECT
@@ -134,11 +134,11 @@ FROM table_schema;
 
 ### Option 1: Use from Build Directory (Current)
 ```bash
-cd /Users/ramonljevo/Documents/python_path/duckdb-polarsgodmode
+cd /Users/ramonljevo/Documents/python_path/duckdb-stps
 duckdb
 ```
 ```sql
-LOAD 'build/release/extension/polarsgodmode/polarsgodmode.duckdb_extension';
+LOAD 'build/release/extension/stps/stps.duckdb_extension';
 ```
 
 ### Option 2: Copy to DuckDB Extensions Directory
@@ -147,24 +147,24 @@ LOAD 'build/release/extension/polarsgodmode/polarsgodmode.duckdb_extension';
 mkdir -p ~/.duckdb/extensions/v1.1.3/osx_arm64
 
 # Copy the extension
-cp build/release/extension/polarsgodmode/polarsgodmode.duckdb_extension \
+cp build/release/extension/stps/stps.duckdb_extension \
    ~/.duckdb/extensions/v1.1.3/osx_arm64/
 
 # Now you can load with just the name
-duckdb -c "LOAD polarsgodmode; SELECT pgm_uuid();"
+duckdb -c "LOAD stps; SELECT pgm_uuid();"
 ```
 
 ### Option 3: Set Environment Variable
 ```bash
-export DUCKDB_EXTENSION_DIR=/Users/ramonljevo/Documents/python_path/duckdb-polarsgodmode/build/release/extension
-duckdb -c "LOAD polarsgodmode; SELECT pgm_get_guid('test');"
+export DUCKDB_EXTENSION_DIR=/Users/ramonljevo/Documents/python_path/duckdb-stps/build/release/extension
+duckdb -c "LOAD stps; SELECT pgm_get_guid('test');"
 ```
 
 ---
 
 ## 📊 Comparison with ldf.py
 
-| Feature | ldf.py (Python) | polarsgodmode Extension (C++) |
+| Feature | ldf.py (Python) | stps Extension (C++) |
 |---------|----------------|-------------------------------|
 | UUID Generation | ✅ uuid.uuid5() | ✅ pgm_get_guid() - FNV-1a hash |
 | Case Transformations | ✅ 7 functions | ✅ 7 functions |

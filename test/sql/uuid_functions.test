@@ -64,3 +64,59 @@ query I
 SELECT stps_get_guid('a', 'b') = stps_get_guid('a', 'b');
 ----
 true
+
+# stps_guid_to_path - convert GUID to 4-level folder path
+# f9=249, e6=230, e6=230, ef=239
+query T
+SELECT stps_guid_to_path('f9e6e6ef-197c-5b25-9f2c-d9c79423ab75');
+----
+249/230/230/239
+
+# Works without hyphens
+query T
+SELECT stps_guid_to_path('f9e6e6ef197c5b259f2cd9c79423ab75');
+----
+249/230/230/239
+
+# Case insensitive - uppercase
+query T
+SELECT stps_guid_to_path('F9E6E6EF-197C-5B25-9F2C-D9C79423AB75');
+----
+249/230/230/239
+
+# Different GUID produces different path
+# a4=164, 30=48, d8=216, 46=70
+query T
+SELECT stps_guid_to_path('a430d846-80aa-5d0b-b695-136cbd22ce9b');
+----
+164/48/216/70
+
+# Deterministic - same GUID always gives same path
+query I
+SELECT stps_guid_to_path('f9e6e6ef-197c-5b25-9f2c-d9c79423ab75') = stps_guid_to_path('f9e6e6ef-197c-5b25-9f2c-d9c79423ab75');
+----
+true
+
+# Edge case: 00000000 gives 0/0/0/0
+query T
+SELECT stps_guid_to_path('00000000-0000-0000-0000-000000000000');
+----
+0/0/0/0
+
+# Edge case: ffffffff gives 255/255/255/255
+query T
+SELECT stps_guid_to_path('ffffffff-ffff-ffff-ffff-ffffffffffff');
+----
+255/255/255/255
+
+# Invalid GUID - too short
+query T
+SELECT stps_guid_to_path('abc');
+----
+ERROR: Invalid GUID
+
+# Invalid GUID - invalid characters
+query T
+SELECT stps_guid_to_path('ghijklmn-opqr-stuv-wxyz-123456789012');
+----
+ERROR: Invalid GUID

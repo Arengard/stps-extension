@@ -4,7 +4,7 @@
 #include <string>
 
 namespace duckdb {
-namespace polarsgodmode {
+namespace stps {
 
 // UUID generation functions
 std::string generate_uuid_v4();
@@ -13,5 +13,5 @@ std::string generate_uuid_v5(const std::string& name);
 // Register UUID functions
 void RegisterUuidFunctions(ExtensionLoader &loader);
 
-} // namespace polarsgodmode
+} // namespace stps
 } // namespace duckdb

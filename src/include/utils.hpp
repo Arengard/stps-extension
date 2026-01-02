@@ -7,7 +7,7 @@
 #include <algorithm>
 
 namespace duckdb {
-namespace polarsgodmode {
+namespace stps {
 
 // String utilities
 std::string trim(const std::string& str);
@@ -26,5 +26,5 @@ bool is_lower_char(char c);
 std::vector<std::string> split_words(const std::string& str);
 std::string join_strings(const std::vector<std::string>& strings, const std::string& separator);
 
-} // namespace polarsgodmode
+} // namespace stps
 } // namespace duckdb

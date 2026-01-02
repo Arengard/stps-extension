@@ -5,7 +5,7 @@
 #include <unordered_map>
 
 namespace duckdb {
-namespace polarsgodmode {
+namespace stps {
 
 // Text normalization functions
 std::string remove_accents(const std::string& input, bool keep_umlauts = false);
@@ -20,5 +20,5 @@ std::string convert_ascii_to_umlauts(const std::string& input);
 // Register text normalization scalar functions
 void RegisterTextNormalizeFunctions(ExtensionLoader &loader);
 
-} // namespace polarsgodmode
+} // namespace stps
 } // namespace duckdb

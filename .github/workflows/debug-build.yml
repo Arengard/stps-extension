@@ -102,7 +102,7 @@ jobs:
           echo "DuckDB binary: $DUCKDB_BINARY"
           
           echo "Testing extension..."
-          $DUCKDB_BINARY -c "INSTALL '$EXTENSION_FILE'; LOAD polarsgodmode; SELECT 'Success!' as result;"
+          $DUCKDB_BINARY -c "INSTALL '$EXTENSION_FILE'; LOAD stps; SELECT 'Success!' as result;"
 
   debug-windows:
     name: Debug Build Process (Windows)
@@ -208,4 +208,4 @@ jobs:
           echo "DuckDB binary: $DUCKDB_BINARY"
           
           echo "Testing extension..."
-          "$DUCKDB_BINARY" -c "INSTALL '$EXTENSION_FILE'; LOAD polarsgodmode; SELECT 'Success!' as result;"
+          "$DUCKDB_BINARY" -c "INSTALL '$EXTENSION_FILE'; LOAD stps; SELECT 'Success!' as result;"

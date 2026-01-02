@@ -23,8 +23,8 @@ stps extension/
 ├── build/
 │   ├── v1.4.3/              # Build for stable release
 │   │   ├── extension/
-│   │   │   └── polarsgodmode/
-│   │   │       └── polarsgodmode.duckdb_extension
+│   │   │   └── stps/
+│   │   │       └── stps.duckdb_extension
 │   │   └── duckdb           # DuckDB binary (v1.4.3)
 │   └── dev/                 # Future: development builds
 │
@@ -89,7 +89,7 @@ stps extension/
 **Output Format:**
 ```
 ✅ Testing v1.4.3 extension
-📍 Extension: build/v1.4.3/extension/polarsgodmode/polarsgodmode.duckdb_extension
+📍 Extension: build/v1.4.3/extension/stps/stps.duckdb_extension
 🔧 DuckDB: v1.4.3 (system)
 
 Running tests:
@@ -116,7 +116,7 @@ All tests passed!
 
 # 3. Use with system DuckDB
 duckdb -unsigned
-> LOAD './build/v1.4.3/extension/polarsgodmode/polarsgodmode.duckdb_extension';
+> LOAD './build/v1.4.3/extension/stps/stps.duckdb_extension';
 > SELECT stps_is_valid_iban('DE89370400440532013000');
 ```
 

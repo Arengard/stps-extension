@@ -93,22 +93,22 @@ jobs:
           fi
           
           echo "Found extension file: $EXTENSION_FILE"
-          cp "$EXTENSION_FILE" dist/polarsgodmode.duckdb_extension
+          cp "$EXTENSION_FILE" dist/stps.duckdb_extension
           
           cd dist
           if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
             # Use zip for Windows
-            7z a polarsgodmode-${{ matrix.platform }}.zip polarsgodmode.duckdb_extension
+            7z a stps-${{ matrix.platform }}.zip stps.duckdb_extension
           else
             # Use tar for Unix systems
-            tar -czf polarsgodmode-${{ matrix.platform }}.tar.gz polarsgodmode.duckdb_extension
+            tar -czf stps-${{ matrix.platform }}.tar.gz stps.duckdb_extension
           fi
 
       - name: Upload artifact
         uses: actions/upload-artifact@v3
         with:
           name: extension-${{ matrix.platform }}
-          path: dist/polarsgodmode-${{ matrix.platform }}.*
+          path: dist/stps-${{ matrix.platform }}.*
 
   release:
     name: Create Release
@@ -124,7 +124,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            extension-*/polarsgodmode-*.tar.gz
-            extension-*/polarsgodmode-*.zip
+            extension-*/stps-*.tar.gz
+            extension-*/stps-*.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

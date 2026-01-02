@@ -1,8 +1,8 @@
-#include "include/gobd_reader.hpp"
+#include "gobd_reader.hpp"
 #include "duckdb/main/extension/extension_loader.hpp"
 
 namespace duckdb {
-namespace polarsgodmode {
+namespace stps {
 
 // GoBD Reader Functions
 //
@@ -10,7 +10,7 @@ namespace polarsgodmode {
 // compatibility and performance. To use:
 //
 // 1. Load the extension:
-//    LOAD 'polarsgodmode.duckdb_extension';
+//    LOAD 'stps.duckdb_extension';
 //
 // 2. Load the GoBD macros:
 //    .read gobd_functions.sql
@@ -28,5 +28,5 @@ void RegisterGobdReaderFunctions(ExtensionLoader &loader) {
     // Users should load gobd_functions.sql after loading the extension
 }
 
-} // namespace polarsgodmode
+} // namespace stps
 } // namespace duckdb

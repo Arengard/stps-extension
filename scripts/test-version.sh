@@ -33,7 +33,7 @@ fi
 
 VERSION="$1"
 BUILD_DIR="$PROJECT_ROOT/build/$VERSION"
-EXTENSION_PATH="$BUILD_DIR/extension/polarsgodmode/polarsgodmode.duckdb_extension"
+EXTENSION_PATH="$BUILD_DIR/extension/stps/stps.duckdb_extension"
 BUILT_DUCKDB="$BUILD_DIR/duckdb"
 TEST_DIR="$PROJECT_ROOT/test"
 

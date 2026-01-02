@@ -45,7 +45,7 @@ goto :error
 
 :run_test
 echo Testing extension loading...
-"%DUCKDB_EXE%" -c "INSTALL '%EXTENSION_FILE%'; LOAD polarsgodmode; SELECT 'Extension loaded successfully!' as status;"
+"%DUCKDB_EXE%" -c "INSTALL '%EXTENSION_FILE%'; LOAD stps; SELECT 'Extension loaded successfully!' as status;"
 
 if %errorlevel% equ 0 (
     echo.

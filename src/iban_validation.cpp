@@ -1,4 +1,4 @@
-#include "include/iban_validation.hpp"
+#include "iban_validation.hpp"
 #include "duckdb/function/scalar_function.hpp"
 #include "duckdb/common/types/data_chunk.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
@@ -9,7 +9,7 @@
 #include <unordered_map>
 
 namespace duckdb {
-namespace polarsgodmode {
+namespace stps {
 
 // IBAN country code lengths (ISO 13616)
 static const std::unordered_map<std::string, int> IBAN_LENGTHS = {
@@ -279,5 +279,5 @@ void RegisterIbanValidationFunctions(ExtensionLoader &loader) {
     loader.RegisterFunction(get_bban_set);
 }
 
-} // namespace polarsgodmode
+} // namespace stps
 } // namespace duckdb

@@ -9,7 +9,7 @@
 #include <sstream>
 
 namespace duckdb {
-namespace polarsgodmode {
+namespace stps {
 
 struct GobdReaderBindData : public TableFunctionData {
     string csv_path;
@@ -240,5 +240,5 @@ void RegisterGobdReaderFunctions(ExtensionLoader &loader) {
     loader.RegisterFunction(read_gobd_info);
 }
 
-} // namespace polarsgodmode
+} // namespace stps
 } // namespace duckdb

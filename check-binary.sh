@@ -41,13 +41,13 @@ case "$OS" in
         ;;
 esac
 
-BINARY_PATH="$SCRIPT_DIR/binaries/$PLATFORM/polarsgodmode.duckdb_extension"
+BINARY_PATH="$SCRIPT_DIR/binaries/$PLATFORM/stps.duckdb_extension"
 
 echo "🔍 Detected platform: $PLATFORM"
 echo ""
 
 if [ -f "$BINARY_PATH" ]; then
-    echo "✅ Pre-built binary found at: binaries/$PLATFORM/polarsgodmode.duckdb_extension"
+    echo "✅ Pre-built binary found at: binaries/$PLATFORM/stps.duckdb_extension"
     echo ""
     echo "To use this extension in DuckDB, run:"
     echo ""
@@ -55,12 +55,12 @@ if [ -f "$BINARY_PATH" ]; then
     echo ""
     echo "Then in DuckDB:"
     echo ""
-    echo "  INSTALL './binaries/$PLATFORM/polarsgodmode.duckdb_extension';"
-    echo "  LOAD polarsgodmode;"
+    echo "  INSTALL './binaries/$PLATFORM/stps.duckdb_extension';"
+    echo "  LOAD stps;"
     echo "  SELECT stps_uuid();"
     echo ""
 else
-    echo "❌ Pre-built binary not found at: binaries/$PLATFORM/polarsgodmode.duckdb_extension"
+    echo "❌ Pre-built binary not found at: binaries/$PLATFORM/stps.duckdb_extension"
     echo ""
     echo "The binary might not have been built yet. Please:"
     echo "  1. Pull the latest changes: git pull"

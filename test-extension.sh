@@ -30,7 +30,7 @@ echo "Extension file found: $EXTENSION_FILE"
 echo "Testing extension loading..."
 ./build/debug/duckdb -c "
 INSTALL '$EXTENSION_FILE';
-LOAD polarsgodmode;
+LOAD stps;
 SELECT 'Extension loaded successfully!' as status;
 "
 

@@ -3,7 +3,7 @@
 echo "Checking build status..."
 echo ""
 
-if ps aux | grep -v grep | grep "make" | grep -q "polarsgodmode"; then
+if ps aux | grep -v grep | grep "make" | grep -q "stps"; then
     echo "✓ Build is RUNNING"
     echo ""
     echo "Last 10 lines of build log:"
@@ -11,14 +11,14 @@ if ps aux | grep -v grep | grep "make" | grep -q "polarsgodmode"; then
     echo ""
     echo "To see full log: tail -f build.log"
 else
-    if [ -f "build/release/extension/polarsgodmode/polarsgodmode.duckdb_extension" ]; then
+    if [ -f "build/release/extension/stps/stps.duckdb_extension" ]; then
         echo "🎉 BUILD COMPLETE!"
         echo ""
-        ls -lh build/release/extension/polarsgodmode/polarsgodmode.duckdb_extension
+        ls -lh build/release/extension/stps/stps.duckdb_extension
         echo ""
         echo "To test:"
         echo "  duckdb"
-        echo "  LOAD '$(pwd)/build/release/extension/polarsgodmode/polarsgodmode.duckdb_extension';"
+        echo "  LOAD '$(pwd)/build/release/extension/stps/stps.duckdb_extension';"
         echo "  SELECT pgm_uuid();"
     else
         echo "❌ Build not running and no extension found"

@@ -31,8 +31,8 @@ After cloning or pulling the repository, you can immediately use the pre-built e
 duckdb
 
 # In DuckDB:
-INSTALL './binaries/linux_amd64/polarsgodmode.duckdb_extension';
-LOAD polarsgodmode;
+INSTALL './binaries/linux_amd64/stps.duckdb_extension';
+LOAD stps;
 SELECT stps_uuid();
 ```
 
@@ -42,8 +42,8 @@ SELECT stps_uuid();
 duckdb.exe
 
 # In DuckDB:
-INSTALL './binaries/windows_amd64/polarsgodmode.duckdb_extension';
-LOAD polarsgodmode;
+INSTALL './binaries/windows_amd64/stps.duckdb_extension';
+LOAD stps;
 SELECT stps_uuid();
 ```
 

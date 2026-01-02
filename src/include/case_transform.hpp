@@ -4,7 +4,7 @@
 #include <string>
 
 namespace duckdb {
-namespace polarsgodmode {
+namespace stps {
 
 // Case transformation functions
 std::string to_snake_case(const std::string& input);
@@ -18,5 +18,5 @@ std::string to_title_case(const std::string& input);
 // Register case transformation scalar functions
 void RegisterCaseTransformFunctions(ExtensionLoader &loader);
 
-} // namespace polarsgodmode
+} // namespace stps
 } // namespace duckdb

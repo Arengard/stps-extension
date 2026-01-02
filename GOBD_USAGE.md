@@ -1,6 +1,6 @@
 # GoBD Reader Functions
 
-This document describes the GoBD (Grundsätze zur ordnungsmäßigen Führung und Aufbewahrung von Büchern) reader functions added to the polarsgodmode extension.
+This document describes the GoBD (Grundsätze zur ordnungsmäßigen Führung und Aufbewahrung von Büchern) reader functions added to the stps extension.
 
 ## Overview
 

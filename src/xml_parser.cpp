@@ -1,4 +1,4 @@
-#include "include/xml_parser.hpp"
+#include "xml_parser.hpp"
 #include "duckdb/function/scalar_function.hpp"
 #include "duckdb/function/table_function.hpp"
 #include "duckdb/common/types/data_chunk.hpp"
@@ -10,7 +10,7 @@
 #include <vector>
 
 namespace duckdb {
-namespace polarsgodmode {
+namespace stps {
 
 // Simple XML node structure
 struct XmlNode {
@@ -252,5 +252,5 @@ void RegisterXmlParserFunctions(ExtensionLoader &loader) {
     loader.RegisterFunction(read_xml_json_set);
 }
 
-} // namespace polarsgodmode
+} // namespace stps
 } // namespace duckdb

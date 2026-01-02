@@ -3,10 +3,10 @@
 #include "duckdb.hpp"
 
 namespace duckdb {
-namespace polarsgodmode {
+namespace stps {
 
 // Register GoBD reader functions
 void RegisterGobdReaderFunctions(ExtensionLoader &loader);
 
-} // namespace polarsgodmode
+} // namespace stps
 } // namespace duckdb

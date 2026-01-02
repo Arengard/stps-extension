@@ -4,7 +4,7 @@
 #include <string>
 
 namespace duckdb {
-namespace polarsgodmode {
+namespace stps {
 
 // Null/empty string handling
 std::string map_null_to_empty(const string_t& input, bool is_null);
@@ -13,5 +13,5 @@ bool should_map_empty_to_null(const std::string& input);
 // Register null handling scalar functions
 void RegisterNullHandlingFunctions(ExtensionLoader &loader);
 
-} // namespace polarsgodmode
+} // namespace stps
 } // namespace duckdb

@@ -45,7 +45,7 @@ Build the extension for specific DuckDB versions to ensure compatibility with yo
 
 # Use with system DuckDB
 duckdb -unsigned
-> LOAD './build/v1.4.3/extension/polarsgodmode/polarsgodmode.duckdb_extension';
+> LOAD './build/v1.4.3/extension/stps/stps.duckdb_extension';
 > SELECT stps_is_valid_iban('DE89370400440532013000');
 ```
 

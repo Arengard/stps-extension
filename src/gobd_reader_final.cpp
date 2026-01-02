@@ -4,7 +4,7 @@
 #include "duckdb/parser/parser.hpp"
 
 namespace duckdb {
-namespace polarsgodmode {
+namespace stps {
 
 void RegisterGobdReaderFunctions(ExtensionLoader &loader) {
     // Register helper macro to extract GoBD schema
@@ -109,5 +109,5 @@ void RegisterGobdReaderFunctions(ExtensionLoader &loader) {
     // This function now just serves as a placeholder
 }
 
-} // namespace polarsgodmode
+} // namespace stps
 } // namespace duckdb
