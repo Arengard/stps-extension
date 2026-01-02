@@ -12,12 +12,12 @@ namespace stps {
 
 // Bind data for stps_path function
 struct PathBindData : public TableFunctionData {
-    stps::PathOptions options;
+    ::stps::PathOptions options;
 };
 
 // Global state for stps_path function
 struct PathGlobalState : public GlobalTableFunctionState {
-    std::vector<stps::shared::FileInfo> files;
+    std::vector<::stps::shared::FileInfo> files;
     idx_t position = 0;
 };
 
@@ -86,12 +86,12 @@ static unique_ptr<GlobalTableFunctionState> PathInit(ClientContext &context, Tab
     auto &fs = FileSystem::GetFileSystem(context);
 
     // Convert base_path to absolute path
-    stps::PathOptions options = bind_data.options;
+    ::stps::PathOptions options = bind_data.options;
     options.base_path = GetAbsolutePath(options.base_path);
 
     // Scan the directory
     try {
-        result->files = stps::PathScanner::ScanPath(fs, options);
+        result->files = ::stps::PathScanner::ScanPath(fs, options);
     } catch (const std::exception &e) {
         throw IOException("Error scanning path: " + string(e.what()));
     }
@@ -126,12 +126,12 @@ static void PathScan(ClientContext &context, TableFunctionInput &data_p, DataChu
 
 // Bind data for stps_scan function
 struct ScanBindData : public TableFunctionData {
-    stps::ScanFunctionOptions options;
+    ::stps::ScanFunctionOptions options;
 };
 
 // Global state for stps_scan function
 struct ScanGlobalState : public GlobalTableFunctionState {
-    std::vector<stps::shared::FileInfo> files;
+    std::vector<::stps::shared::FileInfo> files;
     idx_t position = 0;
 };
 
@@ -188,12 +188,12 @@ static unique_ptr<GlobalTableFunctionState> ScanInit(ClientContext &context, Tab
     auto &fs = FileSystem::GetFileSystem(context);
 
     // Convert base_path to absolute path
-    stps::ScanFunctionOptions options = bind_data.options;
+    ::stps::ScanFunctionOptions options = bind_data.options;
     options.base_path = GetAbsolutePath(options.base_path);
 
     // Scan the directory
     try {
-        result->files = stps::ScanScanner::ScanPath(fs, options);
+        result->files = ::stps::ScanScanner::ScanPath(fs, options);
     } catch (const std::exception &e) {
         throw IOException("Error scanning path: " + string(e.what()));
     }
