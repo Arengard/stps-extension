@@ -24,7 +24,14 @@ bool file_exists(const std::string& path) {
 // Check if directory exists
 bool directory_exists(const std::string& path) {
     struct stat buffer;
-    return (stat(path.c_str(), &buffer) == 0 && S_ISDIR(buffer.st_mode));
+    if (stat(path.c_str(), &buffer) != 0) {
+        return false;
+    }
+#ifdef _WIN32
+    return (buffer.st_mode & _S_IFDIR) != 0;
+#else
+    return S_ISDIR(buffer.st_mode);
+#endif
 }
 
 // Get parent directory from path

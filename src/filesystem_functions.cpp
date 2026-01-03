@@ -4,8 +4,15 @@
 #include "duckdb/common/file_system.hpp"
 #include "path_function.hpp"
 #include "scan_function.hpp"
+#ifdef _WIN32
+#include <windows.h>
+#include <direct.h>
+#define PATH_MAX MAX_PATH
+#define getcwd _getcwd
+#else
 #include <unistd.h>
 #include <climits>
+#endif
 
 namespace duckdb {
 namespace stps {
@@ -57,11 +64,25 @@ static unique_ptr<FunctionData> PathBind(ClientContext &context, TableFunctionBi
 
 // Helper function to get absolute path using realpath
 static string GetAbsolutePath(const string &path) {
+#ifdef _WIN32
+    char resolved_path[MAX_PATH];
+    if (_fullpath(resolved_path, path.c_str(), MAX_PATH) != nullptr) {
+        return string(resolved_path);
+    }
+    // Fallback for relative paths
+    if (!path.empty() && path[0] != '/' && path[0] != '\\' && 
+        (path.length() < 2 || path[1] != ':')) {
+        char cwd[MAX_PATH];
+        if (_getcwd(cwd, MAX_PATH) != nullptr) {
+            return string(cwd) + "\\" + path;
+        }
+    }
+    return path;
+#else
     char resolved_path[PATH_MAX];
     if (realpath(path.c_str(), resolved_path) != nullptr) {
         return string(resolved_path);
     }
-    // If realpath fails, try using getcwd for relative paths
     if (!path.empty() && path[0] != '/') {
         char cwd[PATH_MAX];
         if (getcwd(cwd, sizeof(cwd)) != nullptr) {
@@ -75,6 +96,7 @@ static string GetAbsolutePath(const string &path) {
         }
     }
     return path;
+#endif
 }
 
 // Init function for stps_path
