@@ -56,7 +56,7 @@ jobs:
           sudo apt-get install -y build-essential cmake ninja-build
 
       - name: Setup submodules
-        shell: ${{ matrix.os == 'windows-latest' && 'bash' || 'sh' }}
+        shell: bash
         run: |
           # Create .gitmodules if it doesn't exist
           if [ ! -f ".gitmodules" ]; then
@@ -78,7 +78,7 @@ jobs:
           git submodule update --init --recursive
 
       - name: Build extension (Release)
-        shell: ${{ matrix.os == 'windows-latest' && 'bash' || 'sh' }}
+        shell: bash
         env:
           MAKEFLAGS: -j2
         run: |
