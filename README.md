@@ -43,36 +43,73 @@ SELECT stps_is_valid_iban('DE89370400440532013000') as is_valid;
 ### Step 3: Use the Functions
 
 ```sql
--- Text transformations
-SELECT stps_upper('hello world') as upper_text;
-SELECT stps_lower('HELLO WORLD') as lower_text;
+-- Case transformations
+SELECT stps_to_snake_case('HelloWorld') as snake_case;
+SELECT stps_to_camel_case('hello_world') as camel_case;
 
 -- IBAN validation
 SELECT stps_is_valid_iban('DE89370400440532013000') as valid_iban;
+SELECT stps_format_iban('DE89370400440532013000') as formatted_iban;
 
 -- UUID generation
-SELECT stps_generate_uuid() as new_uuid;
+SELECT stps_uuid() as new_uuid;
 
 -- File operations
-SELECT * FROM stps_scan_directory('C:/path/to/folder');
+SELECT * FROM stps_scan('C:/path/to/folder');
+SELECT * FROM stps_path('C:/base/path', 'subdir', 'file.txt');
 ```
 
 ## Available Functions
 
-### Text Functions
-- `stps_upper(text)` - Convert to uppercase
-- `stps_lower(text)` - Convert to lowercase
-- `stps_normalize_text(text)` - Normalize text
+### Case Transformation Functions
+- `stps_to_snake_case(text)` - Convert to snake_case
+- `stps_to_camel_case(text)` - Convert to camelCase
+- `stps_to_pascal_case(text)` - Convert to PascalCase
+- `stps_to_kebab_case(text)` - Convert to kebab-case
+- `stps_to_const_case(text)` - Convert to CONST_CASE
+- `stps_to_sentence_case(text)` - Convert to Sentence case
+- `stps_to_title_case(text)` - Convert to Title Case
 
-### Validation Functions
-- `stps_is_valid_iban(iban)` - Validate IBAN
+### Text Normalization Functions
+- `stps_remove_accents(text, [keep_umlauts])` - Remove accents from text
+- `stps_restore_umlauts(text)` - Restore German umlauts
+- `stps_clean_string(text)` - Clean and normalize string
+- `stps_normalize(text)` - Full text normalization
+
+### IBAN Validation Functions
+- `stps_is_valid_iban(iban)` - Validate IBAN format
+- `stps_format_iban(iban)` - Format IBAN with spaces
+- `stps_get_iban_country_code(iban)` - Extract country code
+- `stps_get_iban_check_digits(iban)` - Extract check digits
+- `stps_get_bban(iban)` - Extract BBAN
 
 ### UUID Functions
-- `stps_generate_uuid()` - Generate new UUID
+- `stps_uuid()` - Generate random UUID v4
+- `stps_uuid_from_string(text)` - Generate deterministic UUID v5
+- `stps_get_guid(...)` - Generate GUID from parts
+- `stps_guid_to_path(guid)` - Convert GUID to folder path
 
-### File Operations
-- `stps_scan_directory(path)` - Scan directory contents
-- `stps_path_join(parts...)` - Join path components
+### Null Handling Functions
+- `stps_map_empty_to_null(text)` - Convert empty strings to NULL
+- `stps_map_null_to_empty(text)` - Convert NULL to empty string
+
+### I/O Operations
+- `stps_copy_io(source, dest)` - Copy file or directory
+- `stps_move_io(source, dest)` - Move file or directory
+- `stps_delete_io(path)` - Delete file or directory
+- `stps_io_rename(old_name, new_name)` - Rename file or directory
+
+### File System Table Functions
+- `stps_scan(path, [recursive], [pattern])` - Scan directory contents
+- `stps_path(base_path, ...)` - Build and list file paths
+- `stps_read_folders(path)` - Read folder structure
+
+### XML Functions
+- `stps_read_xml(filepath)` - Read XML file as JSON string
+- `stps_read_xml_json(filepath)` - Read XML file as DuckDB JSON
+
+### GOBD Functions
+- `stps_read_gobd(index_path, table_name, [delimiter])` - Read GOBD files
 
 ## Building from Source
 
