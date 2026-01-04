@@ -124,7 +124,12 @@ set(EXTENSION_SOURCES
     src/shared/content_searcher.cpp
 )
 
-build_static_extension(${TARGET_NAME} ${EXTENSION_SOURCES})
+# Only build static extension for standalone builds
+if(NOT COMMAND duckdb_extension_load)
+  build_static_extension(${TARGET_NAME} ${EXTENSION_SOURCES})
+endif()
+
+# Always build loadable extension
 build_loadable_extension(${TARGET_NAME} " " ${EXTENSION_SOURCES})
 
 # Installation rules
