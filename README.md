@@ -1,116 +1,167 @@
-# STPS Extension
+# STPS DuckDB Extension
 
-The **STPS Extension** is a developer productivity extension that integrates STPS tooling into your IDE, providing code analysis, navigation, and workflow automation tailored for STPS-based projects.
+A DuckDB extension providing STPS-specific functions for data transformation, validation, and file operations.
 
 ## Features
 
-- **STPS project discovery** – Automatically detects STPS projects and configures the extension accordingly.
-- **Code navigation** – Go to definitions, find references, and explore STPS symbols directly from your editor.
-- **Diagnostics & linting** – Surface STPS-related errors and warnings inline as you edit.
-- **Commands & tasks** – Run common STPS commands (build, test, deploy, etc.) from the command palette or task runner.
-- **Configuration support** – Respect project-level and user-level STPS configuration files.
+- **Text Transformations** – Case conversion, normalization, and text processing
+- **Data Validation** – IBAN validation and other data quality checks
+- **UUID Functions** – UUID generation and manipulation
+- **Null Handling** – Enhanced null value processing
+- **XML Parsing** – XML data parsing and extraction
+- **File Operations** – Filesystem scanning and path manipulation
+- **GOBD Reader** – German GOBD standard compliance tools
 
-> Note: The exact feature set may vary depending on the version of the extension and the host IDE.
+## Quick Start (Prebuilt Binaries)
 
-## Installation
+**No build tools required!** Download prebuilt binaries from GitHub Actions:
 
-### From the extension marketplace
+### Step 1: Download the Extension
 
-1. Open your IDE’s **Extensions** or **Plugins** view.
-2. Search for **“STPS Extension”**.
-3. Click **Install**.
-4. Reload or restart the IDE if prompted.
+1. Go to [GitHub Actions](https://github.com/Arengard/stps-extension/actions)
+2. Click on the latest successful "Windows Build on Push" workflow (green checkmark ✅)
+3. Scroll to the **Artifacts** section at the bottom
+4. Download `stps-windows-amd64-latest-master` (or your preferred version)
+5. Extract the ZIP file to get `stps.duckdb_extension`
 
-### From a packaged binary
+### Step 2: Load in DuckDB
 
-If you have a prebuilt extension package (e.g., `.vsix` or similar):
+```sql
+-- Start DuckDB (unsigned mode required for loading extensions)
+duckdb -unsigned
 
-# Or if already cloned, initialize submodules
+-- Install the extension
+INSTALL './stps.duckdb_extension';
+
+-- Load it
+LOAD stps;
+
+-- Test it works
+SELECT stps_is_valid_iban('DE89370400440532013000') as is_valid;
+```
+
+### Step 3: Use the Functions
+
+```sql
+-- Text transformations
+SELECT stps_upper('hello world') as upper_text;
+SELECT stps_lower('HELLO WORLD') as lower_text;
+
+-- IBAN validation
+SELECT stps_is_valid_iban('DE89370400440532013000') as valid_iban;
+
+-- UUID generation
+SELECT stps_generate_uuid() as new_uuid;
+
+-- File operations
+SELECT * FROM stps_scan_directory('C:/path/to/folder');
+```
+
+## Available Functions
+
+### Text Functions
+- `stps_upper(text)` - Convert to uppercase
+- `stps_lower(text)` - Convert to lowercase
+- `stps_normalize_text(text)` - Normalize text
+
+### Validation Functions
+- `stps_is_valid_iban(iban)` - Validate IBAN
+
+### UUID Functions
+- `stps_generate_uuid()` - Generate new UUID
+
+### File Operations
+- `stps_scan_directory(path)` - Scan directory contents
+- `stps_path_join(parts...)` - Join path components
+
+## Building from Source
+
+If you want to build the extension yourself:
+
+### Prerequisites
+- CMake 3.15+
+- C++17 compatible compiler
+- Git
+
+### Build Steps
+
+```bash
+# Clone the repository
+git clone https://github.com/Arengard/stps-extension.git
+cd stps-extension
+
+# Initialize submodules
 git submodule update --init --recursive
 
 # Build the extension
-make debug
+make release
 ```
-
-### Multi-Version Build System (Recommended)
-
-Build the extension for specific DuckDB versions to ensure compatibility with your installed DuckDB:
-
-```bash
-# Build for a specific DuckDB version (e.g., v1.4.3)
-./scripts/build-for-version.sh v1.4.3
-
-# Run automated tests
-./scripts/test-version.sh v1.4.3
-
-# Use with system DuckDB
-duckdb -unsigned
-> LOAD './build/v1.4.3/extension/stps/stps.duckdb_extension';
-> SELECT stps_is_valid_iban('DE89370400440532013000');
-```
-
-**Benefits:**
-- ✅ Build against stable DuckDB releases (matches your system DuckDB)
-- ✅ Test multiple versions simultaneously
-- ✅ Automatic submodule management (restores development state after build)
-- ✅ Easy to add new versions
-
-**Adding more versions:**
-```bash
-# When DuckDB v1.5.0 releases
-./scripts/build-for-version.sh v1.5.0
-./scripts/test-version.sh v1.5.0
-
-# Or test against development version
-./scripts/build-for-version.sh main
-```
-
-See [Multi-Version Build Design](docs/plans/2025-12-31-multi-version-build-system.md) for details.
 
 ### Windows Build
 ```batch
 # Windows Command Prompt or PowerShell
-build-windows.bat
-
-# Or manually:
 git submodule update --init --recursive
-make debug
+make release
 ```
 
-### Manual Build
-```bash
-mkdir build
-cd build
-cmake -DCMAKE_BUILD_TYPE=Debug ..
-make -j$(nproc)
-```
+The built extension will be in `build/release/extension/stps/stps.duckdb_extension`
 
-## Usage
+## Automated Builds
 
-1. Open an existing **STPS project** in your IDE.
-2. Ensure any required STPS CLI or SDK is installed and on your `PATH`.
-3. Wait for the extension to initialize; you should see STPS-specific status indicators or messages in the output/log panel.
-4. Use the following common actions:
-   - **Command palette** → type `STPS:` to see available extension commands.
-   - **Code navigation** → right-click on a symbol and choose “Go to Definition” or “Find References”.
-   - **Diagnostics** → open the “Problems” or “Diagnostics” view to inspect STPS-related issues.
+Every push to any branch automatically builds Windows binaries via GitHub Actions. Artifacts are retained for:
+- **90 days** for commit-specific builds
+- **30 days** for latest branch builds
 
-### Configuration
-
-The extension reads settings from:
-
-- **User settings** – Global preferences for how STPS should behave in your IDE.
-- **Workspace/project settings** – Project-specific overrides for tools, paths, and rules.
-
-Refer to your IDE’s settings UI and search for **“STPS”** to see all available options.
+Tagged releases (e.g., `v1.0.0`) create permanent GitHub releases with attached binaries.
 
 ## Development
 
-To work on the STPS Extension itself:
+### Running Tests
 
-1. Clone this repository:
+```bash
+# Run extension tests
+make test
+```
 
-   ```bash
-   git clone https://github.com/your-org/stps-extension.git
-   cd stps-extension
-<!-- Trigger build: 2025-12-31 11:24:03 -->
+### Project Structure
+
+```
+stps-extension/
+├── src/                          # Source files
+│   ├── stps_unified_extension.cpp  # Main extension entry
+│   ├── case_transform.cpp        # Text transformations
+│   ├── iban_validation.cpp       # IBAN validation
+│   ├── uuid_functions.cpp        # UUID operations
+│   └── filesystem_functions.cpp  # File operations
+├── test/sql/                     # SQL test files
+├── CMakeLists.txt               # Build configuration
+└── .github/workflows/           # CI/CD workflows
+```
+
+## Compatibility
+
+- **DuckDB Version**: v1.4.3
+- **Platform**: Windows x64 (binaries provided)
+- **Build System**: Linux, macOS, Windows (source builds)
+
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Run tests: `make test`
+5. Submit a pull request
+
+## License
+
+See LICENSE file for details.
+
+## Support
+
+- **Issues**: [GitHub Issues](https://github.com/Arengard/stps-extension/issues)
+- **Documentation**: See test files in `test/sql/` for usage examples
+
+## Version History
+
+- **Latest**: Automated builds on every commit
+- Check [GitHub Releases](https://github.com/Arengard/stps-extension/releases) for tagged versions
