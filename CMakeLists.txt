@@ -41,6 +41,12 @@ if(NOT COMMAND build_static_extension)
     add_library(${NAME}_extension STATIC ${FILES})
     target_link_libraries(${NAME}_extension duckdb_static)
     target_include_directories(${NAME}_extension PRIVATE src/include)
+    
+    # Add to export set to resolve CMake dependency error
+    install(TARGETS ${NAME}_extension
+            EXPORT DuckDBExports
+            ARCHIVE DESTINATION lib
+            LIBRARY DESTINATION lib)
   endfunction()
 
   function(build_loadable_extension NAME PARAMETERS)
