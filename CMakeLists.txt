@@ -29,6 +29,14 @@ set(EXTENSION_SOURCES
 build_static_extension(${TARGET_NAME} ${EXTENSION_SOURCES})
 build_loadable_extension(${TARGET_NAME} " " ${EXTENSION_SOURCES})
 
+# Add the static extension to DuckDB's export set to resolve linking
+if(TARGET ${TARGET_NAME}_extension)
+    install(TARGETS ${TARGET_NAME}_extension
+            EXPORT DuckDBExports
+            ARCHIVE DESTINATION lib
+            LIBRARY DESTINATION lib)
+endif()
+
 install(
   TARGETS ${TARGET_NAME}_loadable_extension
   LIBRARY DESTINATION lib
