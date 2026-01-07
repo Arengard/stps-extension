@@ -2,6 +2,7 @@
 
 #include <string>
 #include <unordered_map>
+#include <vector>
 #include <cstdint>
 #include "duckdb.hpp"
 
@@ -59,6 +60,12 @@ private:
     bool EnsureLutDirectory();
     bool FileExists(const std::string& path);
     bool ParseLutFile(const std::string& file_path);
+
+    // Format 2.0 parsing
+    bool ParseFormat20(const std::vector<uint8_t>& buffer);
+    bool DecompressBlock(const std::vector<uint8_t>& file_data,
+                         uint32_t offset, uint32_t size,
+                         std::vector<uint8_t>& output);
 
     // LUT parsing helpers
     uint32_t Adler32(const uint8_t* data, size_t len);
