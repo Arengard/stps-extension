@@ -28,6 +28,7 @@ set(EXTENSION_SOURCES
     # German bank account check digit validation
     src/kontocheck/check_methods.cpp
     src/account_validation.cpp
+    src/blz_lut_loader.cpp
 )
 
 build_static_extension(${TARGET_NAME} ${EXTENSION_SOURCES})

@@ -1,6 +1,9 @@
 #include "duckdb.hpp"
 #include "duckdb/main/extension.hpp"
 #include "duckdb/main/extension/extension_loader.hpp"
+#include "duckdb/main/client_context.hpp"
+#include <fstream>
+#include <iostream>
 
 // Include all function registration headers
 #include "case_transform.hpp"
@@ -13,6 +16,7 @@
 #include "gobd_reader.hpp"
 #include "drop_null_columns_function.hpp"
 #include "account_validation.hpp"
+#include "blz_lut_loader.hpp"
 
 namespace duckdb {
 namespace stps {
@@ -36,6 +40,19 @@ public:
         // Register filesystem table functions
         stps::RegisterFilesystemFunctions(loader);
         stps::RegisterDropNullColumnsFunction(loader);
+
+        // Initialize BLZ LUT loader (download if not present)
+        // This will check if ~/.stps/blz.lut exists and download if needed
+        // Note: Actual loading/parsing happens lazily on first use
+        std::string lut_path = stps::BlzLutLoader::GetInstance().GetLutFilePath();
+        if (!stps::BlzLutLoader::GetInstance().IsLoaded()) {
+            // Check if file exists, download if not
+            std::ifstream f(lut_path);
+            if (!f.good()) {
+                std::cout << "BLZ LUT file not found, downloading..." << std::endl;
+                stps::BlzLutLoader::GetInstance().DownloadLutFile(lut_path);
+            }
+        }
     }
 
     std::string Name() override {
