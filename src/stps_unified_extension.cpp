@@ -11,6 +11,7 @@
 #include "iban_validation.hpp"
 #include "xml_parser.hpp"
 #include "gobd_reader.hpp"
+#include "drop_null_columns_function.hpp"
 
 namespace duckdb {
 namespace stps {
@@ -32,6 +33,7 @@ public:
 
         // Register filesystem table functions
         stps::RegisterFilesystemFunctions(loader);
+        stps::RegisterDropNullColumnsFunction(loader);
     }
 
     std::string Name() override {

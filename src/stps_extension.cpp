@@ -10,6 +10,7 @@
 #include "iban_validation.hpp"
 #include "xml_parser.hpp"
 #include "gobd_reader.hpp"
+#include "drop_null_columns_function.hpp"
 #include "duckdb.hpp"
 #include "duckdb/main/database.hpp"
 #include "duckdb/main/connection.hpp"
@@ -451,6 +452,7 @@ static void LoadPolarsgodmodeFunctions(DatabaseInstance &db) {
     stps::RegisterIbanValidationFunctions(loader);
     stps::RegisterXmlParserFunctions(loader);
     stps::RegisterGobdReaderFunctions(loader);
+    stps::RegisterDropNullColumnsFunction(loader);
 }
 
 } // namespace duckdb

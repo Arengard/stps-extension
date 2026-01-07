@@ -21,6 +21,7 @@ set(EXTENSION_SOURCES
     src/path_function.cpp
     src/scan_function.cpp
     src/filesystem_functions.cpp
+    src/drop_null_columns_function.cpp
     src/shared/filesystem_utils.cpp
     src/shared/pattern_matcher.cpp
     src/shared/content_searcher.cpp
