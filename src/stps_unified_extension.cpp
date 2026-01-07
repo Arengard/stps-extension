@@ -12,6 +12,7 @@
 #include "xml_parser.hpp"
 #include "gobd_reader.hpp"
 #include "drop_null_columns_function.hpp"
+#include "account_validation.hpp"
 
 namespace duckdb {
 namespace stps {
@@ -30,6 +31,7 @@ public:
         stps::RegisterIbanValidationFunctions(loader);
         stps::RegisterXmlParserFunctions(loader);
         stps::RegisterGobdReaderFunctions(loader);
+        stps::RegisterAccountValidationFunctions(loader);
 
         // Register filesystem table functions
         stps::RegisterFilesystemFunctions(loader);

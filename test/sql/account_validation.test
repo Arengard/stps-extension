@@ -1,0 +1,288 @@
+# name: test/sql/account_validation.test
+# description: Test German bank account check digit validation (kontocheck)
+# group: [stps]
+
+require stps
+
+# Test Method 00 - MOD-10 with cross-sum
+# Valid accounts
+query I
+SELECT stps_validate_account_number('9290701', 0);
+----
+true
+
+query I
+SELECT stps_validate_account_number('539290858', 0);
+----
+true
+
+query I
+SELECT stps_validate_account_number('0001156071', 0);
+----
+true
+
+# Invalid account
+query I
+SELECT stps_validate_account_number('1234567890', 0);
+----
+false
+
+# Test Method 01 - MOD-10 on positions 0-8 with weights [1,7,3,1,7,3,1,7,3]
+query I
+SELECT stps_validate_account_number('0068007003', 1);
+----
+true
+
+query I
+SELECT stps_validate_account_number('0847321750', 1);
+----
+true
+
+# Test Method 02 - MOD-11 on positions 0-8 with weights [2,3,4,5,6,7,8,9,10]
+query I
+SELECT stps_validate_account_number('0003503398', 2);
+----
+true
+
+query I
+SELECT stps_validate_account_number('0001340967', 2);
+----
+true
+
+# Test Method 06 - MOD-11 on positions 0-8 with weights [2,3,4,5,6,7,8,0,0]
+query I
+SELECT stps_validate_account_number('0094012341', 6);
+----
+true
+
+query I
+SELECT stps_validate_account_number('5073321010', 6);
+----
+true
+
+# Test Method 09 - No check digit calculation (always valid for 10-digit accounts)
+query I
+SELECT stps_validate_account_number('0068007003', 9);
+----
+true
+
+query I
+SELECT stps_validate_account_number('0847321750', 9);
+----
+true
+
+# Test Method 10 - MOD-11 on positions 0-8 with weights [10,9,8,7,6,5,4,3,2]
+query I
+SELECT stps_validate_account_number('0012345008', 10);
+----
+true
+
+query I
+SELECT stps_validate_account_number('0087654008', 10);
+----
+true
+
+# Test Method 20 - MOD-11 on positions 0-8 with weights [2,3,4,5,6,7,8,9,3]
+query I
+SELECT stps_validate_account_number('0000259105', 20);
+----
+true
+
+# Test Method 51 - Multi-variant (Method A then B then exceptions)
+query I
+SELECT stps_validate_account_number('0001098506', 51);
+----
+true
+
+query I
+SELECT stps_validate_account_number('0032028008', 51);
+----
+true
+
+query I
+SELECT stps_validate_account_number('0218433000', 51);
+----
+true
+
+# Test Method 52 - ESER transformation (returns NOT_IMPLEMENTED)
+query T
+SELECT stps_validate_account_result('4917210800', 52);
+----
+NOT_IMPLEMENTED
+
+# Test Method 76 - MOD-11 with variants based on digit position 2
+query I
+SELECT stps_validate_account_number('0123456782', 76);
+----
+true
+
+query I
+SELECT stps_validate_account_number('1234567897', 76);
+----
+true
+
+# Invalid for method 76
+query I
+SELECT stps_validate_account_number('9876543210', 76);
+----
+false
+
+query I
+SELECT stps_validate_account_number('1234567890', 76);
+----
+false
+
+# Test Method 87 - Complex validation
+query I
+SELECT stps_validate_account_number('0002782254', 87);
+----
+true
+
+query I
+SELECT stps_validate_account_number('1234567881', 87);
+----
+true
+
+# Test Method 93 - Short with 7 digits, MOD-11
+query I
+SELECT stps_validate_account_number('0005501024', 93);
+----
+true
+
+# Test Method A0 (160) - Exception for 3-digit accounts
+query I
+SELECT stps_validate_account_number('0000000199', 160);
+----
+true
+
+# Test Method A6 (166) - Conditional selection
+query I
+SELECT stps_validate_account_number('1234567003', 166);
+----
+true
+
+# Test Method B9 (185) - Complex MOD-(11,10)
+query I
+SELECT stps_validate_account_number('0060806097', 185);
+----
+true
+
+# Test Method C0 (192) - Multi-variant with position-based selection
+query I
+SELECT stps_validate_account_number('4003600010', 192);
+----
+true
+
+# Test Method C2 (194) - MOD-11 with variant selection
+query I
+SELECT stps_validate_account_number('5678901231', 194);
+----
+true
+
+query I
+SELECT stps_validate_account_number('3456789019', 194);
+----
+true
+
+# Invalid for method C2
+query I
+SELECT stps_validate_account_number('3456789012', 194);
+----
+false
+
+query I
+SELECT stps_validate_account_number('1234567890', 194);
+----
+false
+
+# Test Method C5 (197) - Complex multi-range validation
+query I
+SELECT stps_validate_account_number('0000009525', 197);
+----
+true
+
+query I
+SELECT stps_validate_account_number('0000009547', 197);
+----
+true
+
+# Test result function - returns string status
+query T
+SELECT stps_validate_account_result('9290701', 0);
+----
+OK
+
+query T
+SELECT stps_validate_account_result('1234567890', 0);
+----
+FALSE
+
+query T
+SELECT stps_validate_account_result('4917210800', 52);
+----
+NOT_IMPLEMENTED
+
+query T
+SELECT stps_validate_account_result('INVALID', 0);
+----
+INVALID_KTO
+
+# Test with BLZ parameter (currently unused but supported)
+query I
+SELECT stps_validate_account_number('9290701', 0, '12345678');
+----
+true
+
+query T
+SELECT stps_validate_account_result('9290701', 0, '12345678');
+----
+OK
+
+# Test invalid method ID
+query T
+SELECT stps_validate_account_result('9290701', 999);
+----
+INVALID_METHOD
+
+# Test NULL handling
+query I
+SELECT stps_validate_account_number(NULL, 0);
+----
+NULL
+
+query I
+SELECT stps_validate_account_number('9290701', NULL);
+----
+NULL
+
+query T
+SELECT stps_validate_account_result(NULL, 0);
+----
+NULL
+
+query T
+SELECT stps_validate_account_result('9290701', NULL);
+----
+NULL
+
+# Test edge cases
+query I
+SELECT stps_validate_account_number('', 0);
+----
+false
+
+query I
+SELECT stps_validate_account_number('123', 0);
+----
+false
+
+# Test that 10-digit padding works (leading zeros)
+query I
+SELECT stps_validate_account_number('9290701', 0);
+----
+true
+
+query I
+SELECT stps_validate_account_number('0009290701', 0);
+----
+true
