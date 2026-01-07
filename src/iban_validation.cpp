@@ -1,4 +1,5 @@
 #include "iban_validation.hpp"
+#include "kontocheck/check_methods.hpp"
 #include "duckdb/function/scalar_function.hpp"
 #include "duckdb/common/types/data_chunk.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
@@ -108,7 +109,36 @@ bool validate_iban(const std::string& iban) {
 
     // Calculate mod97 - should be 1 for valid IBAN
     std::string mod_result = mod97(numeric);
-    return (mod_result == "1");
+    if (mod_result != "1") {
+        return false;
+    }
+
+    // Additional validation for German IBANs using kontocheck
+    // NOTE: This is currently disabled because it requires the BLZ LUT to determine
+    // the correct check method for each bank. Different German banks use different
+    // Prüfziffermethoden (00-C6), and we cannot guess the correct method without
+    // looking it up in the Bundesbank LUT file.
+    //
+    // TODO: Enable this once BLZ LUT loader is implemented:
+    // if (country_code == "DE" && cleaned.length() == 22) {
+    //     std::string bban = cleaned.substr(4);
+    //     if (bban.length() == 18) {
+    //         std::string blz = bban.substr(0, 8);
+    //         std::string account = bban.substr(8, 10);
+    //
+    //         // Look up check method from BLZ LUT
+    //         uint8_t method_id = lookup_check_method(blz);
+    //
+    //         auto check_result = kontocheck::CheckMethods::ValidateAccount(
+    //             account, method_id, blz);
+    //
+    //         if (check_result != kontocheck::CheckResult::OK) {
+    //             return false;
+    //         }
+    //     }
+    // }
+
+    return true;
 }
 
 // Helper function to format IBAN with spaces (every 4 characters)
@@ -196,6 +226,45 @@ static void StpsIbanTestFunction(DataChunk &args, ExpressionState &state, Vector
         });
 }
 
+// Validate German IBAN with kontocheck (when method is known)
+bool validate_german_iban_with_kontocheck(const std::string& iban, uint8_t method_id) {
+    // First do standard IBAN validation
+    if (!validate_iban(iban)) {
+        return false;
+    }
+
+    // Remove spaces and convert to uppercase
+    std::string cleaned;
+    for (char c : iban) {
+        if (!std::isspace(c)) {
+            cleaned += std::toupper(c);
+        }
+    }
+
+    // Check if it's a German IBAN
+    if (cleaned.length() != 22 || cleaned.substr(0, 2) != "DE") {
+        return false;  // Not a German IBAN
+    }
+
+    // Extract BLZ and account number from BBAN
+    std::string bban = cleaned.substr(4);  // Skip "DE" + check digits
+    if (bban.length() != 18) {
+        return false;
+    }
+
+    std::string blz = bban.substr(0, 8);
+    std::string account = bban.substr(8, 10);
+
+    // Validate account number using kontocheck
+    auto check_result = kontocheck::CheckMethods::ValidateAccount(
+        account,
+        method_id,
+        blz
+    );
+
+    return (check_result == kontocheck::CheckResult::OK);
+}
+
 // DuckDB scalar function wrapper
 static void StpsIsValidIbanFunction(DataChunk &args, ExpressionState &state, Vector &result) {
     UnaryExecutor::Execute<string_t, bool>(
@@ -204,6 +273,48 @@ static void StpsIsValidIbanFunction(DataChunk &args, ExpressionState &state, Vec
             std::string iban_str = iban.GetString();
             return validate_iban(iban_str);
         });
+}
+
+// Validate German IBAN with kontocheck - requires method ID
+static void StpsIsValidGermanIbanFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+    auto &iban_vector = args.data[0];
+    auto &method_vector = args.data[1];
+
+    UnifiedVectorFormat iban_data;
+    UnifiedVectorFormat method_data;
+
+    iban_vector.ToUnifiedFormat(args.size(), iban_data);
+    method_vector.ToUnifiedFormat(args.size(), method_data);
+
+    auto iban_ptr = UnifiedVectorFormat::GetData<string_t>(iban_data);
+    auto method_ptr = UnifiedVectorFormat::GetData<int32_t>(method_data);
+    auto result_data = FlatVector::GetData<bool>(result);
+    auto &result_validity = FlatVector::Validity(result);
+
+    for (idx_t i = 0; i < args.size(); i++) {
+        auto iban_idx = iban_data.sel->get_index(i);
+        auto method_idx = method_data.sel->get_index(i);
+
+        if (!iban_data.validity.RowIsValid(iban_idx) ||
+            !method_data.validity.RowIsValid(method_idx)) {
+            result_validity.SetInvalid(i);
+            continue;
+        }
+
+        std::string iban_str = iban_ptr[iban_idx].GetString();
+        int32_t method_id = method_ptr[method_idx];
+
+        // Validate method_id range
+        if (method_id < 0 || method_id > 0xC6) {
+            result_data[i] = false;
+            continue;
+        }
+
+        result_data[i] = validate_german_iban_with_kontocheck(
+            iban_str,
+            static_cast<uint8_t>(method_id)
+        );
+    }
 }
 
 // DuckDB scalar function for formatting IBAN
@@ -277,6 +388,14 @@ void RegisterIbanValidationFunctions(ExtensionLoader &loader) {
     ScalarFunctionSet get_bban_set("stps_get_bban");
     get_bban_set.AddFunction(ScalarFunction({LogicalType::VARCHAR}, LogicalType::VARCHAR, StpsGetBbanFunction));
     loader.RegisterFunction(get_bban_set);
+
+    // stps_is_valid_german_iban(iban, method_id) - Validate German IBAN with kontocheck
+    ScalarFunctionSet is_valid_german_iban_set("stps_is_valid_german_iban");
+    is_valid_german_iban_set.AddFunction(ScalarFunction(
+        {LogicalType::VARCHAR, LogicalType::INTEGER},
+        LogicalType::BOOLEAN,
+        StpsIsValidGermanIbanFunction));
+    loader.RegisterFunction(is_valid_german_iban_set);
 }
 
 } // namespace stps
