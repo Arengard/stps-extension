@@ -1,5 +1,6 @@
 #include "iban_validation.hpp"
 #include "kontocheck/check_methods.hpp"
+#include "blz_lut_loader.hpp"
 #include "duckdb/function/scalar_function.hpp"
 #include "duckdb/common/types/data_chunk.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
@@ -114,29 +115,27 @@ bool validate_iban(const std::string& iban) {
     }
 
     // Additional validation for German IBANs using kontocheck
-    // NOTE: This is currently disabled because it requires the BLZ LUT to determine
-    // the correct check method for each bank. Different German banks use different
-    // Prüfziffermethoden (00-C6), and we cannot guess the correct method without
-    // looking it up in the Bundesbank LUT file.
-    //
-    // TODO: Enable this once BLZ LUT loader is implemented:
-    // if (country_code == "DE" && cleaned.length() == 22) {
-    //     std::string bban = cleaned.substr(4);
-    //     if (bban.length() == 18) {
-    //         std::string blz = bban.substr(0, 8);
-    //         std::string account = bban.substr(8, 10);
-    //
-    //         // Look up check method from BLZ LUT
-    //         uint8_t method_id = lookup_check_method(blz);
-    //
-    //         auto check_result = kontocheck::CheckMethods::ValidateAccount(
-    //             account, method_id, blz);
-    //
-    //         if (check_result != kontocheck::CheckResult::OK) {
-    //             return false;
-    //         }
-    //     }
-    // }
+    // Automatic lookup of check method from BLZ LUT file
+    if (country_code == "DE" && cleaned.length() == 22) {
+        std::string bban = cleaned.substr(4);
+        if (bban.length() == 18) {
+            std::string blz = bban.substr(0, 8);
+            std::string account = bban.substr(8, 10);
+
+            // Look up check method from BLZ LUT
+            uint8_t method_id;
+            if (BlzLutLoader::GetInstance().LookupCheckMethod(blz, method_id)) {
+                // Found method - validate account number
+                auto check_result = kontocheck::CheckMethods::ValidateAccount(
+                    account, method_id, blz);
+
+                if (check_result != kontocheck::CheckResult::OK) {
+                    return false;  // Invalid account number
+                }
+            }
+            // If BLZ not found in LUT, continue (MOD-97 already passed)
+        }
+    }
 
     return true;
 }

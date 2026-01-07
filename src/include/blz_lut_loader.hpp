@@ -60,10 +60,17 @@ private:
     bool FileExists(const std::string& path);
     bool ParseLutFile(const std::string& file_path);
 
+    // LUT parsing helpers
+    uint32_t Adler32(const uint8_t* data, size_t len);
+    uint32_t DecodeDelta(uint8_t delta_byte, uint32_t prev_blz, const uint8_t*& ptr);
+    std::string FormatBlz(uint32_t blz);
+
     // Data members
     bool is_loaded_;
-    std::unordered_map<std::string, BankEntry> banks_;
+    std::unordered_map<std::string, uint8_t> blz_to_method_;  // BLZ -> method_id
+    std::unordered_map<std::string, BankEntry> banks_;       // Full bank info (future use)
     std::string lut_file_path_;
+    int entry_count_;
 
     // Constants
     static constexpr const char* LUT_DOWNLOAD_URL = "https://www.michael-plugge.de/blz.lut";
