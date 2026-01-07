@@ -25,6 +25,8 @@ set(EXTENSION_SOURCES
     src/shared/filesystem_utils.cpp
     src/shared/pattern_matcher.cpp
     src/shared/content_searcher.cpp
+    # German bank account check digit validation
+    src/kontocheck/check_methods.cpp
 )
 
 build_static_extension(${TARGET_NAME} ${EXTENSION_SOURCES})
