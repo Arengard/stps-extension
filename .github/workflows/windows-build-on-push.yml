@@ -53,6 +53,8 @@ jobs:
 
       - name: Build extension (Release)
         shell: bash
+        env:
+          VCPKG_TOOLCHAIN_PATH: ${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
         run: |
           echo "Starting Windows release build process..."
           make release
