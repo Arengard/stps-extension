@@ -225,7 +225,7 @@ struct GobdReaderBindData : public TableFunctionData {
 };
 
 struct GobdReaderGlobalState : public GlobalTableFunctionState {
-    std::ifstream file;
+    std::shared_ptr<std::ifstream> file;
     bool finished = false;
     idx_t column_count = 0;
     char delimiter = ';';
@@ -305,8 +305,8 @@ static unique_ptr<GlobalTableFunctionState> GobdReaderInit(ClientContext &contex
     auto &bind_data = input.bind_data->Cast<GobdReaderBindData>();
     auto result = make_uniq<GobdReaderGlobalState>();
 
-    result->file.open(bind_data.csv_path);
-    if (!result->file.is_open()) {
+    result->file = std::make_shared<std::ifstream>(bind_data.csv_path);
+    if (!result->file->is_open()) {
         throw IOException("Cannot open CSV file: " + bind_data.csv_path);
     }
 
@@ -319,7 +319,7 @@ static unique_ptr<GlobalTableFunctionState> GobdReaderInit(ClientContext &contex
 static void GobdReaderFunction(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
     auto &state = data_p.global_state->Cast<GobdReaderGlobalState>();
 
-    if (state.finished || !state.file.is_open()) {
+    if (state.finished || !state.file || !state.file->is_open()) {
         output.SetCardinality(0);
         return;
     }
@@ -327,7 +327,7 @@ static void GobdReaderFunction(ClientContext &context, TableFunctionInput &data_
     idx_t count = 0;
     string line;
 
-    while (count < STANDARD_VECTOR_SIZE && std::getline(state.file, line)) {
+    while (count < STANDARD_VECTOR_SIZE && std::getline(*state.file, line)) {
         // Skip empty lines
         if (line.empty()) continue;
 
@@ -350,9 +350,9 @@ static void GobdReaderFunction(ClientContext &context, TableFunctionInput &data_
         count++;
     }
 
-    if (count == 0 || state.file.eof()) {
+    if (count == 0 || state.file->eof()) {
         state.finished = true;
-        state.file.close();
+        state.file->close();
     }
 
     output.SetCardinality(count);
