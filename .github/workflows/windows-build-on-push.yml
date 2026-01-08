@@ -46,6 +46,9 @@ jobs:
             git submodule update --init --recursive
           fi
 
+      - name: Setup vcpkg
+        uses: lukka/run-vcpkg@v11.1
+
       - name: Build extension (Release)
         shell: bash
         run: |
