@@ -22,6 +22,8 @@ set(EXTENSION_SOURCES
     src/scan_function.cpp
     src/filesystem_functions.cpp
     src/drop_null_columns_function.cpp
+    src/search_columns_function.cpp
+    # src/fill_functions.cpp  # Temporarily disabled - DuckDB API changed
     src/shared/filesystem_utils.cpp
     src/shared/pattern_matcher.cpp
     src/shared/content_searcher.cpp
@@ -36,6 +38,8 @@ build_loadable_extension(${TARGET_NAME} " " ${EXTENSION_SOURCES})
 
 # Link zlib for BLZ LUT decompression
 find_package(ZLIB REQUIRED)
+target_include_directories(${TARGET_NAME}_loadable_extension PRIVATE ${ZLIB_INCLUDE_DIRS})
+target_include_directories(${TARGET_NAME}_extension PRIVATE ${ZLIB_INCLUDE_DIRS})
 target_link_libraries(${TARGET_NAME}_loadable_extension ${ZLIB_LIBRARIES})
 target_link_libraries(${TARGET_NAME}_extension ${ZLIB_LIBRARIES})
 
