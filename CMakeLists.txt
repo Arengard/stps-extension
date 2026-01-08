@@ -22,7 +22,7 @@ set(EXTENSION_SOURCES
     src/scan_function.cpp
     src/filesystem_functions.cpp
     src/drop_null_columns_function.cpp
-    src/search_columns_function.cpp
+    # src/search_columns_function.cpp  # Uncommitted work-in-progress
     # src/fill_functions.cpp  # Temporarily disabled - DuckDB API changed
     src/shared/filesystem_utils.cpp
     src/shared/pattern_matcher.cpp
