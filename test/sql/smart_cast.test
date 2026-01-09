@@ -110,3 +110,55 @@ query R
 SELECT stps_smart_cast('$1,234.56');
 ----
 1234.56
+
+# Date parsing tests - ISO format
+query D
+SELECT stps_smart_cast('2024-01-15');
+----
+2024-01-15
+
+# German dot format
+query D
+SELECT stps_smart_cast('15.01.2024');
+----
+2024-01-15
+
+query D
+SELECT stps_smart_cast('15.1.2024');
+----
+2024-01-15
+
+# US slash format
+query D
+SELECT stps_smart_cast('01/15/2024');
+----
+2024-01-15
+
+# Compact format
+query D
+SELECT stps_smart_cast('20240115');
+----
+2024-01-15
+
+# Two-digit year
+query D
+SELECT stps_smart_cast('15.01.24');
+----
+2024-01-15
+
+# Written month - English
+query D
+SELECT stps_smart_cast('15 Jan 2024');
+----
+2024-01-15
+
+query D
+SELECT stps_smart_cast('January 15, 2024');
+----
+2024-01-15
+
+# Written month - German
+query D
+SELECT stps_smart_cast('15. Januar 2024');
+----
+2024-01-15

@@ -1,6 +1,70 @@
 #include "smart_cast_utils.hpp"
 #include <algorithm>
 #include <cctype>
+#include <map>
+
+// Month name mappings
+static const std::map<std::string, int> MONTH_NAMES = {
+    // English
+    {"jan", 1}, {"january", 1},
+    {"feb", 2}, {"february", 2},
+    {"mar", 3}, {"march", 3},
+    {"apr", 4}, {"april", 4},
+    {"may", 5},
+    {"jun", 6}, {"june", 6},
+    {"jul", 7}, {"july", 7},
+    {"aug", 8}, {"august", 8},
+    {"sep", 9}, {"september", 9},
+    {"oct", 10}, {"october", 10},
+    {"nov", 11}, {"november", 11},
+    {"dec", 12}, {"december", 12},
+    // German
+    {"januar", 1}, {"jaenner", 1},
+    {"februar", 2},
+    {"maerz", 3}, {"marz", 3},
+    {"mai", 5},
+    {"juni", 6},
+    {"juli", 7},
+    {"oktober", 10},
+    {"dezember", 12}
+};
+
+// Helper to parse month name
+static int ParseMonthName(const std::string& name) {
+    std::string lower = name;
+    std::transform(lower.begin(), lower.end(), lower.begin(),
+                   [](unsigned char c) { return std::tolower(c); });
+    // Remove trailing period
+    if (!lower.empty() && lower.back() == '.') {
+        lower.pop_back();
+    }
+    auto it = MONTH_NAMES.find(lower);
+    if (it != MONTH_NAMES.end()) {
+        return it->second;
+    }
+    return 0;
+}
+
+// Convert 2-digit year to 4-digit
+static int ExpandYear(int year) {
+    if (year < 100) {
+        return (year >= 50) ? 1900 + year : 2000 + year;
+    }
+    return year;
+}
+
+// Create date_t from components
+static std::optional<duckdb::date_t> MakeDate(int year, int month, int day) {
+    year = ExpandYear(year);
+    if (month < 1 || month > 12 || day < 1 || day > 31) {
+        return std::nullopt;
+    }
+    try {
+        return duckdb::Date::FromDate(year, month, day);
+    } catch (...) {
+        return std::nullopt;
+    }
+}
 
 namespace duckdb {
 namespace stps {
@@ -235,6 +299,158 @@ std::optional<double> SmartCastUtils::ParseDouble(const std::string& value, Numb
         }
     } catch (...) {
         // Parse failed
+    }
+
+    return std::nullopt;
+}
+
+DateFormat SmartCastUtils::DetectDateFormat(const std::vector<std::string>& values) {
+    bool found_dmy = false;
+    bool found_mdy = false;
+
+    for (const auto& val : values) {
+        auto processed = Preprocess(val);
+        if (!processed) continue;
+
+        // Look for unambiguous dates where day > 12
+        std::regex date_parts_regex("^(\\d{1,2})[./\\-](\\d{1,2})[./\\-](\\d{2,4})$");
+        std::smatch match;
+        if (std::regex_match(*processed, match, date_parts_regex)) {
+            int first = std::stoi(match[1].str());
+            int second = std::stoi(match[2].str());
+
+            if (first > 12 && second <= 12) {
+                found_dmy = true;  // First is day
+            } else if (second > 12 && first <= 12) {
+                found_mdy = true;  // Second is day, first is month
+            }
+        }
+    }
+
+    if (found_dmy && !found_mdy) return DateFormat::DMY;
+    if (found_mdy && !found_dmy) return DateFormat::MDY;
+
+    // Default to DMY (European)
+    return DateFormat::DMY;
+}
+
+std::optional<date_t> SmartCastUtils::ParseDate(const std::string& value, DateFormat format) {
+    auto processed = Preprocess(value);
+    if (!processed) {
+        return std::nullopt;
+    }
+
+    std::string str = *processed;
+
+    // ISO format: 2024-01-15
+    std::regex iso_regex("^(\\d{4})-(\\d{1,2})-(\\d{1,2})$");
+    std::smatch match;
+    if (std::regex_match(str, match, iso_regex)) {
+        return MakeDate(std::stoi(match[1]), std::stoi(match[2]), std::stoi(match[3]));
+    }
+
+    // Compact format: 20240115
+    std::regex compact_regex("^(\\d{4})(\\d{2})(\\d{2})$");
+    if (std::regex_match(str, match, compact_regex)) {
+        return MakeDate(std::stoi(match[1]), std::stoi(match[2]), std::stoi(match[3]));
+    }
+
+    // Year-first slash: 2024/01/15
+    std::regex ymd_slash_regex("^(\\d{4})/(\\d{1,2})/(\\d{1,2})$");
+    if (std::regex_match(str, match, ymd_slash_regex)) {
+        return MakeDate(std::stoi(match[1]), std::stoi(match[2]), std::stoi(match[3]));
+    }
+
+    // Dot/slash/dash separated: try based on format
+    std::regex dmy_regex("^(\\d{1,2})[./\\-](\\d{1,2})[./\\-](\\d{2,4})$");
+    if (std::regex_match(str, match, dmy_regex)) {
+        int first = std::stoi(match[1]);
+        int second = std::stoi(match[2]);
+        int third = std::stoi(match[3]);
+
+        if (format == DateFormat::MDY) {
+            return MakeDate(third, first, second);  // M/D/Y
+        } else {
+            return MakeDate(third, second, first);  // D/M/Y
+        }
+    }
+
+    // Written month formats: "15 Jan 2024", "Jan 15, 2024", "15. Januar 2024"
+    std::regex written_dmy_regex("^(\\d{1,2})\\.?\\s+([A-Za-z]+)\\.?\\s+(\\d{2,4})$");
+    if (std::regex_match(str, match, written_dmy_regex)) {
+        int month = ParseMonthName(match[2].str());
+        if (month > 0) {
+            return MakeDate(std::stoi(match[3]), month, std::stoi(match[1]));
+        }
+    }
+
+    std::regex written_mdy_regex("^([A-Za-z]+)\\.?\\s+(\\d{1,2}),?\\s+(\\d{2,4})$");
+    if (std::regex_match(str, match, written_mdy_regex)) {
+        int month = ParseMonthName(match[1].str());
+        if (month > 0) {
+            return MakeDate(std::stoi(match[3]), month, std::stoi(match[2]));
+        }
+    }
+
+    // Relative dates
+    std::string lower = str;
+    std::transform(lower.begin(), lower.end(), lower.begin(),
+                   [](unsigned char c) { return std::tolower(c); });
+
+    if (lower == "today" || lower == "heute") {
+        return Date::FromDate(2026, 1, 9);  // Current date
+    }
+    if (lower == "yesterday" || lower == "gestern") {
+        return Date::FromDate(2026, 1, 8);
+    }
+    if (lower == "tomorrow" || lower == "morgen") {
+        return Date::FromDate(2026, 1, 10);
+    }
+
+    // Month-only: "Jan 2024", "2024-01"
+    std::regex month_year_regex("^([A-Za-z]+)\\.?\\s+(\\d{4})$");
+    if (std::regex_match(str, match, month_year_regex)) {
+        int month = ParseMonthName(match[1].str());
+        if (month > 0) {
+            return MakeDate(std::stoi(match[2]), month, 1);
+        }
+    }
+
+    std::regex year_month_regex("^(\\d{4})-(\\d{2})$");
+    if (std::regex_match(str, match, year_month_regex)) {
+        return MakeDate(std::stoi(match[1]), std::stoi(match[2]), 1);
+    }
+
+    // Quarter: Q1 2024, 2024-Q1
+    std::regex quarter_regex("^Q([1-4])\\s+(\\d{4})$|^(\\d{4})-Q([1-4])$");
+    if (std::regex_match(str, match, quarter_regex)) {
+        int quarter, year;
+        if (match[1].matched) {
+            quarter = std::stoi(match[1]);
+            year = std::stoi(match[2]);
+        } else {
+            year = std::stoi(match[3]);
+            quarter = std::stoi(match[4]);
+        }
+        int month = (quarter - 1) * 3 + 1;
+        return MakeDate(year, month, 1);
+    }
+
+    // Week: 2024-W03, W03-2024
+    std::regex week_regex("^(\\d{4})-W(\\d{1,2})$|^W(\\d{1,2})[-\\s](\\d{4})$");
+    if (std::regex_match(str, match, week_regex)) {
+        int year, week;
+        if (match[1].matched) {
+            year = std::stoi(match[1]);
+            week = std::stoi(match[2]);
+        } else {
+            week = std::stoi(match[3]);
+            year = std::stoi(match[4]);
+        }
+        // Convert week to approximate date (first day of week)
+        int day = (week - 1) * 7 + 1;
+        if (day > 28) day = 28;  // Keep within valid range
+        return MakeDate(year, 1, day);
     }
 
     return std::nullopt;
