@@ -141,6 +141,105 @@ std::optional<int64_t> SmartCastUtils::ParseInteger(const std::string& value, Nu
     return std::nullopt;
 }
 
+NumberLocale SmartCastUtils::DetectLocale(const std::vector<std::string>& values) {
+    bool found_german = false;
+    bool found_us = false;
+
+    for (const auto& val : values) {
+        auto processed = Preprocess(val);
+        if (!processed) continue;
+
+        std::string str = *processed;
+        // Remove currency symbols for analysis
+        str = std::regex_replace(str, CURRENCY_PATTERN, "");
+        str = std::regex_replace(str, PERCENTAGE_PATTERN, "$1");
+
+        // Unambiguous German: has comma as decimal (e.g., 1234,56 or 1.234,56)
+        if (std::regex_match(str, GERMAN_NUMBER_PATTERN)) {
+            found_german = true;
+        }
+        // Unambiguous US: has dot as decimal with comma thousands (e.g., 1,234.56)
+        if (std::regex_match(str, US_NUMBER_PATTERN)) {
+            found_us = true;
+        }
+    }
+
+    // Conflict: mixed locales
+    if (found_german && found_us) {
+        return NumberLocale::AUTO;  // Signal conflict, keep as VARCHAR
+    }
+
+    if (found_german) return NumberLocale::GERMAN;
+    if (found_us) return NumberLocale::US;
+
+    // Default to German when ambiguous
+    return NumberLocale::GERMAN;
+}
+
+std::optional<double> SmartCastUtils::ParseDouble(const std::string& value, NumberLocale locale) {
+    auto processed = Preprocess(value);
+    if (!processed) {
+        return std::nullopt;
+    }
+
+    std::string str = *processed;
+
+    // Check for percentage
+    bool is_percentage = false;
+    std::smatch match;
+    if (std::regex_match(str, match, PERCENTAGE_PATTERN)) {
+        str = match[1].str();
+        is_percentage = true;
+    }
+
+    // Remove currency symbols
+    str = std::regex_replace(str, CURRENCY_PATTERN, "");
+
+    // Trim again after removing symbols
+    auto trimmed = Preprocess(str);
+    if (!trimmed) return std::nullopt;
+    str = *trimmed;
+
+    // Determine separators based on locale
+    char thousands_sep, decimal_sep;
+    if (locale == NumberLocale::US) {
+        thousands_sep = ',';
+        decimal_sep = '.';
+    } else {
+        // German or AUTO (default to German)
+        thousands_sep = '.';
+        decimal_sep = ',';
+    }
+
+    // Build clean string: remove thousands, replace decimal with .
+    std::string clean;
+    for (char c : str) {
+        if (c == thousands_sep) {
+            continue;  // Skip thousands separator
+        } else if (c == decimal_sep) {
+            clean += '.';  // Normalize decimal to .
+        } else {
+            clean += c;
+        }
+    }
+
+    // Parse as double
+    try {
+        size_t pos;
+        double result = std::stod(clean, &pos);
+        if (pos == clean.size()) {
+            if (is_percentage) {
+                result /= 100.0;
+            }
+            return result;
+        }
+    } catch (...) {
+        // Parse failed
+    }
+
+    return std::nullopt;
+}
+
 // Convert DetectedType to LogicalType
 LogicalType SmartCastUtils::ToLogicalType(DetectedType type) {
     switch (type) {

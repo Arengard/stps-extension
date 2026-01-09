@@ -66,3 +66,47 @@ query I
 SELECT stps_smart_cast('1.234.567');
 ----
 1234567
+
+# Double parsing tests - US format
+query R
+SELECT stps_smart_cast('123.45');
+----
+123.45
+
+query R
+SELECT stps_smart_cast('1,234.56');
+----
+1234.56
+
+# Double parsing tests - German format
+query R
+SELECT stps_smart_cast('123,45');
+----
+123.45
+
+query R
+SELECT stps_smart_cast('1.234,56');
+----
+1234.56
+
+# Percentage conversion
+query R
+SELECT stps_smart_cast('45%');
+----
+0.45
+
+query R
+SELECT stps_smart_cast('100%');
+----
+1.0
+
+# Currency stripping
+query R
+SELECT stps_smart_cast('€123,45');
+----
+123.45
+
+query R
+SELECT stps_smart_cast('$1,234.56');
+----
+1234.56
