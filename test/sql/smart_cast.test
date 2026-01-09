@@ -1,0 +1,46 @@
+# name: test/sql/smart_cast.test
+# description: Test stps_smart_cast functions
+# group: [stps]
+
+require stps
+
+# Test boolean parsing via scalar function
+query I
+SELECT stps_smart_cast('true');
+----
+true
+
+query I
+SELECT stps_smart_cast('false');
+----
+false
+
+query I
+SELECT stps_smart_cast('yes');
+----
+true
+
+query I
+SELECT stps_smart_cast('no');
+----
+false
+
+query I
+SELECT stps_smart_cast('ja');
+----
+true
+
+query I
+SELECT stps_smart_cast('nein');
+----
+false
+
+query I
+SELECT stps_smart_cast('1')::BOOLEAN;
+----
+true
+
+query I
+SELECT stps_smart_cast('0')::BOOLEAN;
+----
+false
