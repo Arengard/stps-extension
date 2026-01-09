@@ -3,6 +3,7 @@
 #include "duckdb/parser/parsed_data/create_table_function_info.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/main/connection.hpp"
+#include <unordered_map>
 
 namespace duckdb {
 namespace stps {
@@ -19,6 +20,7 @@ struct DropNullColumnsGlobalState : public GlobalTableFunctionState {
     unique_ptr<QueryResult> result;
     unique_ptr<DataChunk> current_chunk;
     idx_t chunk_offset = 0;
+    bool has_returned_data = false;
 };
 
 // Bind function for stps_drop_null_columns
@@ -32,139 +34,77 @@ static unique_ptr<FunctionData> DropNullColumnsBind(ClientContext &context, Tabl
     }
     result->table_name = input.inputs[0].GetValue<string>();
 
-    // Create a connection to execute queries
-    auto conn = make_uniq<Connection>(*context.db);
+    // Create a connection to run queries
+    Connection conn(context.db->GetDatabase(context));
 
-    // Step 1: Check if table exists and get its schema
-    string schema_query = "SELECT column_name, column_type FROM (DESCRIBE " + result->table_name + ")";
-    unique_ptr<QueryResult> schema_result;
-    try {
-        schema_result = conn->Query(schema_query);
-    } catch (const Exception &e) {
-        throw BinderException("Table '" + result->table_name + "' does not exist or cannot be accessed: " + e.what());
+    // Step 1: Get column types via SELECT * (reliable for types)
+    auto type_query = "SELECT * FROM " + result->table_name + " LIMIT 0";
+    auto type_result = conn.Query(type_query);
+    if (type_result->HasError()) {
+        throw BinderException("Table '%s' does not exist or cannot be queried: %s",
+                            result->table_name, type_result->GetError());
     }
 
-    if (schema_result->HasError()) {
-        throw BinderException("Failed to describe table: " + schema_result->GetError());
+    // Build a map: column_name -> LogicalType
+    std::unordered_map<string, LogicalType> type_map;
+    for (idx_t i = 0; i < type_result->names.size(); i++) {
+        type_map[type_result->names[i]] = type_result->types[i];
     }
 
-    // Store all columns and their types
-    std::map<string, string> column_type_map;
-    while (true) {
-        auto chunk = schema_result->Fetch();
-        if (!chunk || chunk->size() == 0) {
-            break;
+    // Step 2: Get column order via PRAGMA table_info (guaranteed definition order)
+    auto pragma_query = "PRAGMA table_info('" + result->table_name + "')";
+    auto pragma_result = conn.Query(pragma_query);
+    if (pragma_result->HasError()) {
+        throw BinderException("Failed to get table info: %s", pragma_result->GetError());
+    }
+
+    vector<string> ordered_names;
+    vector<LogicalType> ordered_types;
+
+    while (auto pragma_chunk = pragma_result->Fetch()) {
+        if (!pragma_chunk || pragma_chunk->size() == 0) break;
+        for (idx_t row = 0; row < pragma_chunk->size(); row++) {
+            // PRAGMA table_info returns: cid, name, type, notnull, dflt_value, pk
+            string col_name = pragma_chunk->GetValue(1, row).ToString();
+            ordered_names.push_back(col_name);
+            ordered_types.push_back(type_map[col_name]);
         }
-        for (idx_t i = 0; i < chunk->size(); i++) {
-            string col_name = chunk->GetValue(0, i).ToString();
-            string col_type = chunk->GetValue(1, i).ToString();
-            column_type_map[col_name] = col_type;
-        }
     }
 
-    if (column_type_map.empty()) {
-        throw BinderException("Table '" + result->table_name + "' has no columns");
+    // Step 3: Build COUNT query using ordered columns
+    string count_query = "SELECT ";
+    for (idx_t i = 0; i < ordered_names.size(); i++) {
+        if (i > 0) count_query += ", ";
+        count_query += "COUNT(\"" + ordered_names[i] + "\")";
+    }
+    count_query += " FROM " + result->table_name;
+
+    auto count_result = conn.Query(count_query);
+    if (count_result->HasError()) {
+        throw BinderException("Failed to analyze table columns: %s", count_result->GetError());
     }
 
-    // Step 2: Run SUMMARIZE to get column statistics
-    string summarize_query = "SUMMARIZE " + result->table_name;
-    unique_ptr<QueryResult> summarize_result;
-    try {
-        summarize_result = conn->Query(summarize_query);
-    } catch (const Exception &e) {
-        throw BinderException("Failed to summarize table: " + string(e.what()));
-    }
-
-    if (summarize_result->HasError()) {
-        throw BinderException("SUMMARIZE failed: " + summarize_result->GetError());
-    }
-
-    // Step 3: Parse SUMMARIZE results to find non-null columns
-    // SUMMARIZE returns columns: column_name, column_type, min, max, approx_unique, avg, std, q25, q50, q75, count, null_percentage
-    std::set<string> non_null_column_set;
-
-    while (true) {
-        auto chunk = summarize_result->Fetch();
-        if (!chunk || chunk->size() == 0) {
-            break;
-        }
-
-        for (idx_t i = 0; i < chunk->size(); i++) {
-            string col_name = chunk->GetValue(0, i).ToString();
-
-            // Get the count column (index 10) and null_percentage column (index 11)
-            auto count_value = chunk->GetValue(10, i);
-            auto null_pct_value = chunk->GetValue(11, i);
-
-            // Column is non-null if:
-            // - count > 0 AND null_percentage < 100.0
-            // - OR if null_percentage is NULL (shouldn't happen, but be safe)
-            bool has_non_null_values = false;
-
-            if (!count_value.IsNull() && !null_pct_value.IsNull()) {
-                int64_t count = count_value.GetValue<int64_t>();
-                double null_pct = null_pct_value.GetValue<double>();
-
-                if (count > 0 && null_pct < 100.0) {
-                    has_non_null_values = true;
-                }
-            } else if (!count_value.IsNull()) {
-                // Fallback: if we have count but no null_percentage
-                int64_t count = count_value.GetValue<int64_t>();
-                if (count > 0) {
-                    has_non_null_values = true;
-                }
-            }
-
-            if (has_non_null_values) {
-                non_null_column_set.insert(col_name);
+    // Step 4: Filter non-null columns (preserving definition order)
+    auto chunk = count_result->Fetch();
+    if (chunk && chunk->size() > 0) {
+        for (idx_t i = 0; i < ordered_names.size(); i++) {
+            auto count_value = chunk->GetValue(i, 0);
+            if (!count_value.IsNull() && count_value.GetValue<int64_t>() > 0) {
+                // This column has at least one non-NULL value
+                result->non_null_columns.push_back(ordered_names[i]);
+                result->column_types.push_back(ordered_types[i]);
             }
         }
     }
 
-    // Step 4: Build the list of non-null columns in original order
-    for (const auto &kv : column_type_map) {
-        if (non_null_column_set.find(kv.first) != non_null_column_set.end()) {
-            result->non_null_columns.push_back(kv.first);
-            // Parse the type string back to LogicalType
-            // This is a simplified version - DuckDB has more complex type parsing
-            string type_str = kv.second;
-            LogicalType col_type;
-
-            if (type_str == "VARCHAR") {
-                col_type = LogicalType::VARCHAR;
-            } else if (type_str == "BIGINT") {
-                col_type = LogicalType::BIGINT;
-            } else if (type_str == "INTEGER") {
-                col_type = LogicalType::INTEGER;
-            } else if (type_str == "DOUBLE") {
-                col_type = LogicalType::DOUBLE;
-            } else if (type_str == "BOOLEAN") {
-                col_type = LogicalType::BOOLEAN;
-            } else if (type_str == "DATE") {
-                col_type = LogicalType::DATE;
-            } else if (type_str == "TIMESTAMP") {
-                col_type = LogicalType::TIMESTAMP;
-            } else {
-                // Default to VARCHAR for unknown types
-                col_type = LogicalType::VARCHAR;
-            }
-
-            result->column_types.push_back(col_type);
-        }
-    }
-
-    // If no non-null columns found, return empty schema
+    // Step 5: Set output schema
     if (result->non_null_columns.empty()) {
-        // Return a single dummy column to avoid errors, but with 0 rows
-        names.push_back("__empty__");
-        return_types.push_back(LogicalType::VARCHAR);
-        return std::move(result);
+        names = {"message"};
+        return_types = {LogicalType::VARCHAR};
+    } else {
+        names = result->non_null_columns;
+        return_types = result->column_types;
     }
-
-    // Set output schema
-    names = result->non_null_columns;
-    return_types = result->column_types;
 
     return std::move(result);
 }
@@ -174,31 +114,21 @@ static unique_ptr<GlobalTableFunctionState> DropNullColumnsInit(ClientContext &c
     auto &bind_data = input.bind_data->Cast<DropNullColumnsBindData>();
     auto result = make_uniq<DropNullColumnsGlobalState>();
 
-    // If no non-null columns, return empty state
-    if (bind_data.non_null_columns.empty()) {
-        return std::move(result);
-    }
-
-    // Build SELECT query with only non-null columns
-    string select_query = "SELECT ";
-    for (idx_t i = 0; i < bind_data.non_null_columns.size(); i++) {
-        if (i > 0) {
-            select_query += ", ";
+    // If we have non-null columns, build a query to select only those columns
+    if (!bind_data.non_null_columns.empty()) {
+        string column_list = "";
+        for (idx_t i = 0; i < bind_data.non_null_columns.size(); i++) {
+            if (i > 0) column_list += ", ";
+            column_list += "\"" + bind_data.non_null_columns[i] + "\"";
         }
-        select_query += "\"" + bind_data.non_null_columns[i] + "\"";
-    }
-    select_query += " FROM " + bind_data.table_name;
 
-    // Execute the query
-    auto conn = make_uniq<Connection>(*context.db);
-    try {
-        result->result = conn->Query(select_query);
-    } catch (const Exception &e) {
-        throw IOException("Failed to query table: " + string(e.what()));
-    }
+        auto query = "SELECT " + column_list + " FROM " + bind_data.table_name;
+        Connection conn(context.db->GetDatabase(context));
+        result->result = conn.Query(query);
 
-    if (result->result->HasError()) {
-        throw IOException("Query failed: " + result->result->GetError());
+        if (result->result->HasError()) {
+            throw InternalException("Failed to query table: %s", result->result->GetError());
+        }
     }
 
     return std::move(result);
@@ -207,37 +137,35 @@ static unique_ptr<GlobalTableFunctionState> DropNullColumnsInit(ClientContext &c
 // Scan function for stps_drop_null_columns
 static void DropNullColumnsScan(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
     auto &state = data_p.global_state->Cast<DropNullColumnsGlobalState>();
+    auto &bind_data = data_p.bind_data->Cast<DropNullColumnsBindData>();
 
-    // If no result (empty columns case), return empty
+    // If no non-null columns, return message once
+    if (bind_data.non_null_columns.empty()) {
+        if (state.has_returned_data) {
+            output.SetCardinality(0);
+            return;
+        }
+        output.SetValue(0, 0, Value("All columns are NULL"));
+        output.SetCardinality(1);
+        state.has_returned_data = true;
+        return;
+    }
+
+    // If no result, we're done
     if (!state.result) {
         output.SetCardinality(0);
         return;
     }
 
-    // Fetch next chunk if needed
-    if (!state.current_chunk || state.chunk_offset >= state.current_chunk->size()) {
-        state.current_chunk = state.result->Fetch();
-        state.chunk_offset = 0;
-
-        if (!state.current_chunk || state.current_chunk->size() == 0) {
-            output.SetCardinality(0);
-            return;
-        }
+    // Fetch next chunk from the query result
+    auto chunk = state.result->Fetch();
+    if (!chunk || chunk->size() == 0) {
+        output.SetCardinality(0);
+        return;
     }
 
-    // Copy data from current chunk to output
-    idx_t count = 0;
-    idx_t max_count = STANDARD_VECTOR_SIZE;
-
-    while (state.chunk_offset < state.current_chunk->size() && count < max_count) {
-        for (idx_t col = 0; col < output.ColumnCount(); col++) {
-            output.SetValue(col, count, state.current_chunk->GetValue(col, state.chunk_offset));
-        }
-        state.chunk_offset++;
-        count++;
-    }
-
-    output.SetCardinality(count);
+    // Copy the chunk data to output
+    output.Reference(*chunk);
 }
 
 // Register stps_drop_null_columns function

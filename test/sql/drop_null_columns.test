@@ -79,13 +79,13 @@ INSERT INTO test_all_null VALUES (NULL, NULL, NULL);
 statement ok
 INSERT INTO test_all_null VALUES (NULL, NULL, NULL);
 
-# Should return empty result (no columns or only internal column)
+# Should return a single row with message when all columns are NULL
 query I
 SELECT COUNT(*) FROM stps_drop_null_columns('test_all_null');
 ----
-0
+1
 
-# Test 5: Empty table (should return all columns since we can't determine NULL status)
+# Test 5: Empty table (returns message since no non-null values can be found)
 statement ok
 CREATE TABLE test_empty AS SELECT
     1 as id,
@@ -96,7 +96,7 @@ WHERE false;
 query I
 SELECT COUNT(*) FROM stps_drop_null_columns('test_empty');
 ----
-0
+1
 
 # Test 6: Various data types
 statement ok
@@ -111,8 +111,8 @@ CREATE TABLE test_types AS SELECT
 statement ok
 INSERT INTO test_types VALUES (2, 'more text', NULL, false, NULL, TIMESTAMP '2024-01-02 11:00:00');
 
-# Should exclude null_double and null_date
-query ITTTT
+# Should exclude null_double and null_date (4 columns remain)
+query ITIT
 SELECT * FROM stps_drop_null_columns('test_types');
 ----
 1	text	true	2024-01-01 10:00:00

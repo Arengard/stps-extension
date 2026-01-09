@@ -4,6 +4,7 @@
 #include "duckdb/main/client_context.hpp"
 #include <fstream>
 #include <iostream>
+#include <ios>
 
 // Include all function registration headers
 #include "case_transform.hpp"
@@ -15,8 +16,10 @@
 #include "xml_parser.hpp"
 #include "gobd_reader.hpp"
 #include "drop_null_columns_function.hpp"
+// #include "search_columns_function.hpp"  // Uncommitted work-in-progress
 #include "account_validation.hpp"
 #include "blz_lut_loader.hpp"
+// #include "fill_functions.hpp"  // Temporarily disabled
 
 namespace duckdb {
 namespace stps {
@@ -39,7 +42,15 @@ public:
 
         // Register filesystem table functions
         stps::RegisterFilesystemFunctions(loader);
+
+        // Register drop null columns function
         stps::RegisterDropNullColumnsFunction(loader);
+
+        // Register search columns function
+        // stps::RegisterSearchColumnsFunction(loader);  // Uncommitted work-in-progress
+
+        // Register fill window functions
+        // stps::RegisterFillFunctions(loader);  // Temporarily disabled
 
         // Initialize BLZ LUT loader (download if not present)
         // This will check if ~/.stps/blz.lut exists and download if needed
