@@ -44,3 +44,25 @@ query I
 SELECT stps_smart_cast('0')::BOOLEAN;
 ----
 false
+
+# Integer parsing tests
+query I
+SELECT stps_smart_cast('123');
+----
+123
+
+query I
+SELECT stps_smart_cast('-456');
+----
+-456
+
+query I
+SELECT stps_smart_cast('1234');
+----
+1234
+
+# German thousands separator (context needed for ambiguous)
+query I
+SELECT stps_smart_cast('1.234.567');
+----
+1234567
