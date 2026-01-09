@@ -11,6 +11,7 @@ A DuckDB extension providing STPS-specific functions for data transformation, va
 - **XML Parsing** – XML data parsing and extraction
 - **File Operations** – Filesystem scanning and path manipulation
 - **GOBD Reader** – German GOBD standard compliance tools
+- **Smart Cast** – Automatic type detection and casting for VARCHAR columns
 
 ## Quick Start (Prebuilt Binaries)
 
@@ -111,6 +112,90 @@ SELECT * FROM stps_path('C:/base/path', 'subdir', 'file.txt');
 ### GOBD Functions
 - `stps_read_gobd(index_path, table_name, [delimiter])` - Read GOBD files
 
+### Smart Cast Functions
+
+Smart cast provides automatic type detection and casting for VARCHAR columns. It supports:
+- **Boolean**: true/false, yes/no, ja/nein, 1/0
+- **Integer**: Numbers with locale-aware thousands separators
+- **Double**: Decimal numbers in German (1.234,56) or US (1,234.56) format
+- **Date**: Multiple formats including ISO, German dot (15.01.2024), US slash (01/15/2024)
+- **Timestamp**: Date + time combinations
+- **UUID**: Standard UUID format
+
+#### Scalar Function
+
+```sql
+-- Auto-detect type and cast
+SELECT stps_smart_cast('123');           -- Returns: 123 (detected as INTEGER)
+SELECT stps_smart_cast('1.234,56');      -- Returns: 1234.56 (German DOUBLE)
+SELECT stps_smart_cast('2024-01-15');    -- Returns: 2024-01-15 (DATE)
+SELECT stps_smart_cast('true');          -- Returns: true (BOOLEAN)
+
+-- Cast to explicit type
+SELECT stps_smart_cast('1.234,56', 'DOUBLE');   -- Force DOUBLE parsing
+SELECT stps_smart_cast('123', 'INTEGER');       -- Force INTEGER parsing
+```
+
+#### Table Functions
+
+```sql
+-- Analyze a table to see detected types for each column
+SELECT * FROM stps_smart_cast_analyze('my_table');
+-- Returns: column_name, original_type, detected_type, total_rows, null_count,
+--          cast_success_count, cast_failure_count
+
+-- Cast all VARCHAR columns in a table to their detected types
+SELECT * FROM stps_smart_cast('my_table');
+-- Returns the table with columns cast to detected types
+```
+
+#### Named Parameters
+
+Both table functions support optional named parameters:
+
+```sql
+-- Set minimum success rate for type detection (default: 0.9 = 90%)
+SELECT * FROM stps_smart_cast('my_table', min_success_rate := 0.8);
+
+-- Force German locale for number parsing
+SELECT * FROM stps_smart_cast('my_table', locale := 'de');
+
+-- Force US locale for number parsing
+SELECT * FROM stps_smart_cast('my_table', locale := 'us');
+
+-- Force date format: 'dmy' (European), 'mdy' (US), or 'ymd' (ISO)
+SELECT * FROM stps_smart_cast('my_table', date_format := 'mdy');
+
+-- Combine parameters
+SELECT * FROM stps_smart_cast_analyze('my_table',
+    min_success_rate := 0.95,
+    locale := 'de',
+    date_format := 'dmy'
+);
+```
+
+#### Example Workflow
+
+```sql
+-- 1. Create a table with string data
+CREATE TABLE raw_data AS SELECT
+    '123' as amount,
+    'true' as active,
+    '2024-01-15' as created_date,
+    '1.234,56' as price;
+
+-- 2. Analyze to see what types are detected
+SELECT * FROM stps_smart_cast_analyze('raw_data');
+-- Shows: amount->INTEGER, active->BOOLEAN, created_date->DATE, price->DOUBLE
+
+-- 3. Cast the table to proper types
+CREATE TABLE typed_data AS SELECT * FROM stps_smart_cast('raw_data');
+
+-- 4. Verify the types
+DESCRIBE typed_data;
+-- amount: BIGINT, active: BOOLEAN, created_date: DATE, price: DOUBLE
+```
+
 ## Building from Source
 
 If you want to build the extension yourself:
@@ -169,7 +254,10 @@ stps-extension/
 │   ├── case_transform.cpp        # Text transformations
 │   ├── iban_validation.cpp       # IBAN validation
 │   ├── uuid_functions.cpp        # UUID operations
-│   └── filesystem_functions.cpp  # File operations
+│   ├── filesystem_functions.cpp  # File operations
+│   ├── smart_cast_utils.cpp      # Smart cast parsing utilities
+│   ├── smart_cast_scalar.cpp     # Smart cast scalar function
+│   └── smart_cast_function.cpp   # Smart cast table functions
 ├── test/sql/                     # SQL test files
 ├── CMakeLists.txt               # Build configuration
 └── .github/workflows/           # CI/CD workflows
