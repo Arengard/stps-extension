@@ -513,6 +513,65 @@ std::optional<std::string> SmartCastUtils::ParseUUID(const std::string& value) {
     return std::nullopt;
 }
 
+DetectedType SmartCastUtils::DetectType(const std::string& value, NumberLocale locale, DateFormat date_format) {
+    auto processed = Preprocess(value);
+    if (!processed) {
+        return DetectedType::UNKNOWN;  // Empty/whitespace
+    }
+
+    // Check for ID-like values first (preserve as VARCHAR)
+    if (LooksLikeId(*processed)) {
+        return DetectedType::VARCHAR;
+    }
+
+    // Try boolean
+    if (ParseBoolean(*processed)) {
+        return DetectedType::BOOLEAN;
+    }
+
+    // Try UUID (before numbers, as UUIDs have dashes)
+    if (ParseUUID(*processed)) {
+        return DetectedType::UUID;
+    }
+
+    // Try integer (before double)
+    if (ParseInteger(*processed, locale)) {
+        return DetectedType::INTEGER;
+    }
+
+    // Try double
+    if (ParseDouble(*processed, locale)) {
+        return DetectedType::DOUBLE;
+    }
+
+    // Try timestamp (before date, as timestamp includes date)
+    if (ParseTimestamp(*processed, date_format)) {
+        return DetectedType::TIMESTAMP;
+    }
+
+    // Try date
+    if (ParseDate(*processed, date_format)) {
+        return DetectedType::DATE;
+    }
+
+    // Default to VARCHAR
+    return DetectedType::VARCHAR;
+}
+
+DetectedType SmartCastUtils::StringToDetectedType(const std::string& type_str) {
+    std::string upper = type_str;
+    std::transform(upper.begin(), upper.end(), upper.begin(),
+                   [](unsigned char c) { return std::toupper(c); });
+
+    if (upper == "BOOLEAN" || upper == "BOOL") return DetectedType::BOOLEAN;
+    if (upper == "INTEGER" || upper == "INT" || upper == "BIGINT") return DetectedType::INTEGER;
+    if (upper == "DOUBLE" || upper == "FLOAT" || upper == "REAL") return DetectedType::DOUBLE;
+    if (upper == "DATE") return DetectedType::DATE;
+    if (upper == "TIMESTAMP") return DetectedType::TIMESTAMP;
+    if (upper == "UUID") return DetectedType::UUID;
+    return DetectedType::VARCHAR;
+}
+
 // Convert DetectedType to LogicalType
 LogicalType SmartCastUtils::ToLogicalType(DetectedType type) {
     switch (type) {
