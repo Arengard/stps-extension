@@ -1,9 +1,9 @@
 #pragma once
 
 #include "duckdb.hpp"
+#include "duckdb/common/types/time.hpp"
 #include <string>
 #include <vector>
-#include <optional>
 #include <regex>
 
 namespace duckdb {
@@ -53,8 +53,9 @@ struct ColumnAnalysis {
 // Smart cast utilities
 class SmartCastUtils {
 public:
-    // Preprocess string (trim, empty -> nullopt)
-    static std::optional<std::string> Preprocess(const std::string& input);
+    // Preprocess string (trim, empty -> returns false with empty out_result)
+    // Returns true if value is valid (non-empty after trim), false otherwise
+    static bool Preprocess(const std::string& input, std::string& out_result);
 
     // Detect locale from a vector of values
     static NumberLocale DetectLocale(const std::vector<std::string>& values);
@@ -66,13 +67,13 @@ public:
     static DetectedType DetectType(const std::string& value, NumberLocale locale = NumberLocale::AUTO,
                                     DateFormat date_format = DateFormat::AUTO);
 
-    // Parse functions - return nullopt if parse fails
-    static std::optional<bool> ParseBoolean(const std::string& value);
-    static std::optional<int64_t> ParseInteger(const std::string& value, NumberLocale locale);
-    static std::optional<double> ParseDouble(const std::string& value, NumberLocale locale);
-    static std::optional<date_t> ParseDate(const std::string& value, DateFormat format = DateFormat::AUTO);
-    static std::optional<timestamp_t> ParseTimestamp(const std::string& value, DateFormat format = DateFormat::AUTO);
-    static std::optional<std::string> ParseUUID(const std::string& value);
+    // Parse functions - return true if parse succeeds, false otherwise
+    static bool ParseBoolean(const std::string& value, bool& out_result);
+    static bool ParseInteger(const std::string& value, NumberLocale locale, int64_t& out_result);
+    static bool ParseDouble(const std::string& value, NumberLocale locale, double& out_result);
+    static bool ParseDate(const std::string& value, DateFormat format, date_t& out_result);
+    static bool ParseTimestamp(const std::string& value, DateFormat format, timestamp_t& out_result);
+    static bool ParseUUID(const std::string& value, std::string& out_result);
 
     // Convert DetectedType to LogicalType
     static LogicalType ToLogicalType(DetectedType type);
@@ -92,10 +93,6 @@ private:
     static const std::regex UUID_PATTERN;
     static const std::regex CURRENCY_PATTERN;
     static const std::regex PERCENTAGE_PATTERN;
-
-    // Date parsing helpers
-    static std::optional<date_t> TryParseDate(const std::string& value, DateFormat format);
-    static std::optional<timestamp_t> TryParseTimestamp(const std::string& value, DateFormat format);
 };
 
 } // namespace stps

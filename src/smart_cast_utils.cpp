@@ -54,16 +54,17 @@ static int ExpandYear(int year) {
     return year;
 }
 
-// Create date_t from components
-static std::optional<duckdb::date_t> MakeDate(int year, int month, int day) {
+// Create date_t from components, returns true if valid
+static bool MakeDate(int year, int month, int day, duckdb::date_t& out_result) {
     year = ExpandYear(year);
     if (month < 1 || month > 12 || day < 1 || day > 31) {
-        return std::nullopt;
+        return false;
     }
     try {
-        return duckdb::Date::FromDate(year, month, day);
+        out_result = duckdb::Date::FromDate(year, month, day);
+        return true;
     } catch (...) {
-        return std::nullopt;
+        return false;
     }
 }
 
@@ -103,8 +104,8 @@ const std::regex SmartCastUtils::US_NUMBER_PATTERN(
     "^-?\\d{1,3}(?:,\\d{3})*\\.\\d+$"  // e.g., 1,234.56
 );
 
-// Preprocess: trim whitespace, return nullopt for empty
-std::optional<std::string> SmartCastUtils::Preprocess(const std::string& input) {
+// Preprocess: trim whitespace, return false for empty
+bool SmartCastUtils::Preprocess(const std::string& input, std::string& out_result) {
     // Trim leading whitespace
     size_t start = 0;
     while (start < input.size() && std::isspace(static_cast<unsigned char>(input[start]))) {
@@ -117,38 +118,49 @@ std::optional<std::string> SmartCastUtils::Preprocess(const std::string& input) 
         end--;
     }
 
-    // Empty after trim -> nullopt
+    // Empty after trim -> false
     if (start >= end) {
-        return std::nullopt;
+        out_result.clear();
+        return false;
     }
 
-    return input.substr(start, end - start);
+    out_result = input.substr(start, end - start);
+    return true;
 }
 
 // Parse boolean values
-std::optional<bool> SmartCastUtils::ParseBoolean(const std::string& value) {
-    auto processed = Preprocess(value);
-    if (!processed) {
-        return std::nullopt;
+bool SmartCastUtils::ParseBoolean(const std::string& value, bool& out_result) {
+    std::string processed;
+    if (!Preprocess(value, processed)) {
+        return false;
     }
 
-    std::string lower = *processed;
+    std::string lower = processed;
     std::transform(lower.begin(), lower.end(), lower.begin(),
                    [](unsigned char c) { return std::tolower(c); });
 
     if (lower == "true" || lower == "yes" || lower == "ja" || lower == "1") {
+        out_result = true;
         return true;
     }
     if (lower == "false" || lower == "no" || lower == "nein" || lower == "0") {
-        return false;
+        out_result = false;
+        return true;
     }
 
-    return std::nullopt;
+    return false;
 }
 
 bool SmartCastUtils::LooksLikeId(const std::string& value) {
     // Leading zeros suggest an ID (e.g., "007", "00123")
+    // But not dates like "01/15/2024" or "01.01.2024"
     if (value.size() > 1 && value[0] == '0' && std::isdigit(static_cast<unsigned char>(value[1]))) {
+        // Check if it looks like a date (has separators)
+        if (value.find('/') != std::string::npos ||
+            value.find('-') != std::string::npos ||
+            value.find('.') != std::string::npos) {
+            return false;  // Might be a date
+        }
         return true;
     }
     // Negative with leading zeros
@@ -158,21 +170,26 @@ bool SmartCastUtils::LooksLikeId(const std::string& value) {
     return false;
 }
 
-std::optional<int64_t> SmartCastUtils::ParseInteger(const std::string& value, NumberLocale locale) {
-    auto processed = Preprocess(value);
-    if (!processed) {
-        return std::nullopt;
+bool SmartCastUtils::ParseInteger(const std::string& value, NumberLocale locale, int64_t& out_result) {
+    std::string processed;
+    if (!Preprocess(value, processed)) {
+        return false;
     }
 
-    std::string str = *processed;
+    std::string str = processed;
 
     // Check for leading zeros (likely an ID)
     if (LooksLikeId(str)) {
-        return std::nullopt;
+        return false;
     }
 
     // Remove currency symbols
     str = std::regex_replace(str, CURRENCY_PATTERN, "");
+
+    // Trim again after removing currency
+    std::string trimmed;
+    if (!Preprocess(str, trimmed)) return false;
+    str = trimmed;
 
     // Determine separator to remove based on locale
     char thousands_sep = (locale == NumberLocale::US) ? ',' : '.';
@@ -181,7 +198,21 @@ std::optional<int64_t> SmartCastUtils::ParseInteger(const std::string& value, Nu
     char decimal_sep = (locale == NumberLocale::US) ? '.' : ',';
     if (str.find(decimal_sep) != std::string::npos) {
         // Has decimal separator, not an integer
-        return std::nullopt;
+        return false;
+    }
+
+    // Validate the format of thousands separators
+    // Valid: 1.234.567 (groups of exactly 3 digits after first separator)
+    // Invalid: 15.01.2024 (groups are not all 3 digits)
+    size_t sep_pos = str.find(thousands_sep);
+    if (sep_pos != std::string::npos) {
+        // Check if pattern is valid: first group 1-3 digits, subsequent groups exactly 3 digits
+        std::string pattern_str = "^-?\\d{1,3}(?:\\" + std::string(1, thousands_sep) + "\\d{3})+$";
+        std::regex valid_pattern(pattern_str);
+        if (!std::regex_match(str, valid_pattern)) {
+            // Not a valid integer with thousands separators - might be a date or something else
+            return false;
+        }
     }
 
     // Remove thousands separators
@@ -197,13 +228,14 @@ std::optional<int64_t> SmartCastUtils::ParseInteger(const std::string& value, Nu
         size_t pos;
         int64_t result = std::stoll(clean, &pos);
         if (pos == clean.size()) {
-            return result;
+            out_result = result;
+            return true;
         }
     } catch (...) {
         // Parse failed
     }
 
-    return std::nullopt;
+    return false;
 }
 
 NumberLocale SmartCastUtils::DetectLocale(const std::vector<std::string>& values) {
@@ -211,10 +243,10 @@ NumberLocale SmartCastUtils::DetectLocale(const std::vector<std::string>& values
     bool found_us = false;
 
     for (const auto& val : values) {
-        auto processed = Preprocess(val);
-        if (!processed) continue;
+        std::string processed;
+        if (!Preprocess(val, processed)) continue;
 
-        std::string str = *processed;
+        std::string str = processed;
         // Remove currency symbols for analysis
         str = std::regex_replace(str, CURRENCY_PATTERN, "");
         str = std::regex_replace(str, PERCENTAGE_PATTERN, "$1");
@@ -241,13 +273,13 @@ NumberLocale SmartCastUtils::DetectLocale(const std::vector<std::string>& values
     return NumberLocale::GERMAN;
 }
 
-std::optional<double> SmartCastUtils::ParseDouble(const std::string& value, NumberLocale locale) {
-    auto processed = Preprocess(value);
-    if (!processed) {
-        return std::nullopt;
+bool SmartCastUtils::ParseDouble(const std::string& value, NumberLocale locale, double& out_result) {
+    std::string processed;
+    if (!Preprocess(value, processed)) {
+        return false;
     }
 
-    std::string str = *processed;
+    std::string str = processed;
 
     // Check for percentage
     bool is_percentage = false;
@@ -261,9 +293,9 @@ std::optional<double> SmartCastUtils::ParseDouble(const std::string& value, Numb
     str = std::regex_replace(str, CURRENCY_PATTERN, "");
 
     // Trim again after removing symbols
-    auto trimmed = Preprocess(str);
-    if (!trimmed) return std::nullopt;
-    str = *trimmed;
+    std::string trimmed;
+    if (!Preprocess(str, trimmed)) return false;
+    str = trimmed;
 
     // Determine separators based on locale
     char thousands_sep, decimal_sep;
@@ -274,6 +306,25 @@ std::optional<double> SmartCastUtils::ParseDouble(const std::string& value, Numb
         // German or AUTO (default to German)
         thousands_sep = '.';
         decimal_sep = ',';
+    }
+
+    // Validate thousands separator format if present
+    // Valid: 1.234.567,89 or 1.234 (groups of exactly 3 digits)
+    // Invalid: 15.01.2024 (looks like a date)
+    size_t sep_pos = str.find(thousands_sep);
+    size_t dec_pos = str.find(decimal_sep);
+
+    if (sep_pos != std::string::npos) {
+        // Extract the part before the decimal (if any) to validate thousands separators
+        std::string integer_part = (dec_pos != std::string::npos) ? str.substr(0, dec_pos) : str;
+
+        // Check if pattern is valid: first group 1-3 digits, subsequent groups exactly 3 digits
+        std::string pattern_str = "^-?\\d{1,3}(?:\\" + std::string(1, thousands_sep) + "\\d{3})+$";
+        std::regex valid_pattern(pattern_str);
+        if (!std::regex_match(integer_part, valid_pattern)) {
+            // Not a valid number with thousands separators - might be a date
+            return false;
+        }
     }
 
     // Build clean string: remove thousands, replace decimal with .
@@ -296,13 +347,14 @@ std::optional<double> SmartCastUtils::ParseDouble(const std::string& value, Numb
             if (is_percentage) {
                 result /= 100.0;
             }
-            return result;
+            out_result = result;
+            return true;
         }
     } catch (...) {
         // Parse failed
     }
 
-    return std::nullopt;
+    return false;
 }
 
 DateFormat SmartCastUtils::DetectDateFormat(const std::vector<std::string>& values) {
@@ -310,13 +362,13 @@ DateFormat SmartCastUtils::DetectDateFormat(const std::vector<std::string>& valu
     bool found_mdy = false;
 
     for (const auto& val : values) {
-        auto processed = Preprocess(val);
-        if (!processed) continue;
+        std::string processed;
+        if (!Preprocess(val, processed)) continue;
 
         // Look for unambiguous dates where day > 12
         std::regex date_parts_regex("^(\\d{1,2})[./\\-](\\d{1,2})[./\\-](\\d{2,4})$");
         std::smatch match;
-        if (std::regex_match(*processed, match, date_parts_regex)) {
+        if (std::regex_match(processed, match, date_parts_regex)) {
             int first = std::stoi(match[1].str());
             int second = std::stoi(match[2].str());
 
@@ -335,31 +387,31 @@ DateFormat SmartCastUtils::DetectDateFormat(const std::vector<std::string>& valu
     return DateFormat::DMY;
 }
 
-std::optional<date_t> SmartCastUtils::ParseDate(const std::string& value, DateFormat format) {
-    auto processed = Preprocess(value);
-    if (!processed) {
-        return std::nullopt;
+bool SmartCastUtils::ParseDate(const std::string& value, DateFormat format, date_t& out_result) {
+    std::string processed;
+    if (!Preprocess(value, processed)) {
+        return false;
     }
 
-    std::string str = *processed;
+    std::string str = processed;
 
     // ISO format: 2024-01-15
     std::regex iso_regex("^(\\d{4})-(\\d{1,2})-(\\d{1,2})$");
     std::smatch match;
     if (std::regex_match(str, match, iso_regex)) {
-        return MakeDate(std::stoi(match[1]), std::stoi(match[2]), std::stoi(match[3]));
+        return MakeDate(std::stoi(match[1]), std::stoi(match[2]), std::stoi(match[3]), out_result);
     }
 
     // Compact format: 20240115
     std::regex compact_regex("^(\\d{4})(\\d{2})(\\d{2})$");
     if (std::regex_match(str, match, compact_regex)) {
-        return MakeDate(std::stoi(match[1]), std::stoi(match[2]), std::stoi(match[3]));
+        return MakeDate(std::stoi(match[1]), std::stoi(match[2]), std::stoi(match[3]), out_result);
     }
 
     // Year-first slash: 2024/01/15
     std::regex ymd_slash_regex("^(\\d{4})/(\\d{1,2})/(\\d{1,2})$");
     if (std::regex_match(str, match, ymd_slash_regex)) {
-        return MakeDate(std::stoi(match[1]), std::stoi(match[2]), std::stoi(match[3]));
+        return MakeDate(std::stoi(match[1]), std::stoi(match[2]), std::stoi(match[3]), out_result);
     }
 
     // Dot/slash/dash separated: try based on format
@@ -370,9 +422,9 @@ std::optional<date_t> SmartCastUtils::ParseDate(const std::string& value, DateFo
         int third = std::stoi(match[3]);
 
         if (format == DateFormat::MDY) {
-            return MakeDate(third, first, second);  // M/D/Y
+            return MakeDate(third, first, second, out_result);  // M/D/Y
         } else {
-            return MakeDate(third, second, first);  // D/M/Y
+            return MakeDate(third, second, first, out_result);  // D/M/Y
         }
     }
 
@@ -381,7 +433,7 @@ std::optional<date_t> SmartCastUtils::ParseDate(const std::string& value, DateFo
     if (std::regex_match(str, match, written_dmy_regex)) {
         int month = ParseMonthName(match[2].str());
         if (month > 0) {
-            return MakeDate(std::stoi(match[3]), month, std::stoi(match[1]));
+            return MakeDate(std::stoi(match[3]), month, std::stoi(match[1]), out_result);
         }
     }
 
@@ -389,7 +441,7 @@ std::optional<date_t> SmartCastUtils::ParseDate(const std::string& value, DateFo
     if (std::regex_match(str, match, written_mdy_regex)) {
         int month = ParseMonthName(match[1].str());
         if (month > 0) {
-            return MakeDate(std::stoi(match[3]), month, std::stoi(match[2]));
+            return MakeDate(std::stoi(match[3]), month, std::stoi(match[2]), out_result);
         }
     }
 
@@ -399,13 +451,16 @@ std::optional<date_t> SmartCastUtils::ParseDate(const std::string& value, DateFo
                    [](unsigned char c) { return std::tolower(c); });
 
     if (lower == "today" || lower == "heute") {
-        return Date::FromDate(2026, 1, 9);  // Current date
+        out_result = Date::FromDate(2026, 1, 9);  // Current date
+        return true;
     }
     if (lower == "yesterday" || lower == "gestern") {
-        return Date::FromDate(2026, 1, 8);
+        out_result = Date::FromDate(2026, 1, 8);
+        return true;
     }
     if (lower == "tomorrow" || lower == "morgen") {
-        return Date::FromDate(2026, 1, 10);
+        out_result = Date::FromDate(2026, 1, 10);
+        return true;
     }
 
     // Month-only: "Jan 2024", "2024-01"
@@ -413,13 +468,13 @@ std::optional<date_t> SmartCastUtils::ParseDate(const std::string& value, DateFo
     if (std::regex_match(str, match, month_year_regex)) {
         int month = ParseMonthName(match[1].str());
         if (month > 0) {
-            return MakeDate(std::stoi(match[2]), month, 1);
+            return MakeDate(std::stoi(match[2]), month, 1, out_result);
         }
     }
 
     std::regex year_month_regex("^(\\d{4})-(\\d{2})$");
     if (std::regex_match(str, match, year_month_regex)) {
-        return MakeDate(std::stoi(match[1]), std::stoi(match[2]), 1);
+        return MakeDate(std::stoi(match[1]), std::stoi(match[2]), 1, out_result);
     }
 
     // Quarter: Q1 2024, 2024-Q1
@@ -434,7 +489,7 @@ std::optional<date_t> SmartCastUtils::ParseDate(const std::string& value, DateFo
             quarter = std::stoi(match[4]);
         }
         int month = (quarter - 1) * 3 + 1;
-        return MakeDate(year, month, 1);
+        return MakeDate(year, month, 1, out_result);
     }
 
     // Week: 2024-W03, W03-2024
@@ -451,19 +506,19 @@ std::optional<date_t> SmartCastUtils::ParseDate(const std::string& value, DateFo
         // Convert week to approximate date (first day of week)
         int day = (week - 1) * 7 + 1;
         if (day > 28) day = 28;  // Keep within valid range
-        return MakeDate(year, 1, day);
+        return MakeDate(year, 1, day, out_result);
     }
 
-    return std::nullopt;
+    return false;
 }
 
-std::optional<timestamp_t> SmartCastUtils::ParseTimestamp(const std::string& value, DateFormat format) {
-    auto processed = Preprocess(value);
-    if (!processed) {
-        return std::nullopt;
+bool SmartCastUtils::ParseTimestamp(const std::string& value, DateFormat format, timestamp_t& out_result) {
+    std::string processed;
+    if (!Preprocess(value, processed)) {
+        return false;
     }
 
-    std::string str = *processed;
+    std::string str = processed;
 
     // Try to split into date and time parts
     std::regex datetime_regex("^(.+?)\\s*[T\\s]\\s*(\\d{1,2}:\\d{2}(?::\\d{2})?)(.*)$");
@@ -474,9 +529,9 @@ std::optional<timestamp_t> SmartCastUtils::ParseTimestamp(const std::string& val
         std::string time_part = match[2].str();
 
         // Parse date part
-        auto date_result = ParseDate(date_part, format);
-        if (!date_result) {
-            return std::nullopt;
+        date_t date_result;
+        if (!ParseDate(date_part, format, date_result)) {
+            return false;
         }
 
         // Parse time part
@@ -485,72 +540,80 @@ std::optional<timestamp_t> SmartCastUtils::ParseTimestamp(const std::string& val
             if (hour >= 0 && hour < 24 && minute >= 0 && minute < 60 && second >= 0 && second < 60) {
                 try {
                     int32_t year, month, day;
-                    Date::Convert(*date_result, year, month, day);
-                    return Timestamp::FromDatetime(
+                    Date::Convert(date_result, year, month, day);
+                    out_result = Timestamp::FromDatetime(
                         Date::FromDate(year, month, day),
                         Time::FromTime(hour, minute, second, 0)
                     );
+                    return true;
                 } catch (...) {
-                    return std::nullopt;
+                    return false;
                 }
             }
         }
     }
 
-    return std::nullopt;
+    return false;
 }
 
-std::optional<std::string> SmartCastUtils::ParseUUID(const std::string& value) {
-    auto processed = Preprocess(value);
-    if (!processed) {
-        return std::nullopt;
+bool SmartCastUtils::ParseUUID(const std::string& value, std::string& out_result) {
+    std::string processed;
+    if (!Preprocess(value, processed)) {
+        return false;
     }
 
-    if (std::regex_match(*processed, UUID_PATTERN)) {
-        return *processed;
+    if (std::regex_match(processed, UUID_PATTERN)) {
+        out_result = processed;
+        return true;
     }
 
-    return std::nullopt;
+    return false;
 }
 
 DetectedType SmartCastUtils::DetectType(const std::string& value, NumberLocale locale, DateFormat date_format) {
-    auto processed = Preprocess(value);
-    if (!processed) {
+    std::string processed;
+    if (!Preprocess(value, processed)) {
         return DetectedType::UNKNOWN;  // Empty/whitespace
     }
 
     // Check for ID-like values first (preserve as VARCHAR)
-    if (LooksLikeId(*processed)) {
+    if (LooksLikeId(processed)) {
         return DetectedType::VARCHAR;
     }
 
     // Try boolean
-    if (ParseBoolean(*processed)) {
+    bool bool_result;
+    if (ParseBoolean(processed, bool_result)) {
         return DetectedType::BOOLEAN;
     }
 
     // Try UUID (before numbers, as UUIDs have dashes)
-    if (ParseUUID(*processed)) {
+    std::string uuid_result;
+    if (ParseUUID(processed, uuid_result)) {
         return DetectedType::UUID;
     }
 
     // Try integer (before double)
-    if (ParseInteger(*processed, locale)) {
+    int64_t int_result;
+    if (ParseInteger(processed, locale, int_result)) {
         return DetectedType::INTEGER;
     }
 
     // Try double
-    if (ParseDouble(*processed, locale)) {
+    double double_result;
+    if (ParseDouble(processed, locale, double_result)) {
         return DetectedType::DOUBLE;
     }
 
     // Try timestamp (before date, as timestamp includes date)
-    if (ParseTimestamp(*processed, date_format)) {
+    timestamp_t ts_result;
+    if (ParseTimestamp(processed, date_format, ts_result)) {
         return DetectedType::TIMESTAMP;
     }
 
     // Try date
-    if (ParseDate(*processed, date_format)) {
+    date_t date_result;
+    if (ParseDate(processed, date_format, date_result)) {
         return DetectedType::DATE;
     }
 

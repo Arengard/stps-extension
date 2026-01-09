@@ -19,6 +19,7 @@
 // #include "search_columns_function.hpp"  // Uncommitted work-in-progress
 #include "account_validation.hpp"
 #include "smart_cast_scalar.hpp"
+#include "smart_cast_function.hpp"
 #include "blz_lut_loader.hpp"
 // #include "fill_functions.hpp"  // Temporarily disabled
 
@@ -47,8 +48,9 @@ public:
         // Register drop null columns function
         stps::RegisterDropNullColumnsFunction(loader);
 
-        // Register smart cast scalar function
+        // Register smart cast functions
         stps::RegisterSmartCastScalarFunction(loader);
+        stps::RegisterSmartCastTableFunctions(loader);
 
         // Register search columns function
         // stps::RegisterSearchColumnsFunction(loader);  // Uncommitted work-in-progress

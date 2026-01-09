@@ -40,72 +40,72 @@ static void SmartCastAutoFunction(DataChunk &args, ExpressionState &state, Vecto
         }
 
         std::string str = input_strings[idx].GetString();
-        auto processed = SmartCastUtils::Preprocess(str);
-        if (!processed) {
+        std::string processed;
+        if (!SmartCastUtils::Preprocess(str, processed)) {
             result_validity.SetInvalid(i);
             continue;
         }
 
-        DetectedType type = SmartCastUtils::DetectType(*processed, locale, date_format);
+        DetectedType type = SmartCastUtils::DetectType(processed, locale, date_format);
 
         // Cast and return string representation
         switch (type) {
             case DetectedType::BOOLEAN: {
-                auto val = SmartCastUtils::ParseBoolean(*processed);
-                if (val) {
-                    result_data[i] = StringVector::AddString(result, *val ? "true" : "false");
+                bool val;
+                if (SmartCastUtils::ParseBoolean(processed, val)) {
+                    result_data[i] = StringVector::AddString(result, val ? "true" : "false");
                 } else {
                     result_validity.SetInvalid(i);
                 }
                 break;
             }
             case DetectedType::INTEGER: {
-                auto val = SmartCastUtils::ParseInteger(*processed, locale);
-                if (val) {
-                    result_data[i] = StringVector::AddString(result, std::to_string(*val));
+                int64_t val;
+                if (SmartCastUtils::ParseInteger(processed, locale, val)) {
+                    result_data[i] = StringVector::AddString(result, std::to_string(val));
                 } else {
                     result_validity.SetInvalid(i);
                 }
                 break;
             }
             case DetectedType::DOUBLE: {
-                auto val = SmartCastUtils::ParseDouble(*processed, locale);
-                if (val) {
-                    result_data[i] = StringVector::AddString(result, std::to_string(*val));
+                double val;
+                if (SmartCastUtils::ParseDouble(processed, locale, val)) {
+                    result_data[i] = StringVector::AddString(result, std::to_string(val));
                 } else {
                     result_validity.SetInvalid(i);
                 }
                 break;
             }
             case DetectedType::DATE: {
-                auto val = SmartCastUtils::ParseDate(*processed, date_format);
-                if (val) {
-                    result_data[i] = StringVector::AddString(result, Date::ToString(*val));
+                date_t val;
+                if (SmartCastUtils::ParseDate(processed, date_format, val)) {
+                    result_data[i] = StringVector::AddString(result, Date::ToString(val));
                 } else {
                     result_validity.SetInvalid(i);
                 }
                 break;
             }
             case DetectedType::TIMESTAMP: {
-                auto val = SmartCastUtils::ParseTimestamp(*processed, date_format);
-                if (val) {
-                    result_data[i] = StringVector::AddString(result, Timestamp::ToString(*val));
+                timestamp_t val;
+                if (SmartCastUtils::ParseTimestamp(processed, date_format, val)) {
+                    result_data[i] = StringVector::AddString(result, Timestamp::ToString(val));
                 } else {
                     result_validity.SetInvalid(i);
                 }
                 break;
             }
             case DetectedType::UUID: {
-                auto val = SmartCastUtils::ParseUUID(*processed);
-                if (val) {
-                    result_data[i] = StringVector::AddString(result, *val);
+                std::string val;
+                if (SmartCastUtils::ParseUUID(processed, val)) {
+                    result_data[i] = StringVector::AddString(result, val);
                 } else {
                     result_validity.SetInvalid(i);
                 }
                 break;
             }
             default:
-                result_data[i] = StringVector::AddString(result, *processed);
+                result_data[i] = StringVector::AddString(result, processed);
                 break;
         }
     }
@@ -148,8 +148,8 @@ static void SmartCastExplicitFunction(DataChunk &args, ExpressionState &state, V
         }
 
         std::string str = input_strings[input_idx].GetString();
-        auto processed = SmartCastUtils::Preprocess(str);
-        if (!processed) {
+        std::string processed;
+        if (!SmartCastUtils::Preprocess(str, processed)) {
             result_validity.SetInvalid(i);
             continue;
         }
@@ -160,61 +160,61 @@ static void SmartCastExplicitFunction(DataChunk &args, ExpressionState &state, V
         // Cast to target type
         switch (target_type) {
             case DetectedType::BOOLEAN: {
-                auto val = SmartCastUtils::ParseBoolean(*processed);
-                if (val) {
-                    result_data[i] = StringVector::AddString(result, *val ? "true" : "false");
+                bool val;
+                if (SmartCastUtils::ParseBoolean(processed, val)) {
+                    result_data[i] = StringVector::AddString(result, val ? "true" : "false");
                 } else {
                     result_validity.SetInvalid(i);
                 }
                 break;
             }
             case DetectedType::INTEGER: {
-                auto val = SmartCastUtils::ParseInteger(*processed, locale);
-                if (val) {
-                    result_data[i] = StringVector::AddString(result, std::to_string(*val));
+                int64_t val;
+                if (SmartCastUtils::ParseInteger(processed, locale, val)) {
+                    result_data[i] = StringVector::AddString(result, std::to_string(val));
                 } else {
                     result_validity.SetInvalid(i);
                 }
                 break;
             }
             case DetectedType::DOUBLE: {
-                auto val = SmartCastUtils::ParseDouble(*processed, locale);
-                if (val) {
-                    result_data[i] = StringVector::AddString(result, std::to_string(*val));
+                double val;
+                if (SmartCastUtils::ParseDouble(processed, locale, val)) {
+                    result_data[i] = StringVector::AddString(result, std::to_string(val));
                 } else {
                     result_validity.SetInvalid(i);
                 }
                 break;
             }
             case DetectedType::DATE: {
-                auto val = SmartCastUtils::ParseDate(*processed, date_format);
-                if (val) {
-                    result_data[i] = StringVector::AddString(result, Date::ToString(*val));
+                date_t val;
+                if (SmartCastUtils::ParseDate(processed, date_format, val)) {
+                    result_data[i] = StringVector::AddString(result, Date::ToString(val));
                 } else {
                     result_validity.SetInvalid(i);
                 }
                 break;
             }
             case DetectedType::TIMESTAMP: {
-                auto val = SmartCastUtils::ParseTimestamp(*processed, date_format);
-                if (val) {
-                    result_data[i] = StringVector::AddString(result, Timestamp::ToString(*val));
+                timestamp_t val;
+                if (SmartCastUtils::ParseTimestamp(processed, date_format, val)) {
+                    result_data[i] = StringVector::AddString(result, Timestamp::ToString(val));
                 } else {
                     result_validity.SetInvalid(i);
                 }
                 break;
             }
             case DetectedType::UUID: {
-                auto val = SmartCastUtils::ParseUUID(*processed);
-                if (val) {
-                    result_data[i] = StringVector::AddString(result, *val);
+                std::string val;
+                if (SmartCastUtils::ParseUUID(processed, val)) {
+                    result_data[i] = StringVector::AddString(result, val);
                 } else {
                     result_validity.SetInvalid(i);
                 }
                 break;
             }
             default:
-                result_data[i] = StringVector::AddString(result, *processed);
+                result_data[i] = StringVector::AddString(result, processed);
                 break;
         }
     }
