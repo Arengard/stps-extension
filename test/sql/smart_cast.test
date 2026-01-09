@@ -184,3 +184,19 @@ query I
 SELECT stps_smart_cast('550e8400-e29b-41d4-a716-446655440000')::UUID IS NOT NULL;
 ----
 true
+
+# Scalar function with explicit type
+query I
+SELECT stps_smart_cast('123', 'INTEGER');
+----
+123
+
+query R
+SELECT stps_smart_cast('1.234,56', 'DOUBLE');
+----
+1234.56
+
+query I
+SELECT stps_smart_cast('invalid', 'INTEGER') IS NULL;
+----
+true
