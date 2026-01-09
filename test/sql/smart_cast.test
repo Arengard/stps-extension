@@ -162,3 +162,25 @@ query D
 SELECT stps_smart_cast('15. Januar 2024');
 ----
 2024-01-15
+
+# Timestamp parsing
+query T
+SELECT stps_smart_cast('2024-01-15 10:30:00');
+----
+2024-01-15 10:30:00
+
+query T
+SELECT stps_smart_cast('2024-01-15T10:30:00');
+----
+2024-01-15 10:30:00
+
+query T
+SELECT stps_smart_cast('15.01.2024 10:30');
+----
+2024-01-15 10:30:00
+
+# UUID parsing
+query I
+SELECT stps_smart_cast('550e8400-e29b-41d4-a716-446655440000')::UUID IS NOT NULL;
+----
+true

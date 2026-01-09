@@ -1,6 +1,7 @@
 #include "smart_cast_utils.hpp"
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
 #include <map>
 
 // Month name mappings
@@ -451,6 +452,62 @@ std::optional<date_t> SmartCastUtils::ParseDate(const std::string& value, DateFo
         int day = (week - 1) * 7 + 1;
         if (day > 28) day = 28;  // Keep within valid range
         return MakeDate(year, 1, day);
+    }
+
+    return std::nullopt;
+}
+
+std::optional<timestamp_t> SmartCastUtils::ParseTimestamp(const std::string& value, DateFormat format) {
+    auto processed = Preprocess(value);
+    if (!processed) {
+        return std::nullopt;
+    }
+
+    std::string str = *processed;
+
+    // Try to split into date and time parts
+    std::regex datetime_regex("^(.+?)\\s*[T\\s]\\s*(\\d{1,2}:\\d{2}(?::\\d{2})?)(.*)$");
+    std::smatch match;
+
+    if (std::regex_match(str, match, datetime_regex)) {
+        std::string date_part = match[1].str();
+        std::string time_part = match[2].str();
+
+        // Parse date part
+        auto date_result = ParseDate(date_part, format);
+        if (!date_result) {
+            return std::nullopt;
+        }
+
+        // Parse time part
+        int hour = 0, minute = 0, second = 0;
+        if (sscanf(time_part.c_str(), "%d:%d:%d", &hour, &minute, &second) >= 2) {
+            if (hour >= 0 && hour < 24 && minute >= 0 && minute < 60 && second >= 0 && second < 60) {
+                try {
+                    int32_t year, month, day;
+                    Date::Convert(*date_result, year, month, day);
+                    return Timestamp::FromDatetime(
+                        Date::FromDate(year, month, day),
+                        Time::FromTime(hour, minute, second, 0)
+                    );
+                } catch (...) {
+                    return std::nullopt;
+                }
+            }
+        }
+    }
+
+    return std::nullopt;
+}
+
+std::optional<std::string> SmartCastUtils::ParseUUID(const std::string& value) {
+    auto processed = Preprocess(value);
+    if (!processed) {
+        return std::nullopt;
+    }
+
+    if (std::regex_match(*processed, UUID_PATTERN)) {
+        return *processed;
     }
 
     return std::nullopt;
