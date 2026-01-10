@@ -16,6 +16,7 @@
 #include "xml_parser.hpp"
 #include "gobd_reader.hpp"
 #include "drop_null_columns_function.hpp"
+#include "street_split.hpp"
 // #include "search_columns_function.hpp"  // Uncommitted work-in-progress
 #include "account_validation.hpp"
 #include "smart_cast_scalar.hpp"
@@ -47,6 +48,9 @@ public:
 
         // Register drop null columns function
         stps::RegisterDropNullColumnsFunction(loader);
+
+        // Register street split function
+        stps::RegisterStreetSplitFunctions(loader);
 
         // Register smart cast functions
         stps::RegisterSmartCastScalarFunction(loader);
