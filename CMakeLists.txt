@@ -23,6 +23,7 @@ set(EXTENSION_SOURCES
     src/filesystem_functions.cpp
     src/drop_null_columns_function.cpp
     src/street_split.cpp
+    src/plz_validation.cpp
     # src/search_columns_function.cpp  # Uncommitted work-in-progress
     # src/fill_functions.cpp  # Temporarily disabled - DuckDB API changed
     src/smart_cast_utils.cpp
