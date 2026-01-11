@@ -11,6 +11,8 @@
 #include "xml_parser.hpp"
 #include "gobd_reader.hpp"
 #include "drop_null_columns_function.hpp"
+#include "smart_cast_function.hpp"
+#include "smart_cast_scalar.hpp"
 #include "duckdb.hpp"
 #include "duckdb/main/database.hpp"
 #include "duckdb/main/connection.hpp"
@@ -453,6 +455,8 @@ static void LoadPolarsgodmodeFunctions(DatabaseInstance &db) {
     stps::RegisterXmlParserFunctions(loader);
     stps::RegisterGobdReaderFunctions(loader);
     stps::RegisterDropNullColumnsFunction(loader);
+    stps::RegisterSmartCastTableFunctions(loader);
+    stps::RegisterSmartCastScalarFunction(loader);
 }
 
 } // namespace duckdb
