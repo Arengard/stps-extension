@@ -1,6 +1,5 @@
 #include "utils.hpp"
 #include <sstream>
-#include <regex>
 
 namespace duckdb {
 namespace stps {

@@ -2,7 +2,6 @@
 #include "duckdb/function/scalar_function.hpp"
 #include "duckdb/common/types/data_chunk.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
-#include <regex>
 #include <algorithm>
 #include <cctype>
 
@@ -23,33 +22,95 @@ static std::string to_upper(const std::string& str) {
     return result;
 }
 
+static std::string to_lower(const std::string& str) {
+    std::string result = str;
+    std::transform(result.begin(), result.end(), result.begin(),
+                   [](unsigned char c) { return std::tolower(c); });
+    return result;
+}
+
+// Check if string ends with suffix (case-insensitive)
+static bool ends_with_icase(const std::string& str, const std::string& suffix) {
+    if (suffix.size() > str.size()) return false;
+    std::string str_end = to_lower(str.substr(str.size() - suffix.size()));
+    return str_end == to_lower(suffix);
+}
+
 static std::string apply_abbreviation(const std::string& street_name) {
     std::string result = street_name;
 
-    // Check for compound "straße" or "strasse" (no space before it)
-    // We need to find these at the end of a word that's attached to other characters
-    std::regex compound_strasse_regex(R"((\S)(straße|strasse)$)", std::regex::icase);
+    // Check for compound "straße" or "strasse" at the end
+    // Must be preceded by a non-space character (compound word)
+    if (result.size() > 7) {  // "xstraße" minimum
+        // Check for "straße" (UTF-8: straße is 7 bytes, strasse is 7 bytes)
+        bool has_strasse = ends_with_icase(result, "strasse");
+        bool has_strasse_utf8 = false;
 
-    if (std::regex_search(result, compound_strasse_regex)) {
-        // Replace the suffix with "str."
-        result = std::regex_replace(result, std::regex(R"((straße|strasse)$)", std::regex::icase), "str.");
+        // Check UTF-8 "straße" - ß is 2 bytes in UTF-8 (0xC3 0x9F)
+        if (result.size() >= 8) {
+            std::string last8 = result.substr(result.size() - 8);
+            std::string lower8 = to_lower(last8);
+            // "straße" in UTF-8 lowercase - using separate string concat to avoid hex escape issue
+            std::string strasse_utf8 = "stra";
+            strasse_utf8 += '\xc3';
+            strasse_utf8 += '\x9f';
+            strasse_utf8 += "e";
+            if (lower8 == strasse_utf8 || lower8 == "strasse") {
+                has_strasse_utf8 = true;
+            }
+        }
+
+        if (has_strasse || has_strasse_utf8) {
+            // Check if preceded by non-space (compound word)
+            size_t suffix_start = result.size() - (has_strasse_utf8 ? 8 : 7);
+            if (suffix_start > 0 && !std::isspace(static_cast<unsigned char>(result[suffix_start - 1]))) {
+                // Replace with "str."
+                result = result.substr(0, suffix_start) + "str.";
+            }
+        }
     }
 
     return result;
 }
 
 static bool is_mannheim_address(const std::string& input, std::string& block_code, std::string& house_number) {
-    // Pattern: single letter followed by digits, then space, then house number
+    // Pattern: single letter followed by digits, then whitespace, then house number (starting with digit)
     // Examples: "M7 24", "Q3 15a", "L15 7"
-    std::regex mannheim_regex(R"(^([A-Za-z]\d+)\s+(\d+.*)$)");
-    std::smatch match;
 
-    if (std::regex_match(input, match, mannheim_regex)) {
-        block_code = match[1].str();
-        house_number = match[2].str();
-        return true;
+    if (input.empty()) return false;
+
+    size_t pos = 0;
+
+    // Must start with a letter
+    if (!std::isalpha(static_cast<unsigned char>(input[pos]))) return false;
+    pos++;
+
+    // Must be followed by at least one digit
+    if (pos >= input.length() || !std::isdigit(static_cast<unsigned char>(input[pos]))) return false;
+
+    // Consume all digits
+    while (pos < input.length() && std::isdigit(static_cast<unsigned char>(input[pos]))) {
+        pos++;
     }
-    return false;
+
+    // Must be followed by whitespace
+    if (pos >= input.length() || !std::isspace(static_cast<unsigned char>(input[pos]))) return false;
+
+    size_t block_end = pos;
+
+    // Skip whitespace
+    while (pos < input.length() && std::isspace(static_cast<unsigned char>(input[pos]))) {
+        pos++;
+    }
+
+    // Rest must start with a digit (house number)
+    if (pos >= input.length() || !std::isdigit(static_cast<unsigned char>(input[pos]))) return false;
+
+    // Extract parts
+    block_code = input.substr(0, block_end);
+    house_number = input.substr(pos);
+
+    return true;
 }
 
 static size_t find_house_number_start(const std::string& input) {

@@ -4,7 +4,6 @@
 #include "duckdb/common/types/time.hpp"
 #include <string>
 #include <vector>
-#include <regex>
 
 namespace duckdb {
 namespace stps {
@@ -50,7 +49,7 @@ struct ColumnAnalysis {
     DateFormat detected_date_format;
 };
 
-// Smart cast utilities
+// Smart cast utilities - Windows-safe implementation without static regex objects
 class SmartCastUtils {
 public:
     // Preprocess string (trim, empty -> returns false with empty out_result)
@@ -85,14 +84,13 @@ public:
     static bool LooksLikeId(const std::string& value);
 
 private:
-    // Helper regex patterns
-    static const std::regex BOOLEAN_PATTERN;
-    static const std::regex INTEGER_PATTERN;
-    static const std::regex GERMAN_NUMBER_PATTERN;
-    static const std::regex US_NUMBER_PATTERN;
-    static const std::regex UUID_PATTERN;
-    static const std::regex CURRENCY_PATTERN;
-    static const std::regex PERCENTAGE_PATTERN;
+    // Helper functions for manual parsing (Windows-safe, no static regex)
+    static bool IsValidUUID(const std::string& value);
+    static bool MatchesGermanNumberFormat(const std::string& value);
+    static bool MatchesUSNumberFormat(const std::string& value);
+    static bool RemoveCurrencySymbol(std::string& value);
+    static bool RemovePercentage(std::string& value, bool& was_percentage);
+    static bool IsValidThousandsSeparatorFormat(const std::string& value, char thousands_sep);
 };
 
 } // namespace stps

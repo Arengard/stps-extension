@@ -36,29 +36,52 @@ FileEntry FileSystemScanner::CreateEntry(const fs::directory_entry& entry) {
     return result;
 }
 
+// Simple glob pattern matcher (no regex - Windows safe)
+// Supports: * (match any), ? (match single char)
+// Case-insensitive matching
 bool FileSystemScanner::MatchesPattern(const std::string& filename, const std::string& pattern) {
     if (pattern.empty()) return true;
 
-    // Convert glob pattern to regex
-    std::string regex_pattern = pattern;
+    // Convert both to lowercase for case-insensitive matching
+    std::string fn = filename;
+    std::string pat = pattern;
+    std::transform(fn.begin(), fn.end(), fn.begin(),
+                   [](unsigned char c) { return std::tolower(c); });
+    std::transform(pat.begin(), pat.end(), pat.begin(),
+                   [](unsigned char c) { return std::tolower(c); });
 
-    // Escape special regex characters except * and ?
-    std::string escaped;
-    for (char c : regex_pattern) {
-        if (c == '*') {
-            escaped += ".*";
-        } else if (c == '?') {
-            escaped += ".";
-        } else if (std::string(".^$|()[]{}+\\").find(c) != std::string::npos) {
-            escaped += "\\";
-            escaped += c;
+    // Iterative glob matching with backtracking
+    size_t fi = 0, pi = 0;
+    size_t star_idx = std::string::npos;
+    size_t match_idx = 0;
+
+    while (fi < fn.length()) {
+        if (pi < pat.length() && (pat[pi] == '?' || pat[pi] == fn[fi])) {
+            // Character match or ? wildcard
+            fi++;
+            pi++;
+        } else if (pi < pat.length() && pat[pi] == '*') {
+            // * wildcard - remember position
+            star_idx = pi;
+            match_idx = fi;
+            pi++;
+        } else if (star_idx != std::string::npos) {
+            // Backtrack - try matching one more character with *
+            pi = star_idx + 1;
+            match_idx++;
+            fi = match_idx;
         } else {
-            escaped += c;
+            // No match
+            return false;
         }
     }
 
-    std::regex re(escaped, std::regex::icase);
-    return std::regex_match(filename, re);
+    // Skip remaining * in pattern
+    while (pi < pat.length() && pat[pi] == '*') {
+        pi++;
+    }
+
+    return pi == pat.length();
 }
 
 bool FileSystemScanner::SearchFileContent(const fs::path& file_path, const std::string& search_text) {

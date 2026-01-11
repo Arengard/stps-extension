@@ -5,9 +5,9 @@
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 #include <fstream>
 #include <sstream>
-#include <regex>
 #include <map>
 #include <vector>
+#include <cctype>
 
 namespace duckdb {
 namespace stps {
@@ -28,17 +28,72 @@ std::string xml_trim(const std::string& str) {
     return str.substr(first, (last - first + 1));
 }
 
-// Parse XML attributes from tag
+// Parse XML attributes from tag (no regex - manual parsing)
+// Pattern: name="value" or name='value'
 std::map<std::string, std::string> parse_attributes(const std::string& tag) {
     std::map<std::string, std::string> attrs;
-    std::regex attr_regex(R"((\w+)=\"([^\"]*)\")");
-    auto begin = std::sregex_iterator(tag.begin(), tag.end(), attr_regex);
-    auto end = std::sregex_iterator();
+    size_t pos = 0;
 
-    for (std::sregex_iterator i = begin; i != end; ++i) {
-        std::smatch match = *i;
-        attrs[match[1].str()] = match[2].str();
+    while (pos < tag.length()) {
+        // Skip whitespace
+        while (pos < tag.length() && std::isspace(static_cast<unsigned char>(tag[pos]))) {
+            pos++;
+        }
+        if (pos >= tag.length()) break;
+
+        // Find attribute name (word characters)
+        size_t name_start = pos;
+        while (pos < tag.length() &&
+               (std::isalnum(static_cast<unsigned char>(tag[pos])) ||
+                tag[pos] == '_' || tag[pos] == '-' || tag[pos] == ':')) {
+            pos++;
+        }
+        if (pos == name_start) {
+            pos++;  // Skip unknown character
+            continue;
+        }
+
+        std::string name = tag.substr(name_start, pos - name_start);
+
+        // Skip whitespace before =
+        while (pos < tag.length() && std::isspace(static_cast<unsigned char>(tag[pos]))) {
+            pos++;
+        }
+
+        // Expect =
+        if (pos >= tag.length() || tag[pos] != '=') {
+            continue;  // Malformed, skip
+        }
+        pos++;  // Skip =
+
+        // Skip whitespace after =
+        while (pos < tag.length() && std::isspace(static_cast<unsigned char>(tag[pos]))) {
+            pos++;
+        }
+
+        // Expect quote
+        if (pos >= tag.length()) break;
+        char quote = tag[pos];
+        if (quote != '"' && quote != '\'') {
+            continue;  // Malformed
+        }
+        pos++;  // Skip opening quote
+
+        // Find closing quote
+        size_t value_start = pos;
+        while (pos < tag.length() && tag[pos] != quote) {
+            pos++;
+        }
+
+        std::string value = tag.substr(value_start, pos - value_start);
+
+        if (pos < tag.length()) {
+            pos++;  // Skip closing quote
+        }
+
+        attrs[name] = value;
     }
+
     return attrs;
 }
 

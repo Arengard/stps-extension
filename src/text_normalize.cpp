@@ -4,7 +4,7 @@
 #include "duckdb/common/types/data_chunk.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 #include <unordered_map>
-#include <regex>
+#include <cctype>
 
 namespace duckdb {
 namespace stps {
@@ -103,11 +103,33 @@ std::string restore_umlauts(const std::string& input) {
     return convert_ascii_to_umlauts(input);
 }
 
+// Collapse multiple whitespace characters into single space (no regex)
+static std::string collapse_whitespace(const std::string& input) {
+    std::string result;
+    result.reserve(input.size());
+    bool prev_was_space = false;
+
+    for (char c : input) {
+        bool is_space = std::isspace(static_cast<unsigned char>(c));
+        if (is_space) {
+            if (!prev_was_space) {
+                result += ' ';
+            }
+            prev_was_space = true;
+        } else {
+            result += c;
+            prev_was_space = false;
+        }
+    }
+
+    return result;
+}
+
 std::string normalize_text(const std::string& input, bool trim_ws, bool lower_case) {
     std::string result = input;
 
     // Normalize whitespace (multiple spaces to single space)
-    result = std::regex_replace(result, std::regex("\\s+"), " ");
+    result = collapse_whitespace(result);
 
     if (trim_ws) {
         result = trim(result);
@@ -123,8 +145,8 @@ std::string normalize_text(const std::string& input, bool trim_ws, bool lower_ca
 std::string clean_string(const std::string& input) {
     std::string result = trim(input);
 
-    // Normalize whitespace
-    result = std::regex_replace(result, std::regex("\\s+"), " ");
+    // Normalize whitespace (no regex)
+    result = collapse_whitespace(result);
 
     // Remove control characters
     result.erase(std::remove_if(result.begin(), result.end(),

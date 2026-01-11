@@ -7,7 +7,6 @@
 #include "duckdb/main/connection.hpp"
 #include <fstream>
 #include <sstream>
-#include <regex>
 #include <algorithm>
 
 namespace duckdb {
