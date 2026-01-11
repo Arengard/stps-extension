@@ -13,6 +13,10 @@
 #include "drop_null_columns_function.hpp"
 #include "smart_cast_function.hpp"
 #include "smart_cast_scalar.hpp"
+#include "account_validation.hpp"
+#include "fill_functions.hpp"
+#include "plz_validation.hpp"
+#include "street_split.hpp"
 #include "duckdb.hpp"
 #include "duckdb/main/database.hpp"
 #include "duckdb/main/connection.hpp"
@@ -457,6 +461,10 @@ static void LoadPolarsgodmodeFunctions(DatabaseInstance &db) {
     stps::RegisterDropNullColumnsFunction(loader);
     stps::RegisterSmartCastTableFunctions(loader);
     stps::RegisterSmartCastScalarFunction(loader);
+    stps::RegisterAccountValidationFunctions(loader);
+    stps::RegisterFillFunctions(loader);
+    stps::RegisterPlzValidationFunctions(loader);
+    stps::RegisterStreetSplitFunctions(loader);
 }
 
 } // namespace duckdb
