@@ -53,16 +53,16 @@ static string ApplyTransformation(const string& column_name, const string& trans
     string result = transformation;
     string quoted_col = "\"" + column_name + "\"";
     
-    // Simple replacement: replace 'c' with column name
-    // We need to be careful to only replace 'c' as a standalone identifier
+    // Replace 'c' with column name when it appears as a standalone identifier
+    // We need to be careful to only replace 'c' as a standalone word
     size_t pos = 0;
     string temp_result;
     
     while (pos < result.length()) {
         if (result[pos] == 'c') {
             // Check if 'c' is standalone (not part of a word)
-            bool is_start = (pos == 0 || !isalnum(result[pos-1]) && result[pos-1] != '_');
-            bool is_end = (pos + 1 >= result.length() || !isalnum(result[pos+1]) && result[pos+1] != '_');
+            bool is_start = (pos == 0 || (!std::isalnum(static_cast<unsigned char>(result[pos-1])) && result[pos-1] != '_'));
+            bool is_end = (pos + 1 >= result.length() || (!std::isalnum(static_cast<unsigned char>(result[pos+1])) && result[pos+1] != '_'));
             
             if (is_start && is_end) {
                 temp_result += quoted_col;
@@ -89,6 +89,17 @@ static unique_ptr<FunctionData> LambdaBind(ClientContext &context, TableFunction
     
     result->table_name = input.inputs[0].GetValue<string>();
     result->lambda_expr = input.inputs[1].GetValue<string>();
+    
+    // Basic validation: prevent SQL injection by rejecting dangerous characters
+    if (result->table_name.empty()) {
+        throw BinderException("Table name cannot be empty");
+    }
+    // Disallow quotes and semicolons which could be used for SQL injection
+    if (result->table_name.find('"') != string::npos || 
+        result->table_name.find('\'') != string::npos ||
+        result->table_name.find(';') != string::npos) {
+        throw BinderException("Invalid table name: contains disallowed characters");
+    }
 
     // Optional positional parameter: varchar_only (default: true)
     if (input.inputs.size() >= 3) {
@@ -112,7 +123,7 @@ static unique_ptr<FunctionData> LambdaBind(ClientContext &context, TableFunction
     // Create a connection to query table schema
     Connection conn(context.db->GetDatabase(context));
 
-    // Get table schema
+    // Get table schema - table name is validated above for SQL injection
     auto schema_query = "SELECT * FROM " + result->table_name + " LIMIT 0";
     auto schema_result = conn.Query(schema_query);
     if (schema_result->HasError()) {
