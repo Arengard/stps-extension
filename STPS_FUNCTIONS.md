@@ -1,6 +1,6 @@
 # Stps Functions - Complete Reference
 
-## ✅ All 20 Functions with `stps_` Prefix
+## ✅ All 19 Functions with `stps_` Prefix
 
 Renamed from `pgm_` to match your original `Stps` class from ldf.py!
 
@@ -21,7 +21,7 @@ SELECT stps_get_guid('test', 'data');
 
 ---
 
-## 📋 Complete Function List (20 Functions)
+## 📋 Complete Function List (19 Functions)
 
 ### UUID/GUID Functions (3)
 
@@ -305,15 +305,15 @@ Now you can use `duckdb` without the `-unsigned` flag!
 | Case Transformations | 7 | `stps_to_*` (snake, camel, pascal, kebab, const, sentence, title) |
 | Text Normalization | 4 | `stps_remove_accents`, `stps_restore_umlauts`, `stps_clean_string`, `stps_normalize` |
 | Null Handling | 2 | `stps_map_empty_to_null`, `stps_map_null_to_empty` |
-| PLZ Validation | 4 | `stps_is_valid_plz`, `stps_get_plz_gist`, `stps_set_plz_gist` |
-| **Total** | **20** | All use `stps_` prefix |
+| PLZ Validation | 3 | `stps_is_valid_plz` (2 overloads), `stps_get_plz_gist`, `stps_set_plz_gist` |
+| **Total** | **19** | All use `stps_` prefix |
 
 ---
 
 ## ✅ Why `stps_` prefix?
 
 - **Matches your original class**: `Stps` class from `stps/ldf.py`
-- **Consistent naming**: All 17 functions use the same prefix
+- **Consistent naming**: All 19 functions use the same prefix
 - **Avoids conflicts**: Unique prefix prevents collisions with other extensions
 - **Recognizable**: Easy to find with tab completion: `stps_<TAB>`
 

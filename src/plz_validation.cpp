@@ -45,7 +45,6 @@ void PlzLoader::Reset() {
     }
     loaded_ = false;
     valid_plz_codes_.clear();
-    plz_file_path_.clear();
 }
 
 std::string PlzLoader::GetPlzFilePath() {
