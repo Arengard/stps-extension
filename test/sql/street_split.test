@@ -1,0 +1,25 @@
+# name: test/sql/street_split.test
+# description: Test stps_split_street abbreviation and trimming
+# group: [stps]
+
+require stps
+
+query T
+SELECT (stps_split_street('Alemmanenstrasse 1-41')).street_name;
+----
+Alemmanenstr.
+
+query T
+SELECT (stps_split_street('Alemmanenstrasse 1-41')).street_number;
+----
+1-41
+
+query T
+SELECT (stps_split_street('Alemmanenstraße 1-41')).street_name;
+----
+Alemmanenstr.
+
+query T
+SELECT (stps_split_street('Alemmanenstraße 1-41')).street_number;
+----
+1-41
