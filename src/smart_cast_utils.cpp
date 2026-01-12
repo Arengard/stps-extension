@@ -584,18 +584,7 @@ static bool ParseDateParts(const std::string& str, int& part1, int& part2, int& 
         return false;
     }
     
-    // If s2 has more than 2 digits and s1 is not a 4-digit year, reject
-    // This catches patterns like "1.23.456" where s2=23 (2 digits is ok) but s3=456 (3 digits)
-    // Actually, we need to be more careful here - "1.2.2024" is valid (day.month.year)
-    // The issue is patterns like "1.23.456" where s2=23, s3=456
-    // In a valid date, if s3 is the year:
-    //   - For 2-digit year: s3 should have 2 digits
-    //   - For 4-digit year: s3 should have 4 digits
-    // So s3 with exactly 3 digits is suspicious for year position
-    
-    // For D.M.Y format: s1 and s2 should be 1-2 digits, s3 should be 2 or 4 digits
-    // For Y.M.D format (s1 is 4 digits): s2 and s3 should be 1-2 digits
-    
+    // Validate date part lengths based on format
     if (!s1_is_4digit_year) {
         // D.M.Y format expected
         // s1 (day) should be 1-2 digits
