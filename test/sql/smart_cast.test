@@ -67,6 +67,38 @@ SELECT stps_smart_cast('1.234.567');
 ----
 1234567
 
+# Large numbers in German format should not be confused with dates
+query I
+SELECT stps_smart_cast('15.012.024');
+----
+15012024
+
+query I
+SELECT stps_smart_cast('12.345.678');
+----
+12345678
+
+query I
+SELECT stps_smart_cast('1.000.000.000');
+----
+1000000000
+
+# Invalid number formats should remain as VARCHAR, not be parsed as dates
+query I
+SELECT stps_smart_cast('1.23.456');
+----
+1.23.456
+
+query I
+SELECT stps_smart_cast('1.2.345');
+----
+1.2.345
+
+query I
+SELECT stps_smart_cast('12.3.456');
+----
+12.3.456
+
 # Double parsing tests - US format
 query I
 SELECT stps_smart_cast('123.45');

@@ -566,6 +566,40 @@ static bool ParseDateParts(const std::string& str, int& part1, int& part2, int& 
 
     if (s1.empty() || s2.empty() || s3.empty()) return false;
 
+    // Reject patterns that look like thousands-separated numbers rather than dates.
+    // Valid date patterns:
+    //   - D.M.YYYY or DD.MM.YYYY: s1 and s2 are 1-2 digits, s3 is 2-4 digits
+    //   - YYYY.MM.DD: s1 is 4 digits, s2 and s3 are 1-2 digits
+    // Invalid patterns (likely numbers):
+    //   - Both s2 and s3 have exactly 3 digits (e.g., "1.234.567" -> thousands separator format)
+    //   - s2 has more than 2 digits when s1 is not a 4-digit year
+    
+    bool s1_is_4digit_year = (s1.length() == 4);
+    bool s2_looks_like_thousands = (s2.length() == 3);
+    bool s3_looks_like_thousands = (s3.length() == 3);
+    
+    // If s2 and s3 both have exactly 3 digits, this looks like a thousands-separated number
+    // (e.g., "1.234.567" or "12.345.678")
+    if (s2_looks_like_thousands && s3_looks_like_thousands) {
+        return false;
+    }
+    
+    // Validate date part lengths based on format
+    if (!s1_is_4digit_year) {
+        // D.M.Y format expected
+        // s1 (day) should be 1-2 digits
+        if (s1.length() > 2) return false;
+        // s2 (month) should be 1-2 digits  
+        if (s2.length() > 2) return false;
+        // s3 (year) should be 2 or 4 digits - reject 3-digit years as they look like number parts
+        if (s3.length() == 3) return false;
+        if (s3.length() > 4) return false;
+    } else {
+        // Y.M.D format: s2 and s3 should be 1-2 digits
+        if (s2.length() > 2) return false;
+        if (s3.length() > 2) return false;
+    }
+
     try {
         part1 = std::stoi(s1);
         part2 = std::stoi(s2);
