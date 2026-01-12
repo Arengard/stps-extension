@@ -568,7 +568,11 @@ static SRes ParseHeaderFromBuffer(CSz7zArchive *archive, const Byte *buf, size_t
         return SZ_ERROR_ARCHIVE;
     
     const Byte *files_ptr = files_pos + 1;
-    return ReadFilesInfoFromBuf(archive, &files_ptr, bufEnd);
+    res = ReadFilesInfoFromBuf(archive, &files_ptr, bufEnd);
+    if (res != SZ_OK)
+        return res;
+    
+    return archive->numFiles > 0 ? SZ_OK : SZ_ERROR_ARCHIVE;
 }
 
 /* Read files info from buffer */
