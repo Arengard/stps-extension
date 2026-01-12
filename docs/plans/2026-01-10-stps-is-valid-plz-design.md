@@ -22,14 +22,13 @@ stps_is_valid_plz(plz VARCHAR, strict BOOLEAN) -> BOOLEAN
 - No external data needed, instant validation
 
 ### Strict Mode (strict=true)
-- Downloads PLZ list on first use to `~/.stps/plz.csv`
+- Reads PLZ list from local file `C:\stps\Postleitzahlen.txt` (Windows) or `/stps/Postleitzahlen.txt` (Unix)
 - Returns `true` only if PLZ exists in the actual database
 - Returns `false` for valid format but non-existent PLZ
 
 ### Data Source
-- URL: `https://gist.githubusercontent.com/jbspeakr/4565964/raw/`
-- Format: CSV with columns `plz,ort,bundesland`
-- Storage: `~/.stps/plz.csv`
+- Path: `C:\stps\Postleitzahlen.txt` (Windows) or `/stps/Postleitzahlen.txt` (Unix)
+- Format: First line is version header (e.g., `#Version:01.2026`), followed by one PLZ per line
 - Loading: On first strict mode call, cached in memory
 
 ### Input/Output
@@ -67,16 +66,24 @@ class PlzLoader {
 public:
     static PlzLoader& GetInstance();  // Singleton
     bool IsLoaded() const;
-    void EnsureLoaded();              // Downloads if needed
+    void EnsureLoaded();              // Loads from file if needed
     bool PlzExists(const std::string& plz) const;
+    std::string GetPlzFilePath() const;  // Returns path to PLZ file
+    void Reset();                        // Clears cached data
 
 private:
     PlzLoader() = default;
     std::unordered_set<std::string> valid_plz_codes_;
     bool loaded_ = false;
+    
+    // Path to PLZ file
+#ifdef _WIN32
+    static constexpr const char* PLZ_FILE_PATH = "C:\\stps\\Postleitzahlen.txt";
+#else
+    static constexpr const char* PLZ_FILE_PATH = "/stps/Postleitzahlen.txt";
+#endif
 
-    std::string GetPlzFilePath();     // ~/.stps/plz.csv
-    bool DownloadPlzFile(const std::string& path);
+    bool FileExists(const std::string& path) const;
     bool LoadFromFile(const std::string& path);
 };
 
@@ -95,5 +102,5 @@ void RegisterPlzValidationFunctions(ExtensionLoader &loader);
    - Numeric value must be >= 01000 and <= 99999
 
 2. **Strict check** (strict=true only):
-   - Ensure PLZ list is loaded (download if needed)
+   - Ensure PLZ list is loaded from local file
    - Check if PLZ exists in `valid_plz_codes_` set
