@@ -1,0 +1,20 @@
+# name: test/sql/sevenzip.test
+# description: Ensure 7z functions handle archives with encoded/compressed headers
+# group: [stps]
+
+require stps
+
+# stps_view_7zip handles encoded headers
+query T
+SELECT count(*) = 1
+FROM stps_view_7zip('test/data/encoded-header.7z')
+WHERE filename = 'encoded.txt';
+----
+true
+
+# stps_7zip binding succeeds for encoded headers
+query T
+SELECT message LIKE '7z archive contains % file%'
+FROM stps_7zip('test/data/encoded-header.7z');
+----
+true
