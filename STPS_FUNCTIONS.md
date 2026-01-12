@@ -1,6 +1,6 @@
 # Stps Functions - Complete Reference
 
-## ✅ All 17 Functions with `stps_` Prefix
+## ✅ All Functions with `stps_` Prefix
 
 Renamed from `pgm_` to match your original `Stps` class from ldf.py!
 
@@ -21,7 +21,76 @@ SELECT stps_get_guid('test', 'data');
 
 ---
 
-## 📋 Complete Function List (17 Functions)
+## 📋 Complete Function List
+
+### 🔥 Lambda Functions (NEW!)
+
+#### `stps_lambda(table_name, lambda_expr, [varchar_only], [column_pattern])` - Apply transformations to all columns
+
+Apply lambda-like transformations to all columns in a table at once. Perfect for bulk data cleaning and transformation.
+
+**Basic Syntax:**
+```sql
+SELECT * FROM stps_lambda('table_name', 'c -> transformation(c)');
+```
+
+**Parameters:**
+- `table_name`: Name of the table to transform
+- `lambda_expr`: Lambda expression or SQL expression to apply
+  - Format: `'c -> function(c)'` where `c` represents each column
+  - Or just: `'function(c)'` without the arrow notation
+- `varchar_only` (optional, default=true): Only apply to VARCHAR columns
+- `column_pattern` (optional): Only apply to columns containing this pattern
+
+**Examples:**
+
+```sql
+-- Trim all VARCHAR columns
+SELECT * FROM stps_lambda('my_table', 'c -> trim(c)');
+
+-- Convert all text to uppercase
+SELECT * FROM stps_lambda('my_table', 'c -> upper(c)');
+
+-- Apply STPS functions
+SELECT * FROM stps_lambda('my_table', 'c -> stps_to_snake_case(c)');
+SELECT * FROM stps_lambda('my_table', 'c -> stps_normalize(c)');
+
+-- Chain multiple transformations
+SELECT * FROM stps_lambda('my_table', 'c -> upper(stps_to_snake_case(c))');
+
+-- Apply to all columns (not just VARCHAR)
+SELECT * FROM stps_lambda('my_table', 'c -> trim(c)', false);
+
+-- Apply only to columns with 'name' in their name
+SELECT * FROM stps_lambda('my_table', 'c -> upper(c)', true, 'name');
+
+-- Custom SQL expressions
+SELECT * FROM stps_lambda('my_table', 'CASE WHEN c IS NULL THEN ''empty'' ELSE c END');
+
+-- Named parameters
+SELECT * FROM stps_lambda('my_table', 'c -> trim(c)', varchar_only := false);
+SELECT * FROM stps_lambda('my_table', 'c -> upper(c)', column_pattern := 'name');
+```
+
+**Real-World Use Cases:**
+
+```sql
+-- Clean all text columns in one go
+CREATE TABLE clean_data AS 
+SELECT * FROM stps_lambda('raw_data', 'c -> trim(c)');
+
+-- Standardize naming conventions
+CREATE TABLE snake_case_data AS
+SELECT * FROM stps_lambda('camel_case_data', 'c -> stps_to_snake_case(c)');
+
+-- Remove extra whitespace from all columns
+SELECT * FROM stps_lambda('messy_data', 'c -> stps_clean_string(c)');
+
+-- Convert empty strings to NULL across all columns
+SELECT * FROM stps_lambda('data_table', 'c -> stps_map_empty_to_null(c)');
+```
+
+---
 
 ### UUID/GUID Functions (3)
 

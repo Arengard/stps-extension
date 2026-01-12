@@ -62,6 +62,38 @@ SELECT * FROM stps_path('C:/base/path', 'subdir', 'file.txt');
 
 ## Available Functions
 
+### 🔥 Lambda Functions (NEW!)
+
+Apply transformations to all columns at once using lambda-like expressions. Perfect for bulk data cleaning.
+
+#### `stps_lambda(table_name, lambda_expr, [varchar_only], [column_pattern])`
+
+**Quick Examples:**
+```sql
+-- Trim all VARCHAR columns
+SELECT * FROM stps_lambda('my_table', 'c -> trim(c)');
+
+-- Convert all text to uppercase
+SELECT * FROM stps_lambda('my_table', 'c -> upper(c)');
+
+-- Apply STPS functions to all columns
+SELECT * FROM stps_lambda('my_table', 'c -> stps_to_snake_case(c)');
+
+-- Only columns containing 'name'
+SELECT * FROM stps_lambda('my_table', 'c -> upper(c)', true, 'name');
+```
+
+**Parameters:**
+- `table_name` - Table to transform
+- `lambda_expr` - Transformation expression (`c -> function(c)` or just `function(c)`)
+- `varchar_only` - Only apply to VARCHAR columns (default: true)
+- `column_pattern` - Only columns matching this pattern
+
+**Supported Transformations:**
+- Built-in SQL: `TRIM`, `UPPER`, `LOWER`, `SUBSTR`, etc.
+- All STPS functions: `stps_normalize`, `stps_clean_string`, case conversions, etc.
+- Custom SQL expressions: `CASE WHEN c IS NULL THEN 'empty' ELSE c END`
+
 ### Case Transformation Functions
 - `stps_to_snake_case(text)` - Convert to snake_case
 - `stps_to_camel_case(text)` - Convert to camelCase
