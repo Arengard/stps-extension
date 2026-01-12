@@ -29,6 +29,7 @@ set(EXTENSION_SOURCES
     src/smart_cast_utils.cpp
     src/smart_cast_scalar.cpp
     src/smart_cast_function.cpp
+    src/stps_lambda_function.cpp
     src/shared/filesystem_utils.cpp
     src/shared/pattern_matcher.cpp
     src/shared/content_searcher.cpp
@@ -36,6 +37,9 @@ set(EXTENSION_SOURCES
     src/kontocheck/check_methods.cpp
     src/account_validation.cpp
     src/blz_lut_loader.cpp
+    # ZIP archive reading functions (using miniz)
+    src/zip_functions.cpp
+    src/miniz/miniz.c
 )
 
 build_static_extension(${TARGET_NAME} ${EXTENSION_SOURCES})

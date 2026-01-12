@@ -1,0 +1,184 @@
+# name: test/sql/lambda_function.test
+# description: Test stps_lambda table function
+# group: [stps]
+
+require stps
+
+# Create a test table with various column types
+statement ok
+CREATE TABLE test_data AS SELECT
+    'John Doe' as name,
+    '  alice@example.com  ' as email,
+    'VARCHAR' as type_col,
+    123 as id,
+    45.67 as amount;
+
+# Test basic TRIM transformation on VARCHAR columns only
+query IIIII
+SELECT * FROM stps_lambda('test_data', 'c -> trim(c)');
+----
+John Doe	alice@example.com	VARCHAR	123	45.67
+
+# Test UPPER transformation
+query IIIII
+SELECT * FROM stps_lambda('test_data', 'c -> upper(c)');
+----
+JOHN DOE	ALICE@EXAMPLE.COM	VARCHAR	123	45.67
+
+# Test LOWER transformation
+query IIIII
+SELECT * FROM stps_lambda('test_data', 'c -> lower(c)');
+----
+john doe	alice@example.com	varchar	123	45.67
+
+# Test with lambda syntax (c -> expression)
+query IIIII
+SELECT * FROM stps_lambda('test_data', 'c -> upper(trim(c))');
+----
+JOHN DOE	ALICE@EXAMPLE.COM	VARCHAR	123	45.67
+
+# Test varchar_only = false (apply to all columns would fail for non-strings)
+# This should work with a safe transformation
+query IIIII
+SELECT name, email, type_col FROM stps_lambda('test_data', 'c -> trim(c)', false) LIMIT 1;
+----
+John Doe	alice@example.com	VARCHAR
+
+# Test column_pattern filter (only columns containing 'name')
+statement ok
+CREATE TABLE test_pattern AS SELECT
+    'John' as first_name,
+    'Doe' as last_name,
+    'test@example.com' as email;
+
+query III
+SELECT * FROM stps_lambda('test_pattern', 'c -> upper(c)', true, 'name');
+----
+JOHN	DOE	test@example.com
+
+# Test with named parameter varchar_only
+query IIIII
+SELECT * FROM stps_lambda('test_data', 'c -> trim(c)', varchar_only := true);
+----
+John Doe	alice@example.com	VARCHAR	123	45.67
+
+# Test integration with stps_to_snake_case
+statement ok
+CREATE TABLE test_case AS SELECT
+    'HelloWorld' as col1,
+    'TestData' as col2;
+
+query II
+SELECT * FROM stps_lambda('test_case', 'c -> stps_to_snake_case(c)');
+----
+hello_world	test_data
+
+# Test integration with stps_to_camel_case
+query II
+SELECT * FROM stps_lambda('test_case', 'c -> stps_to_camel_case(c)');
+----
+helloWorld	testData
+
+# Test integration with stps_to_pascal_case
+query II
+SELECT * FROM stps_lambda('test_case', 'c -> stps_to_pascal_case(c)');
+----
+HelloWorld	TestData
+
+# Test integration with stps_to_kebab_case  
+query II
+SELECT * FROM stps_lambda('test_case', 'c -> stps_to_kebab_case(c)');
+----
+hello-world	test-data
+
+# Test integration with stps_to_const_case
+query II
+SELECT * FROM stps_lambda('test_case', 'c -> stps_to_const_case(c)');
+----
+HELLO_WORLD	TEST_DATA
+
+# Test integration with stps_normalize
+statement ok
+CREATE TABLE test_normalize AS SELECT
+    'Café' as text1,
+    'Über' as text2;
+
+query II
+SELECT * FROM stps_lambda('test_normalize', 'c -> stps_normalize(c)');
+----
+cafe	uber
+
+# Test integration with stps_clean_string
+statement ok
+CREATE TABLE test_clean AS SELECT
+    '  Hello  World  ' as text1,
+    'Test\nData' as text2;
+
+query II
+SELECT * FROM stps_lambda('test_clean', 'c -> stps_clean_string(c)');
+----
+Hello World	Test Data
+
+# Test custom SQL expression (CASE WHEN)
+statement ok
+CREATE TABLE test_null AS SELECT
+    'data' as col1,
+    NULL as col2,
+    'test' as col3;
+
+query III
+SELECT * FROM stps_lambda('test_null', 'CASE WHEN c IS NULL THEN ''empty'' ELSE c END');
+----
+data	empty	test
+
+# Test integration with stps_map_empty_to_null
+statement ok
+CREATE TABLE test_empty AS SELECT
+    'data' as col1,
+    '' as col2,
+    'test' as col3;
+
+query III
+SELECT * FROM stps_lambda('test_empty', 'c -> stps_map_empty_to_null(c)');
+----
+data	NULL	test
+
+# Test with multiple transformations chained
+query II
+SELECT * FROM stps_lambda('test_case', 'c -> upper(stps_to_snake_case(c))');
+----
+HELLO_WORLD	TEST_DATA
+
+# Test error: table doesn't exist
+statement error
+SELECT * FROM stps_lambda('nonexistent_table', 'c -> trim(c)');
+----
+Table 'nonexistent_table' does not exist
+
+# Test error: missing arguments
+statement error
+SELECT * FROM stps_lambda('test_data');
+----
+stps_lambda requires at least two arguments
+
+# Cleanup
+statement ok
+DROP TABLE test_data;
+
+statement ok
+DROP TABLE test_pattern;
+
+statement ok
+DROP TABLE test_case;
+
+statement ok
+DROP TABLE test_normalize;
+
+statement ok
+DROP TABLE test_clean;
+
+statement ok
+DROP TABLE test_null;
+
+statement ok
+DROP TABLE test_empty;
