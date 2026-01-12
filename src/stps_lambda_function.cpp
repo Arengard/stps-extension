@@ -24,7 +24,6 @@ struct LambdaBindData : public TableFunctionData {
 struct LambdaGlobalState : public GlobalTableFunctionState {
     unique_ptr<QueryResult> result;
     unique_ptr<DataChunk> current_chunk;
-    idx_t chunk_offset = 0;
 };
 
 // Parse lambda expression to extract the transformation
@@ -191,13 +190,13 @@ static void LambdaExecute(ClientContext &context, TableFunctionInput &data, Data
     auto &gstate = data.global_state->Cast<LambdaGlobalState>();
 
     if (!gstate.result) {
+        output.SetCardinality(0);
         return;
     }
 
     // Try to fetch current chunk if we don't have one
     if (!gstate.current_chunk) {
         gstate.current_chunk = gstate.result->Fetch();
-        gstate.chunk_offset = 0;
     }
 
     // If no chunk available, we're done
@@ -206,25 +205,11 @@ static void LambdaExecute(ClientContext &context, TableFunctionInput &data, Data
         return;
     }
 
-    // Copy data from current chunk to output
-    idx_t rows_to_copy = gstate.current_chunk->size() - gstate.chunk_offset;
-    if (rows_to_copy > STANDARD_VECTOR_SIZE) {
-        rows_to_copy = STANDARD_VECTOR_SIZE;
-    }
-
-    for (idx_t col = 0; col < output.ColumnCount(); col++) {
-        VectorOperations::Copy(gstate.current_chunk->data[col], output.data[col], 
-                              gstate.current_chunk->size(), gstate.chunk_offset, 0, rows_to_copy);
-    }
-
-    output.SetCardinality(rows_to_copy);
-    gstate.chunk_offset += rows_to_copy;
-
-    // If we've exhausted this chunk, fetch the next one
-    if (gstate.chunk_offset >= gstate.current_chunk->size()) {
-        gstate.current_chunk = gstate.result->Fetch();
-        gstate.chunk_offset = 0;
-    }
+    // Reference the chunk data directly to output
+    output.Reference(*gstate.current_chunk);
+    
+    // Fetch the next chunk for next call
+    gstate.current_chunk = gstate.result->Fetch();
 }
 
 // Register the stps_lambda table function
@@ -239,7 +224,7 @@ void RegisterLambdaFunction(ExtensionLoader &loader) {
     lambda_func.named_parameters["varchar_only"] = LogicalType::BOOLEAN;
     lambda_func.named_parameters["column_pattern"] = LogicalType::VARCHAR;
 
-    loader.AddFunction(lambda_func);
+    loader.RegisterFunction(lambda_func);
 }
 
 } // namespace stps
