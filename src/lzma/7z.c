@@ -564,20 +564,18 @@ static SRes ParseHeaderFromBuffer(CSz7zArchive *archive, const Byte *buf, size_t
     
     /* Scan for FilesInfo section directly to avoid strict stream parsing */
     const Byte *files_pos = NULL;
-    const Byte *scan = p;
+    const Byte *scan;
     
-    while (scan < bufEnd)
+    for (scan = p; scan < bufEnd; scan++)
     {
-        scan = (const Byte *)memchr(scan, k7zIdFilesInfo, bufEnd - scan);
-        if (!scan)
-            break;
+        if (*scan != k7zIdFilesInfo)
+            continue;
         
-        if (scan == p || *(scan - 1) == k7zIdEnd)
+        if (scan == p || (scan > buf && *(scan - 1) == k7zIdEnd))
         {
             files_pos = scan;
             break;
         }
-        scan++;
     }
     
     if (!files_pos)
