@@ -306,19 +306,57 @@ Now you can use `duckdb` without the `-unsigned` flag!
 | Text Normalization | 4 | `stps_remove_accents`, `stps_restore_umlauts`, `stps_clean_string`, `stps_normalize` |
 | Null Handling | 2 | `stps_map_empty_to_null`, `stps_map_null_to_empty` |
 | PLZ Validation | 3 | `stps_is_valid_plz` (2 overloads), `stps_get_plz_gist`, `stps_set_plz_gist` |
-| **Total** | **19** | All use `stps_` prefix |
+| ZIP Archives | 2 | `stps_zip`, `stps_view_zip` |
+| 7-Zip Archives | 2 | `stps_7zip`, `stps_view_7zip` |
+| **Total** | **23** | All use `stps_` prefix |
+
+---
+
+## 📦 Archive Functions
+
+### ZIP Archive Functions
+
+#### `stps_view_zip(zip_path)` - List files in a ZIP archive
+```sql
+SELECT * FROM stps_view_zip('/path/to/archive.zip');
+-- Returns: filename, uncompressed_size, compressed_size, is_directory, index
+```
+
+#### `stps_zip(zip_path)` - Read CSV data from a ZIP archive
+```sql
+-- Read first/only file in archive
+SELECT * FROM stps_zip('/path/to/data.zip');
+
+-- Read specific file from archive
+SELECT * FROM stps_zip('/path/to/archive.zip', 'data/file.csv');
+```
+
+### 7-Zip Archive Functions
+
+#### `stps_view_7zip(archive_path)` - List files in a 7z archive
+```sql
+SELECT * FROM stps_view_7zip('/path/to/archive.7z');
+-- Returns: filename, uncompressed_size, is_directory, index
+```
+
+#### `stps_7zip(archive_path)` - Read info from a 7z archive
+```sql
+SELECT * FROM stps_7zip('/path/to/archive.7z');
+-- Note: Full content extraction requires additional implementation.
+-- Use stps_view_7zip() to list files in the archive.
+```
 
 ---
 
 ## ✅ Why `stps_` prefix?
 
 - **Matches your original class**: `Stps` class from `stps/ldf.py`
-- **Consistent naming**: All 19 functions use the same prefix
+- **Consistent naming**: All 23 functions use the same prefix
 - **Avoids conflicts**: Unique prefix prevents collisions with other extensions
 - **Recognizable**: Easy to find with tab completion: `stps_<TAB>`
 
 ---
 
-**Built:** December 27, 2025
-**Extension:** stps.duckdb_extension (5.5 MB)
-**Platform:** macOS ARM64
+**Built:** January 12, 2026
+**Extension:** stps.duckdb_extension
+**Platform:** macOS ARM64, Linux, Windows
