@@ -6,6 +6,7 @@
 #include <string.h>
 #include <stdio.h>
 #include "7z.h"
+#include "LzmaDec.h"
 
 /* 7z signature: '7' 'z' 0xBC 0xAF 0x27 0x1C */
 const Byte k7zSignature[k7zSignatureSize] = {'7', 'z', 0xBC, 0xAF, 0x27, 0x1C};
@@ -220,11 +221,549 @@ static SRes SkipData(FILE *f, UInt64 size)
     return fseek(f, (long)size, SEEK_CUR) == 0 ? SZ_OK : SZ_ERROR_READ;
 }
 
+/* Structure to hold encoded header streams info */
+typedef struct
+{
+    UInt64 packPos;         /* Offset of packed data after signature header */
+    UInt64 packSize;        /* Size of compressed data */
+    UInt64 unpackSize;      /* Size of uncompressed data */
+    UInt32 coderMethod;     /* Codec method ID */
+    Byte lzmaProps[5];      /* LZMA properties (5 bytes) */
+    Bool hasProps;          /* Whether we have properties */
+} CEncodedHeaderInfo;
+
+/* Read a number from memory buffer */
+static SRes ReadNumberFromBuf(const Byte **buf, const Byte *bufEnd, UInt64 *value)
+{
+    const Byte *p = *buf;
+    Byte firstByte;
+    UInt64 mask = 0x80;
+    UInt64 val = 0;
+    int i;
+    
+    if (p >= bufEnd)
+        return SZ_ERROR_READ;
+    
+    firstByte = *p++;
+    
+    for (i = 0; i < 8; i++)
+    {
+        if ((firstByte & mask) == 0)
+        {
+            val |= (((UInt64)firstByte & (mask - 1)) << (8 * i));
+            break;
+        }
+        
+        if (p >= bufEnd)
+            return SZ_ERROR_READ;
+        
+        Byte b = *p++;
+        val |= ((UInt64)b << (8 * i));
+        mask >>= 1;
+    }
+    
+    *value = val;
+    *buf = p;
+    return SZ_OK;
+}
+
+/* Read byte from buffer */
+static SRes ReadByteFromBuf(const Byte **buf, const Byte *bufEnd, Byte *value)
+{
+    if (*buf >= bufEnd)
+        return SZ_ERROR_READ;
+    *value = **buf;
+    (*buf)++;
+    return SZ_OK;
+}
+
+/* Read the streams info for encoded header */
+static SRes ReadEncodedHeaderStreamsInfo(FILE *f, CEncodedHeaderInfo *info)
+{
+    Byte type;
+    UInt64 numPackStreams;
+    UInt64 numFolders;
+    
+    memset(info, 0, sizeof(*info));
+    
+    /* Read type - should be k7zIdMainStreamsInfo (0x04) */
+    RINOK(ReadByte(f, &type));
+    if (type != k7zIdMainStreamsInfo)
+        return SZ_ERROR_ARCHIVE;
+    
+    /* Read sub-sections */
+    RINOK(ReadByte(f, &type));
+    
+    while (type != k7zIdEnd)
+    {
+        switch (type)
+        {
+        case k7zIdPackInfo:
+            /* Read pack position */
+            RINOK(ReadNumber(f, &info->packPos));
+            /* Read number of pack streams */
+            RINOK(ReadNumber(f, &numPackStreams));
+            if (numPackStreams != 1)
+                return SZ_ERROR_UNSUPPORTED;  /* Only support single stream for now */
+            
+            RINOK(ReadByte(f, &type));
+            if (type == k7zIdSize)
+            {
+                RINOK(ReadNumber(f, &info->packSize));
+                RINOK(ReadByte(f, &type));
+            }
+            if (type == k7zIdCRC)
+            {
+                /* Skip CRC data - first byte indicates which CRCs are defined */
+                /* For single stream, skip the definition byte and the CRC itself */
+                RINOK(SkipData(f, 1));  /* All defined byte */
+                RINOK(SkipData(f, 4));  /* CRC value */
+                RINOK(ReadByte(f, &type));
+            }
+            if (type != k7zIdEnd)
+                return SZ_ERROR_ARCHIVE;
+            break;
+            
+        case k7zIdUnpackInfo:
+            RINOK(ReadByte(f, &type));
+            if (type != k7zIdFolder)
+                return SZ_ERROR_ARCHIVE;
+            
+            /* Read number of folders */
+            RINOK(ReadNumber(f, &numFolders));
+            if (numFolders != 1)
+                return SZ_ERROR_UNSUPPORTED;  /* Only support single folder for now */
+            
+            /* External indicator (should be 0 for inline data) */
+            RINOK(ReadByte(f, &type));
+            if (type != 0)
+                return SZ_ERROR_UNSUPPORTED;
+            
+            /* Read folder info - number of coders */
+            {
+                UInt64 numCoders;
+                Byte coderInfo;
+                UInt64 numInStreams = 0, numOutStreams = 0;
+                
+                RINOK(ReadNumber(f, &numCoders));
+                if (numCoders != 1)
+                    return SZ_ERROR_UNSUPPORTED;  /* Only support single coder for now */
+                
+                /* Read coder info */
+                RINOK(ReadByte(f, &coderInfo));
+                
+                /* Bits 0-3: ID size */
+                UInt32 idSize = (coderInfo & 0x0F);
+                Bool isComplex = (coderInfo & 0x10) != 0;
+                Bool hasAttributes = (coderInfo & 0x20) != 0;
+                
+                if (idSize > 4)
+                    return SZ_ERROR_UNSUPPORTED;
+                
+                /* Read codec ID */
+                info->coderMethod = 0;
+                for (UInt32 i = 0; i < idSize; i++)
+                {
+                    Byte b;
+                    RINOK(ReadByte(f, &b));
+                    info->coderMethod = (info->coderMethod << 8) | b;
+                }
+                
+                /* Only support LZMA for now */
+                if (info->coderMethod != k7zMethodIdLZMA && info->coderMethod != k7zMethodIdCopy)
+                    return SZ_ERROR_UNSUPPORTED;
+                
+                if (isComplex)
+                {
+                    RINOK(ReadNumber(f, &numInStreams));
+                    RINOK(ReadNumber(f, &numOutStreams));
+                }
+                else
+                {
+                    numInStreams = 1;
+                    numOutStreams = 1;
+                }
+                
+                /* Read properties if present */
+                if (hasAttributes)
+                {
+                    UInt64 propsSize;
+                    RINOK(ReadNumber(f, &propsSize));
+                    
+                    if (propsSize == 5)
+                    {
+                        RINOK(ReadBytes(f, info->lzmaProps, 5));
+                        info->hasProps = True;
+                    }
+                    else
+                    {
+                        /* Skip unsupported properties */
+                        RINOK(SkipData(f, propsSize));
+                    }
+                }
+            }
+            
+            /* Read unpack sizes */
+            RINOK(ReadByte(f, &type));
+            if (type != k7zIdCodersUnpackSize)
+            {
+                /* Try to find CodersUnpackSize */
+                while (type != k7zIdCodersUnpackSize && type != k7zIdEnd)
+                {
+                    RINOK(ReadByte(f, &type));
+                }
+            }
+            
+            if (type == k7zIdCodersUnpackSize)
+            {
+                RINOK(ReadNumber(f, &info->unpackSize));
+                RINOK(ReadByte(f, &type));
+            }
+            
+            /* Skip remaining data until end */
+            while (type != k7zIdEnd)
+            {
+                if (type == k7zIdCRC)
+                {
+                    RINOK(SkipData(f, 1));  /* All defined byte */
+                    RINOK(SkipData(f, 4));  /* CRC value */
+                }
+                RINOK(ReadByte(f, &type));
+            }
+            break;
+            
+        default:
+            /* Skip unknown sections - but we need to know the size */
+            return SZ_ERROR_UNSUPPORTED;
+        }
+        
+        RINOK(ReadByte(f, &type));
+    }
+    
+    return SZ_OK;
+}
+
+/* Forward declare ParseHeaderFromBuffer */
+static SRes ParseHeaderFromBuffer(CSz7zArchive *archive, const Byte *buf, size_t bufSize);
+
+/* Decode the encoded header and parse it */
+static SRes DecodeEncodedHeader(CSz7zArchive *archive, UInt64 headerOffset)
+{
+    FILE *f = archive->file;
+    CEncodedHeaderInfo info;
+    SRes res;
+    
+    /* Read the streams info for the encoded header */
+    res = ReadEncodedHeaderStreamsInfo(f, &info);
+    if (res != SZ_OK)
+        return res;
+    
+    /* Validate we have enough info */
+    if (info.packSize == 0 || info.unpackSize == 0)
+        return SZ_ERROR_ARCHIVE;
+    
+    /* Seek to the packed data position (relative to end of signature header = 32 bytes) */
+    if (fseek(f, (long)(32 + info.packPos), SEEK_SET) != 0)
+        return SZ_ERROR_READ;
+    
+    /* Allocate buffers */
+    Byte *packedData = (Byte *)archive->alloc->Alloc(archive->alloc, (size_t)info.packSize);
+    if (!packedData)
+        return SZ_ERROR_MEM;
+    
+    Byte *unpackedData = (Byte *)archive->alloc->Alloc(archive->alloc, (size_t)info.unpackSize);
+    if (!unpackedData)
+    {
+        archive->alloc->Free(archive->alloc, packedData);
+        return SZ_ERROR_MEM;
+    }
+    
+    /* Read packed data */
+    res = ReadBytes(f, packedData, (size_t)info.packSize);
+    if (res != SZ_OK)
+    {
+        archive->alloc->Free(archive->alloc, packedData);
+        archive->alloc->Free(archive->alloc, unpackedData);
+        return res;
+    }
+    
+    /* Decompress based on method */
+    if (info.coderMethod == k7zMethodIdCopy)
+    {
+        /* Just copy */
+        if (info.packSize != info.unpackSize)
+        {
+            archive->alloc->Free(archive->alloc, packedData);
+            archive->alloc->Free(archive->alloc, unpackedData);
+            return SZ_ERROR_DATA;
+        }
+        memcpy(unpackedData, packedData, (size_t)info.packSize);
+    }
+    else if (info.coderMethod == k7zMethodIdLZMA)
+    {
+        if (!info.hasProps)
+        {
+            archive->alloc->Free(archive->alloc, packedData);
+            archive->alloc->Free(archive->alloc, unpackedData);
+            return SZ_ERROR_ARCHIVE;
+        }
+        
+        /* Decompress using LZMA */
+        size_t destLen = (size_t)info.unpackSize;
+        size_t srcLen = (size_t)info.packSize;
+        ELzmaStatus status;
+        
+        res = LzmaDecode(unpackedData, &destLen, packedData, &srcLen,
+                        info.lzmaProps, 5, LZMA_FINISH_END, &status, archive->alloc);
+        
+        if (res != SZ_OK || destLen != info.unpackSize)
+        {
+            archive->alloc->Free(archive->alloc, packedData);
+            archive->alloc->Free(archive->alloc, unpackedData);
+            return res != SZ_OK ? res : SZ_ERROR_DATA;
+        }
+    }
+    else
+    {
+        archive->alloc->Free(archive->alloc, packedData);
+        archive->alloc->Free(archive->alloc, unpackedData);
+        return SZ_ERROR_UNSUPPORTED;
+    }
+    
+    /* Parse the decompressed header */
+    res = ParseHeaderFromBuffer(archive, unpackedData, (size_t)info.unpackSize);
+    
+    /* Cleanup */
+    archive->alloc->Free(archive->alloc, packedData);
+    archive->alloc->Free(archive->alloc, unpackedData);
+    
+    return res;
+}
+
 /* Forward declarations for header parsing */
 static SRes ReadPackInfo(FILE *f, CSz7zArchive *archive, UInt64 *dataOffset);
 static SRes ReadUnpackInfo(FILE *f, CSz7zArchive *archive);
 static SRes ReadSubStreamsInfo(FILE *f, CSz7zArchive *archive);
 static SRes ReadFilesInfo(FILE *f, CSz7zArchive *archive);
+static SRes ReadFilesInfoFromBuf(CSz7zArchive *archive, const Byte **buf, const Byte *bufEnd);
+
+/* Parse header from buffer (for encoded headers) */
+static SRes ParseHeaderFromBuffer(CSz7zArchive *archive, const Byte *buf, size_t bufSize)
+{
+    const Byte *p = buf;
+    const Byte *bufEnd = buf + bufSize;
+    Byte type;
+    SRes res;
+    
+    /* Read header type */
+    RINOK(ReadByteFromBuf(&p, bufEnd, &type));
+    
+    if (type != k7zIdHeader)
+        return SZ_ERROR_ARCHIVE;
+    
+    /* Read main header sections */
+    RINOK(ReadByteFromBuf(&p, bufEnd, &type));
+    
+    while (type != k7zIdEnd)
+    {
+        switch (type)
+        {
+        case k7zIdArchiveProperties:
+            {
+                UInt64 size;
+                RINOK(ReadNumberFromBuf(&p, bufEnd, &size));
+                if (p + size > bufEnd)
+                    return SZ_ERROR_READ;
+                p += size;  /* Skip */
+            }
+            break;
+            
+        case k7zIdMainStreamsInfo:
+            {
+                /* Skip main streams info for now - we just need files info for listing */
+                RINOK(ReadByteFromBuf(&p, bufEnd, &type));
+                while (type != k7zIdEnd)
+                {
+                    switch (type)
+                    {
+                    case k7zIdPackInfo:
+                    case k7zIdUnpackInfo:
+                    case k7zIdSubStreamsInfo:
+                        {
+                            /* These sections don't have explicit sizes, need to parse through */
+                            /* For simplicity, scan for end marker */
+                            int depth = 1;
+                            while (depth > 0 && p < bufEnd)
+                            {
+                                Byte b;
+                                RINOK(ReadByteFromBuf(&p, bufEnd, &b));
+                                if (b == k7zIdEnd)
+                                    depth--;
+                                else if (b == k7zIdPackInfo || b == k7zIdUnpackInfo || 
+                                         b == k7zIdSubStreamsInfo || b == k7zIdMainStreamsInfo)
+                                    depth++;
+                            }
+                        }
+                        break;
+                    default:
+                        {
+                            UInt64 size;
+                            RINOK(ReadNumberFromBuf(&p, bufEnd, &size));
+                            if (p + size > bufEnd)
+                                return SZ_ERROR_READ;
+                            p += size;
+                        }
+                        break;
+                    }
+                    if (p >= bufEnd)
+                        break;
+                    RINOK(ReadByteFromBuf(&p, bufEnd, &type));
+                }
+            }
+            break;
+            
+        case k7zIdFilesInfo:
+            res = ReadFilesInfoFromBuf(archive, &p, bufEnd);
+            if (res != SZ_OK) return res;
+            break;
+            
+        default:
+            {
+                UInt64 size;
+                RINOK(ReadNumberFromBuf(&p, bufEnd, &size));
+                if (p + size > bufEnd)
+                    return SZ_ERROR_READ;
+                p += size;  /* Skip */
+            }
+            break;
+        }
+        
+        if (p >= bufEnd)
+            break;
+        RINOK(ReadByteFromBuf(&p, bufEnd, &type));
+    }
+    
+    return SZ_OK;
+}
+
+/* Read files info from buffer */
+static SRes ReadFilesInfoFromBuf(CSz7zArchive *archive, const Byte **bufPtr, const Byte *bufEnd)
+{
+    const Byte *p = *bufPtr;
+    UInt64 numFiles;
+    Byte type;
+    UInt32 i;
+    
+    RINOK(ReadNumberFromBuf(&p, bufEnd, &numFiles));
+    archive->numFiles = (UInt32)numFiles;
+    
+    if (archive->numFiles > 0)
+    {
+        archive->files = (CSz7zFileInfo *)archive->alloc->Alloc(archive->alloc,
+            sizeof(CSz7zFileInfo) * archive->numFiles);
+        if (!archive->files)
+            return SZ_ERROR_MEM;
+        memset(archive->files, 0, sizeof(CSz7zFileInfo) * archive->numFiles);
+    }
+    
+    RINOK(ReadByteFromBuf(&p, bufEnd, &type));
+    
+    while (type != k7zIdEnd && p < bufEnd)
+    {
+        UInt64 size;
+        RINOK(ReadNumberFromBuf(&p, bufEnd, &size));
+        
+        if (p + size > bufEnd)
+            return SZ_ERROR_READ;
+        
+        const Byte *sectionEnd = p + size;
+        
+        switch (type)
+        {
+        case k7zIdEmptyStream:
+        case k7zIdEmptyFile:
+        case k7zIdAnti:
+            /* Skip for now */
+            p = sectionEnd;
+            break;
+            
+        case k7zIdName:
+            {
+                Byte external;
+                if (p >= sectionEnd)
+                    return SZ_ERROR_READ;
+                external = *p++;
+                
+                if (external != 0)
+                {
+                    p = sectionEnd;
+                }
+                else
+                {
+                    /* Read file names (UTF-16LE encoded) */
+                    size_t namesDataSize = sectionEnd - p;
+                    const Byte *namesData = p;
+                    
+                    /* Parse names - each name is null-terminated UTF-16LE */
+                    size_t pos = 0;
+                    for (i = 0; i < archive->numFiles && pos < namesDataSize; i++)
+                    {
+                        /* Find end of this name */
+                        size_t nameStart = pos;
+                        while (pos + 1 < namesDataSize)
+                        {
+                            if (namesData[pos] == 0 && namesData[pos + 1] == 0)
+                            {
+                                pos += 2;
+                                break;
+                            }
+                            pos += 2;
+                        }
+                        
+                        /* Convert UTF-16LE to ASCII (simplified conversion) */
+                        size_t nameLen = (pos - nameStart) / 2 - 1;
+                        archive->files[i].Name = (char *)archive->alloc->Alloc(archive->alloc, nameLen + 1);
+                        if (archive->files[i].Name)
+                        {
+                            size_t j;
+                            for (j = 0; j < nameLen; j++)
+                            {
+                                UInt16 c = namesData[nameStart + j * 2] | 
+                                          ((UInt16)namesData[nameStart + j * 2 + 1] << 8);
+                                /* ASCII-only conversion - non-ASCII chars become '?' */
+                                archive->files[i].Name[j] = (c < 128) ? (char)c : '?';
+                            }
+                            archive->files[i].Name[nameLen] = '\0';
+                            archive->files[i].NameLen = (UInt32)nameLen;
+                        }
+                    }
+                    
+                    p = sectionEnd;
+                }
+            }
+            break;
+            
+        case k7zIdMTime:
+        case k7zIdCTime:
+        case k7zIdATime:
+        case k7zIdWinAttrib:
+            /* Skip */
+            p = sectionEnd;
+            break;
+            
+        default:
+            p = sectionEnd;
+            break;
+        }
+        
+        if (p >= bufEnd)
+            break;
+        RINOK(ReadByteFromBuf(&p, bufEnd, &type));
+    }
+    
+    *bufPtr = p;
+    return SZ_OK;
+}
 
 /* Parse the 7z header structure - simplified version */
 static SRes ParseHeader(CSz7zArchive *archive, UInt64 headerOffset, UInt64 headerSize)
@@ -244,9 +783,8 @@ static SRes ParseHeader(CSz7zArchive *archive, UInt64 headerOffset, UInt64 heade
     /* Handle encoded header (the header itself is compressed) */
     if (type == k7zIdEncodedHeader)
     {
-        /* For now, we'll return an error for encoded headers
-           as they require recursive decompression */
-        return SZ_ERROR_UNSUPPORTED;
+        /* Decode the encoded header using LZMA */
+        return DecodeEncodedHeader(archive, headerOffset);
     }
     
     if (type != k7zIdHeader)
