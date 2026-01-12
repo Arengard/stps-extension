@@ -43,6 +43,7 @@ set(EXTENSION_SOURCES
     # 7-Zip archive reading functions (using LZMA SDK)
     src/sevenzip_functions.cpp
     src/lzma/7z.c
+    src/lzma/LzmaDec.c
 )
 
 build_static_extension(${TARGET_NAME} ${EXTENSION_SOURCES})
