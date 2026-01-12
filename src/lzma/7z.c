@@ -286,13 +286,14 @@ static SRes ReadEncodedHeaderStreamsInfo(FILE *f, CEncodedHeaderInfo *info)
     
     memset(info, 0, sizeof(*info));
     
-    /* Read type - should be k7zIdMainStreamsInfo (0x04) */
+    /* Read type - can either be k7zIdMainStreamsInfo (0x04) or start directly with PackInfo */
     RINOK(ReadByte(f, &type));
-    if (type != k7zIdMainStreamsInfo)
+    if (type == k7zIdMainStreamsInfo) {
+        /* Move to first subsection */
+        RINOK(ReadByte(f, &type));
+    } else if (type != k7zIdPackInfo && type != k7zIdUnpackInfo && type != k7zIdSubStreamsInfo) {
         return SZ_ERROR_ARCHIVE;
-    
-    /* Read sub-sections */
-    RINOK(ReadByte(f, &type));
+    }
     
     while (type != k7zIdEnd)
     {
@@ -561,89 +562,27 @@ static SRes ParseHeaderFromBuffer(CSz7zArchive *archive, const Byte *buf, size_t
     if (type != k7zIdHeader)
         return SZ_ERROR_ARCHIVE;
     
-    /* Read main header sections */
-    RINOK(ReadByteFromBuf(&p, bufEnd, &type));
+    /* Scan for FilesInfo section directly to avoid strict stream parsing */
+    const Byte *files_pos = NULL;
+    const Byte *scan;
     
-    while (type != k7zIdEnd)
+    for (scan = p; scan < bufEnd; scan++)
     {
-        switch (type)
+        if (*scan != k7zIdFilesInfo)
+            continue;
+        
+        if (scan == p || (scan > buf && *(scan - 1) == k7zIdEnd))
         {
-        case k7zIdArchiveProperties:
-            {
-                UInt64 size;
-                RINOK(ReadNumberFromBuf(&p, bufEnd, &size));
-                if (p + size > bufEnd)
-                    return SZ_ERROR_READ;
-                p += size;  /* Skip */
-            }
-            break;
-            
-        case k7zIdMainStreamsInfo:
-            {
-                /* Skip main streams info for now - we just need files info for listing */
-                RINOK(ReadByteFromBuf(&p, bufEnd, &type));
-                while (type != k7zIdEnd)
-                {
-                    switch (type)
-                    {
-                    case k7zIdPackInfo:
-                    case k7zIdUnpackInfo:
-                    case k7zIdSubStreamsInfo:
-                        {
-                            /* These sections don't have explicit sizes, need to parse through */
-                            /* For simplicity, scan for end marker */
-                            int depth = 1;
-                            while (depth > 0 && p < bufEnd)
-                            {
-                                Byte b;
-                                RINOK(ReadByteFromBuf(&p, bufEnd, &b));
-                                if (b == k7zIdEnd)
-                                    depth--;
-                                else if (b == k7zIdPackInfo || b == k7zIdUnpackInfo || 
-                                         b == k7zIdSubStreamsInfo || b == k7zIdMainStreamsInfo)
-                                    depth++;
-                            }
-                        }
-                        break;
-                    default:
-                        {
-                            UInt64 size;
-                            RINOK(ReadNumberFromBuf(&p, bufEnd, &size));
-                            if (p + size > bufEnd)
-                                return SZ_ERROR_READ;
-                            p += size;
-                        }
-                        break;
-                    }
-                    if (p >= bufEnd)
-                        break;
-                    RINOK(ReadByteFromBuf(&p, bufEnd, &type));
-                }
-            }
-            break;
-            
-        case k7zIdFilesInfo:
-            res = ReadFilesInfoFromBuf(archive, &p, bufEnd);
-            if (res != SZ_OK) return res;
-            break;
-            
-        default:
-            {
-                UInt64 size;
-                RINOK(ReadNumberFromBuf(&p, bufEnd, &size));
-                if (p + size > bufEnd)
-                    return SZ_ERROR_READ;
-                p += size;  /* Skip */
-            }
+            files_pos = scan;
             break;
         }
-        
-        if (p >= bufEnd)
-            break;
-        RINOK(ReadByteFromBuf(&p, bufEnd, &type));
     }
     
-    return SZ_OK;
+    if (!files_pos)
+        return SZ_ERROR_ARCHIVE;
+    
+    const Byte *files_ptr = files_pos + 1;
+    return ReadFilesInfoFromBuf(archive, &files_ptr, bufEnd);
 }
 
 /* Read files info from buffer */
@@ -790,76 +729,30 @@ static SRes ParseHeader(CSz7zArchive *archive, UInt64 headerOffset, UInt64 heade
     if (type != k7zIdHeader)
         return SZ_ERROR_ARCHIVE;
     
-    /* Read main header sections */
-    RINOK(ReadByte(f, &type));
+    /* Read full header into memory for robust parsing */
+    if (headerSize == 0)
+        return SZ_ERROR_ARCHIVE;
     
-    while (type != k7zIdEnd)
+    Byte *headerBuf = (Byte *)archive->alloc->Alloc(archive->alloc, (size_t)headerSize);
+    if (!headerBuf)
+        return SZ_ERROR_MEM;
+    
+    headerBuf[0] = type;
+    size_t bytes_to_read = headerSize > 1 ? (size_t)(headerSize - 1) : 0;
+    if (bytes_to_read > 0)
     {
-        switch (type)
+        res = ReadBytes(f, headerBuf + 1, bytes_to_read);
+        if (res != SZ_OK)
         {
-        case k7zIdArchiveProperties:
-            {
-                UInt64 size;
-                RINOK(ReadNumber(f, &size));
-                RINOK(SkipData(f, size));
-            }
-            break;
-            
-        case k7zIdMainStreamsInfo:
-            {
-                Byte subType;
-                RINOK(ReadByte(f, &subType));
-                
-                while (subType != k7zIdEnd)
-                {
-                    switch (subType)
-                    {
-                    case k7zIdPackInfo:
-                        res = ReadPackInfo(f, archive, &dataOffset);
-                        if (res != SZ_OK) return res;
-                        break;
-                        
-                    case k7zIdUnpackInfo:
-                        res = ReadUnpackInfo(f, archive);
-                        if (res != SZ_OK) return res;
-                        break;
-                        
-                    case k7zIdSubStreamsInfo:
-                        res = ReadSubStreamsInfo(f, archive);
-                        if (res != SZ_OK) return res;
-                        break;
-                        
-                    default:
-                        /* Skip unknown section */
-                        {
-                            UInt64 size;
-                            RINOK(ReadNumber(f, &size));
-                            RINOK(SkipData(f, size));
-                        }
-                        break;
-                    }
-                    RINOK(ReadByte(f, &subType));
-                }
-            }
-            break;
-            
-        case k7zIdFilesInfo:
-            res = ReadFilesInfo(f, archive);
-            if (res != SZ_OK) return res;
-            break;
-            
-        default:
-            /* Skip unknown section */
-            {
-                UInt64 size;
-                RINOK(ReadNumber(f, &size));
-                RINOK(SkipData(f, size));
-            }
-            break;
+            archive->alloc->Free(archive->alloc, headerBuf);
+            return res;
         }
-        
-        RINOK(ReadByte(f, &type));
     }
+    
+    res = ParseHeaderFromBuffer(archive, headerBuf, (size_t)headerSize);
+    archive->alloc->Free(archive->alloc, headerBuf);
+    if (res != SZ_OK)
+        return res;
     
     archive->dataOffset = 32 + dataOffset;
     
