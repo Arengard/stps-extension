@@ -40,6 +40,9 @@ set(EXTENSION_SOURCES
     # ZIP archive reading functions (using miniz)
     src/zip_functions.cpp
     src/miniz/miniz.c
+    # 7-Zip archive reading functions (using LZMA SDK)
+    src/sevenzip_functions.cpp
+    src/lzma/7z.c
 )
 
 build_static_extension(${TARGET_NAME} ${EXTENSION_SOURCES})
