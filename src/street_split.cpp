@@ -62,7 +62,7 @@ static std::string apply_abbreviation(const std::string& street_name) {
 
         if (has_strasse || has_strasse_utf8) {
             // Check if preceded by non-space (compound word)
-            size_t suffix_len = has_strasse_utf8 ? 7 : 7;
+            size_t suffix_len = 7;
             size_t suffix_start = result.size() - suffix_len;
             if (suffix_start > 0 && !std::isspace(static_cast<unsigned char>(result[suffix_start - 1]))) {
                 // Replace with "str."
