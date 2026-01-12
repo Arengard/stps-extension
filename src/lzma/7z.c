@@ -122,6 +122,26 @@ static SRes ReadUInt64(FILE *f, UInt64 *value)
     return SZ_OK;
 }
 
+/* Helper: Read 32-bit little-endian value from buffer */
+static UInt32 GetUInt32FromBuffer(const Byte *buf)
+{
+    return (UInt32)buf[0] | ((UInt32)buf[1] << 8) | 
+           ((UInt32)buf[2] << 16) | ((UInt32)buf[3] << 24);
+}
+
+/* Helper: Read 64-bit little-endian value from buffer */
+static UInt64 GetUInt64FromBuffer(const Byte *buf)
+{
+    return (UInt64)buf[0] | 
+           ((UInt64)buf[1] << 8) | 
+           ((UInt64)buf[2] << 16) | 
+           ((UInt64)buf[3] << 24) |
+           ((UInt64)buf[4] << 32) |
+           ((UInt64)buf[5] << 40) |
+           ((UInt64)buf[6] << 48) |
+           ((UInt64)buf[7] << 56);
+}
+
 /* CRC32 calculation */
 static UInt32 g_CrcTable[256];
 static Bool g_CrcTableInitialized = False;
@@ -471,7 +491,11 @@ static SRes ReadFilesInfo(FILE *f, CSz7zArchive *archive)
                             pos += 2;
                         }
                         
-                        /* Convert UTF-16LE to ASCII/UTF-8 (simplified) */
+                        /* Convert UTF-16LE to ASCII (simplified conversion)
+                         * Note: Non-ASCII characters (including accented letters, CJK characters,
+                         * and other Unicode characters) are replaced with '?' for simplicity.
+                         * A full implementation would require proper UTF-16 to UTF-8 conversion.
+                         */
                         size_t nameLen = (pos - nameStart) / 2 - 1;
                         archive->files[i].Name = (char *)archive->alloc->Alloc(archive->alloc, nameLen + 1);
                         if (archive->files[i].Name)
@@ -481,7 +505,7 @@ static SRes ReadFilesInfo(FILE *f, CSz7zArchive *archive)
                             {
                                 UInt16 c = namesData[nameStart + j * 2] | 
                                           ((UInt16)namesData[nameStart + j * 2 + 1] << 8);
-                                /* Simple ASCII conversion - non-ASCII chars become '?' */
+                                /* ASCII-only conversion - non-ASCII chars become '?' */
                                 archive->files[i].Name[j] = (c < 128) ? (char)c : '?';
                             }
                             archive->files[i].Name[nameLen] = '\0';
@@ -560,19 +584,13 @@ SRes Sz7z_Open(CSz7zArchive *archive, const char *path)
         return SZ_ERROR_UNSUPPORTED;
     }
     
-    /* Read next header info */
-    nextHeaderOffset = header[12] | ((UInt64)header[13] << 8) | 
-                       ((UInt64)header[14] << 16) | ((UInt64)header[15] << 24) |
-                       ((UInt64)header[16] << 32) | ((UInt64)header[17] << 40) |
-                       ((UInt64)header[18] << 48) | ((UInt64)header[19] << 56);
+    /* Read next header info using helper functions */
+    nextHeaderOffset = GetUInt64FromBuffer(&header[12]);
+    nextHeaderSize = GetUInt64FromBuffer(&header[20]);
+    nextHeaderCRC = GetUInt32FromBuffer(&header[28]);
     
-    nextHeaderSize = header[20] | ((UInt64)header[21] << 8) | 
-                     ((UInt64)header[22] << 16) | ((UInt64)header[23] << 24) |
-                     ((UInt64)header[24] << 32) | ((UInt64)header[25] << 40) |
-                     ((UInt64)header[26] << 48) | ((UInt64)header[27] << 56);
-    
-    nextHeaderCRC = header[28] | ((UInt32)header[29] << 8) | 
-                    ((UInt32)header[30] << 16) | ((UInt32)header[31] << 24);
+    /* Suppress unused variable warning */
+    (void)nextHeaderCRC;
     
     /* Parse the header */
     res = ParseHeader(archive, nextHeaderOffset, nextHeaderSize);

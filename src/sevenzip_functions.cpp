@@ -5,6 +5,7 @@
 #include "../lzma/7z.h"
 #include <cstring>
 #include <algorithm>
+#include <sstream>
 
 namespace duckdb {
 namespace stps {
@@ -201,15 +202,16 @@ static unique_ptr<GlobalTableFunctionState> SevenZipInit(ClientContext &context,
     if (res == SZ_OK) {
         UInt32 numFiles = Sz7z_GetNumFiles(&archive);
         
-        string message = "7z archive '" + bind_data.archive_path + "' contains " + 
-                        to_string(numFiles) + " file(s). ";
-        message += "Full content extraction is not yet implemented. ";
-        message += "Use stps_view_7zip('" + bind_data.archive_path + "') to list files. ";
-        message += "For extractable archives, consider using ZIP format with stps_zip().";
+        // Use stringstream for cleaner string building
+        std::stringstream ss;
+        ss << "7z archive contains " << numFiles << " file(s). ";
+        ss << "Full content extraction is not yet implemented. ";
+        ss << "Use stps_view_7zip() to list files. ";
+        ss << "For extractable archives, consider using ZIP format with stps_zip().";
         
         result->column_names = {"message"};
         result->column_types = {LogicalType::VARCHAR};
-        result->rows.push_back({Value(message)});
+        result->rows.push_back({Value(ss.str())});
         result->parsed = true;
         
         Sz7z_Close(&archive);
