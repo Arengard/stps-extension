@@ -37,6 +37,9 @@ set(EXTENSION_SOURCES
     src/kontocheck/check_methods.cpp
     src/account_validation.cpp
     src/blz_lut_loader.cpp
+    # ZIP archive reading functions (using miniz)
+    src/zip_functions.cpp
+    src/miniz/miniz.c
 )
 
 build_static_extension(${TARGET_NAME} ${EXTENSION_SOURCES})

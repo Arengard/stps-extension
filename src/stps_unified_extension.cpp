@@ -24,11 +24,13 @@
 #include "smart_cast_function.hpp"
 #include "stps_lambda_function.hpp"
 #include "blz_lut_loader.hpp"
+#include "zip_functions.hpp"
 // #include "fill_functions.hpp"  // Temporarily disabled
 
 namespace duckdb {
 namespace stps {
     void RegisterFilesystemFunctions(ExtensionLoader &loader);
+    void RegisterZipFunctions(ExtensionLoader &loader);
 }
 
 class StpsExtension : public Extension {
@@ -63,6 +65,9 @@ public:
 
         // Register lambda function
         stps::RegisterLambdaFunction(loader);
+
+        // Register ZIP archive functions
+        stps::RegisterZipFunctions(loader);
 
         // Register search columns function
         // stps::RegisterSearchColumnsFunction(loader);  // Uncommitted work-in-progress
