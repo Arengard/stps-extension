@@ -563,18 +563,12 @@ static SRes ParseHeaderFromBuffer(CSz7zArchive *archive, const Byte *buf, size_t
         return SZ_ERROR_ARCHIVE;
     
     /* Scan for FilesInfo section directly to avoid strict stream parsing */
-    for (const Byte *scan = p; scan < bufEnd; scan++)
-    {
-        if (*scan != k7zIdFilesInfo)
-            continue;
-        
-        const Byte *files_ptr = scan + 1;
-        res = ReadFilesInfoFromBuf(archive, &files_ptr, bufEnd);
-        if (res == SZ_OK)
-            return SZ_OK;
-    }
+    const Byte *files_pos = (const Byte *)memchr(p, k7zIdFilesInfo, bufEnd - p);
+    if (!files_pos)
+        return SZ_ERROR_ARCHIVE;
     
-    return SZ_ERROR_ARCHIVE;
+    const Byte *files_ptr = files_pos + 1;
+    return ReadFilesInfoFromBuf(archive, &files_ptr, bufEnd);
 }
 
 /* Read files info from buffer */
@@ -729,7 +723,7 @@ static SRes ParseHeader(CSz7zArchive *archive, UInt64 headerOffset, UInt64 heade
     if (!headerBuf)
         return SZ_ERROR_MEM;
     
-    headerBuf[0] = k7zIdHeader;
+    headerBuf[0] = type;
     if (headerSize > 1)
     {
         res = ReadBytes(f, headerBuf + 1, (size_t)headerSize - 1);
