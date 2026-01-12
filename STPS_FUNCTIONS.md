@@ -152,7 +152,7 @@ SELECT stps_map_null_to_empty('test');
 
 ---
 
-### PLZ Validation Functions (3)
+### PLZ Validation Functions (2)
 
 #### `stps_is_valid_plz(plz)` - Validate German PLZ format
 ```sql
@@ -168,27 +168,14 @@ SELECT stps_is_valid_plz('00999');
 
 #### `stps_is_valid_plz(plz, strict)` - Validate PLZ with optional strict mode
 ```sql
--- Strict mode downloads and checks against real German PLZ database
+-- Strict mode checks against real German PLZ database from local file
+-- The PLZ file is expected at: C:\stps\Postleitzahlen.txt (Windows) or /stps/Postleitzahlen.txt (Unix)
+-- File format: First line is version header (e.g., #Version:01.2026), followed by one PLZ per line
 SELECT stps_is_valid_plz('01067', true);
 -- Result: true (Dresden exists)
 
 SELECT stps_is_valid_plz('01000', true);
 -- Result: false (format ok, but this PLZ doesn't exist)
-```
-
-#### `stps_get_plz_gist()` - Get current PLZ data source URL
-```sql
-SELECT stps_get_plz_gist();
--- Result: https://gist.githubusercontent.com/jbspeakr/4565964/raw/ (default)
-```
-
-#### `stps_set_plz_gist(url)` - Set custom PLZ data source URL
-```sql
-SELECT stps_set_plz_gist('https://example.com/my-plz-data.csv');
--- Result: PLZ gist URL set to: https://example.com/my-plz-data.csv
-
--- After setting, stps_is_valid_plz with strict=true will download from the new URL
-SELECT stps_is_valid_plz('01067', true);
 ```
 
 ---
@@ -305,7 +292,7 @@ Now you can use `duckdb` without the `-unsigned` flag!
 | Case Transformations | 7 | `stps_to_*` (snake, camel, pascal, kebab, const, sentence, title) |
 | Text Normalization | 4 | `stps_remove_accents`, `stps_restore_umlauts`, `stps_clean_string`, `stps_normalize` |
 | Null Handling | 2 | `stps_map_empty_to_null`, `stps_map_null_to_empty` |
-| PLZ Validation | 3 | `stps_is_valid_plz` (2 overloads), `stps_get_plz_gist`, `stps_set_plz_gist` |
+| PLZ Validation | 2 | `stps_is_valid_plz` (2 overloads) |
 | ZIP Archives | 2 | `stps_zip`, `stps_view_zip` |
 | 7-Zip Archives | 2 | `stps_7zip`, `stps_view_7zip` |
 | **Total** | **23** | All use `stps_` prefix |

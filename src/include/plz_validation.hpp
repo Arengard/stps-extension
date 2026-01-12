@@ -14,13 +14,9 @@ public:
     bool IsLoaded() const { return loaded_; }
     void EnsureLoaded();
     bool PlzExists(const std::string& plz) const;
-    std::string GetPlzFilePath();
+    std::string GetPlzFilePath() const;
 
-    // Configurable PLZ gist URL
-    void SetPlzGistUrl(const std::string& url);
-    std::string GetPlzGistUrl() const;
-
-    // Reset the loader to reload data with new URL
+    // Reset the loader to reload data
     void Reset();
 
 private:
@@ -30,16 +26,15 @@ private:
 
     std::unordered_set<std::string> valid_plz_codes_;
     bool loaded_ = false;
-    std::string plz_file_path_;
-    std::string plz_download_url_;
 
-    static constexpr const char* DEFAULT_PLZ_DOWNLOAD_URL =
-        "https://gist.githubusercontent.com/jbspeakr/4565964/raw/";
-    static constexpr const char* PLZ_FILENAME = "plz.csv";
+    // Path to the local PLZ file (C:\stps\Postleitzahlen.txt on Windows, /stps/Postleitzahlen.txt on Unix)
+#ifdef _WIN32
+    static constexpr const char* PLZ_FILE_PATH = "C:\\stps\\Postleitzahlen.txt";
+#else
+    static constexpr const char* PLZ_FILE_PATH = "/stps/Postleitzahlen.txt";
+#endif
 
-    bool EnsurePlzDirectory();
-    bool FileExists(const std::string& path);
-    bool DownloadPlzFile(const std::string& path);
+    bool FileExists(const std::string& path) const;
     bool LoadFromFile(const std::string& path);
 };
 
