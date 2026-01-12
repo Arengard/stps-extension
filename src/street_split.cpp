@@ -42,27 +42,28 @@ static std::string apply_abbreviation(const std::string& street_name) {
     // Check for compound "straße" or "strasse" at the end
     // Must be preceded by a non-space character (compound word)
     if (result.size() > 7) {  // "xstraße" minimum
-        // Check for "straße" (UTF-8: straße is 7 bytes, strasse is 7 bytes)
+        // Check for "straße" (UTF-8: 7 bytes) and "strasse" (ASCII: 7 bytes)
         bool has_strasse = ends_with_icase(result, "strasse");
         bool has_strasse_utf8 = false;
 
         // Check UTF-8 "straße" - ß is 2 bytes in UTF-8 (0xC3 0x9F)
-        if (result.size() >= 8) {
-            std::string last8 = result.substr(result.size() - 8);
-            std::string lower8 = to_lower(last8);
+        if (result.size() >= 7) {
+            std::string last7 = result.substr(result.size() - 7);
+            std::string lower7 = to_lower(last7);
             // "straße" in UTF-8 lowercase - using separate string concat to avoid hex escape issue
             std::string strasse_utf8 = "stra";
             strasse_utf8 += '\xc3';
             strasse_utf8 += '\x9f';
             strasse_utf8 += "e";
-            if (lower8 == strasse_utf8 || lower8 == "strasse") {
+            if (lower7 == strasse_utf8) {
                 has_strasse_utf8 = true;
             }
         }
 
         if (has_strasse || has_strasse_utf8) {
             // Check if preceded by non-space (compound word)
-            size_t suffix_start = result.size() - (has_strasse_utf8 ? 8 : 7);
+            size_t suffix_len = has_strasse_utf8 ? 7 : 7;
+            size_t suffix_start = result.size() - suffix_len;
             if (suffix_start > 0 && !std::isspace(static_cast<unsigned char>(result[suffix_start - 1]))) {
                 // Replace with "str."
                 result = result.substr(0, suffix_start) + "str.";
