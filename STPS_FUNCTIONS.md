@@ -1,6 +1,6 @@
 # Stps Functions - Complete Reference
 
-## ✅ All Functions with `stps_` Prefix
+## ✅ All 19 Functions with `stps_` Prefix
 
 Renamed from `pgm_` to match your original `Stps` class from ldf.py!
 
@@ -21,76 +21,7 @@ SELECT stps_get_guid('test', 'data');
 
 ---
 
-## 📋 Complete Function List
-
-### 🔥 Lambda Functions (NEW!)
-
-#### `stps_lambda(table_name, lambda_expr, [varchar_only], [column_pattern])` - Apply transformations to all columns
-
-Apply lambda-like transformations to all columns in a table at once. Perfect for bulk data cleaning and transformation.
-
-**Basic Syntax:**
-```sql
-SELECT * FROM stps_lambda('table_name', 'c -> transformation(c)');
-```
-
-**Parameters:**
-- `table_name`: Name of the table to transform
-- `lambda_expr`: Lambda expression or SQL expression to apply
-  - Format: `'c -> function(c)'` where `c` represents each column
-  - Or just: `'function(c)'` without the arrow notation
-- `varchar_only` (optional, default=true): Only apply to VARCHAR columns
-- `column_pattern` (optional): Only apply to columns containing this pattern
-
-**Examples:**
-
-```sql
--- Trim all VARCHAR columns
-SELECT * FROM stps_lambda('my_table', 'c -> trim(c)');
-
--- Convert all text to uppercase
-SELECT * FROM stps_lambda('my_table', 'c -> upper(c)');
-
--- Apply STPS functions
-SELECT * FROM stps_lambda('my_table', 'c -> stps_to_snake_case(c)');
-SELECT * FROM stps_lambda('my_table', 'c -> stps_normalize(c)');
-
--- Chain multiple transformations
-SELECT * FROM stps_lambda('my_table', 'c -> upper(stps_to_snake_case(c))');
-
--- Apply to all columns (not just VARCHAR)
-SELECT * FROM stps_lambda('my_table', 'c -> trim(c)', false);
-
--- Apply only to columns with 'name' in their name
-SELECT * FROM stps_lambda('my_table', 'c -> upper(c)', true, 'name');
-
--- Custom SQL expressions
-SELECT * FROM stps_lambda('my_table', 'CASE WHEN c IS NULL THEN ''empty'' ELSE c END');
-
--- Named parameters
-SELECT * FROM stps_lambda('my_table', 'c -> trim(c)', varchar_only := false);
-SELECT * FROM stps_lambda('my_table', 'c -> upper(c)', column_pattern := 'name');
-```
-
-**Real-World Use Cases:**
-
-```sql
--- Clean all text columns in one go
-CREATE TABLE clean_data AS 
-SELECT * FROM stps_lambda('raw_data', 'c -> trim(c)');
-
--- Standardize naming conventions
-CREATE TABLE snake_case_data AS
-SELECT * FROM stps_lambda('camel_case_data', 'c -> stps_to_snake_case(c)');
-
--- Remove extra whitespace from all columns
-SELECT * FROM stps_lambda('messy_data', 'c -> stps_clean_string(c)');
-
--- Convert empty strings to NULL across all columns
-SELECT * FROM stps_lambda('data_table', 'c -> stps_map_empty_to_null(c)');
-```
-
----
+## 📋 Complete Function List (19 Functions)
 
 ### UUID/GUID Functions (3)
 
@@ -221,6 +152,47 @@ SELECT stps_map_null_to_empty('test');
 
 ---
 
+### PLZ Validation Functions (3)
+
+#### `stps_is_valid_plz(plz)` - Validate German PLZ format
+```sql
+SELECT stps_is_valid_plz('01067');
+-- Result: true (valid 5-digit format)
+
+SELECT stps_is_valid_plz('1067');
+-- Result: false (only 4 digits)
+
+SELECT stps_is_valid_plz('00999');
+-- Result: false (below valid range 01000-99999)
+```
+
+#### `stps_is_valid_plz(plz, strict)` - Validate PLZ with optional strict mode
+```sql
+-- Strict mode downloads and checks against real German PLZ database
+SELECT stps_is_valid_plz('01067', true);
+-- Result: true (Dresden exists)
+
+SELECT stps_is_valid_plz('01000', true);
+-- Result: false (format ok, but this PLZ doesn't exist)
+```
+
+#### `stps_get_plz_gist()` - Get current PLZ data source URL
+```sql
+SELECT stps_get_plz_gist();
+-- Result: https://gist.githubusercontent.com/jbspeakr/4565964/raw/ (default)
+```
+
+#### `stps_set_plz_gist(url)` - Set custom PLZ data source URL
+```sql
+SELECT stps_set_plz_gist('https://example.com/my-plz-data.csv');
+-- Result: PLZ gist URL set to: https://example.com/my-plz-data.csv
+
+-- After setting, stps_is_valid_plz with strict=true will download from the new URL
+SELECT stps_is_valid_plz('01067', true);
+```
+
+---
+
 ## 💡 Real-World Examples
 
 ### Example 1: Data Deduplication with stps_get_guid
@@ -333,14 +305,15 @@ Now you can use `duckdb` without the `-unsigned` flag!
 | Case Transformations | 7 | `stps_to_*` (snake, camel, pascal, kebab, const, sentence, title) |
 | Text Normalization | 4 | `stps_remove_accents`, `stps_restore_umlauts`, `stps_clean_string`, `stps_normalize` |
 | Null Handling | 2 | `stps_map_empty_to_null`, `stps_map_null_to_empty` |
-| **Total** | **17** | All use `stps_` prefix |
+| PLZ Validation | 3 | `stps_is_valid_plz` (2 overloads), `stps_get_plz_gist`, `stps_set_plz_gist` |
+| **Total** | **19** | All use `stps_` prefix |
 
 ---
 
 ## ✅ Why `stps_` prefix?
 
 - **Matches your original class**: `Stps` class from `stps/ldf.py`
-- **Consistent naming**: All 17 functions use the same prefix
+- **Consistent naming**: All 19 functions use the same prefix
 - **Avoids conflicts**: Unique prefix prevents collisions with other extensions
 - **Recognizable**: Easy to find with tab completion: `stps_<TAB>`
 
