@@ -84,7 +84,8 @@ void PlzLoader::EnsureLoaded() {
     std::string plz_path = GetPlzFilePath();
 
     if (!FileExists(plz_path)) {
-        throw std::runtime_error("PLZ file not found at " + plz_path + ". Please ensure the file exists.");
+        throw std::runtime_error("PLZ file not found at " + plz_path + 
+            ". Please create the file with format: first line is version header (e.g., #Version:01.2026), followed by one PLZ per line.");
     }
 
     if (!LoadFromFile(plz_path)) {
