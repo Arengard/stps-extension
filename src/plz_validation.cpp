@@ -7,6 +7,7 @@
 #include <iostream>
 #include <cctype>
 #include <algorithm>
+#include <cstdio>
 #include <sys/stat.h>
 
 #ifdef _WIN32
@@ -17,9 +18,34 @@
 namespace duckdb {
 namespace stps {
 
+PlzLoader::PlzLoader() : loaded_(false), plz_download_url_(DEFAULT_PLZ_DOWNLOAD_URL) {
+}
+
 PlzLoader& PlzLoader::GetInstance() {
     static PlzLoader instance;
     return instance;
+}
+
+void PlzLoader::SetPlzGistUrl(const std::string& url) {
+    if (url != plz_download_url_) {
+        plz_download_url_ = url;
+        // Reset the loader so it reloads with the new URL
+        Reset();
+    }
+}
+
+std::string PlzLoader::GetPlzGistUrl() const {
+    return plz_download_url_;
+}
+
+void PlzLoader::Reset() {
+    // Delete the cached PLZ file to force re-download with new URL
+    if (!plz_file_path_.empty() && FileExists(plz_file_path_)) {
+        std::remove(plz_file_path_.c_str());
+    }
+    loaded_ = false;
+    valid_plz_codes_.clear();
+    plz_file_path_.clear();
 }
 
 std::string PlzLoader::GetPlzFilePath() {
@@ -75,15 +101,15 @@ bool PlzLoader::DownloadPlzFile(const std::string& dest_path) {
             return false;
         }
 
-        std::cout << "Downloading PLZ file from " << PLZ_DOWNLOAD_URL << "..." << std::endl;
+        std::cout << "Downloading PLZ file from " << plz_download_url_ << "..." << std::endl;
 
         // Use curl or wget as fallback
-        std::string download_cmd = "curl -L -s -o \"" + dest_path + "\" \"" + PLZ_DOWNLOAD_URL + "\"";
+        std::string download_cmd = "curl -L -s -o \"" + dest_path + "\" \"" + plz_download_url_ + "\"";
 
         int result = system(download_cmd.c_str());
         if (result != 0) {
             std::cerr << "Failed to download PLZ file using curl, trying wget..." << std::endl;
-            download_cmd = "wget -q -O \"" + dest_path + "\" \"" + PLZ_DOWNLOAD_URL + "\"";
+            download_cmd = "wget -q -O \"" + dest_path + "\" \"" + plz_download_url_ + "\"";
             result = system(download_cmd.c_str());
 
             if (result != 0) {
@@ -283,6 +309,27 @@ static void StpsIsValidPlzStrictFunction(DataChunk &args, ExpressionState &state
     }
 }
 
+// DuckDB scalar function to set PLZ gist URL
+static void StpsSetPlzGistFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+    UnaryExecutor::Execute<string_t, string_t>(
+        args.data[0], result, args.size(),
+        [&](string_t input) {
+            std::string url = input.GetString();
+            auto& loader = PlzLoader::GetInstance();
+            loader.SetPlzGistUrl(url);
+            return StringVector::AddString(result, "PLZ gist URL set to: " + url);
+        });
+}
+
+// DuckDB scalar function to get current PLZ gist URL
+static void StpsGetPlzGistFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+    auto& loader = PlzLoader::GetInstance();
+    std::string url = loader.GetPlzGistUrl();
+    result.SetVectorType(VectorType::CONSTANT_VECTOR);
+    auto result_data = ConstantVector::GetData<string_t>(result);
+    result_data[0] = StringVector::AddString(result, url);
+}
+
 void RegisterPlzValidationFunctions(ExtensionLoader &loader) {
     ScalarFunctionSet plz_set("stps_is_valid_plz");
 
@@ -301,6 +348,24 @@ void RegisterPlzValidationFunctions(ExtensionLoader &loader) {
     ));
 
     loader.RegisterFunction(plz_set);
+
+    // Register stps_set_plz_gist function: stps_set_plz_gist(url VARCHAR) -> VARCHAR
+    auto set_plz_gist_function = ScalarFunction(
+        "stps_set_plz_gist",
+        {LogicalType::VARCHAR},
+        LogicalType::VARCHAR,
+        StpsSetPlzGistFunction
+    );
+    loader.RegisterFunction(set_plz_gist_function);
+
+    // Register stps_get_plz_gist function: stps_get_plz_gist() -> VARCHAR
+    auto get_plz_gist_function = ScalarFunction(
+        "stps_get_plz_gist",
+        {},
+        LogicalType::VARCHAR,
+        StpsGetPlzGistFunction
+    );
+    loader.RegisterFunction(get_plz_gist_function);
 }
 
 } // namespace stps

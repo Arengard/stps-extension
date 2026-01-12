@@ -1,0 +1,92 @@
+# name: test/sql/plz_validation.test
+# description: Test PLZ validation and PLZ gist URL configuration functions
+# group: [stps]
+
+require stps
+
+# stps_is_valid_plz - validate PLZ format (5-digit German postal code)
+query I
+SELECT stps_is_valid_plz('01067');
+----
+true
+
+query I
+SELECT stps_is_valid_plz('10115');
+----
+true
+
+query I
+SELECT stps_is_valid_plz('99999');
+----
+true
+
+# Invalid PLZ format - too short
+query I
+SELECT stps_is_valid_plz('1067');
+----
+false
+
+# Invalid PLZ format - too long
+query I
+SELECT stps_is_valid_plz('010670');
+----
+false
+
+# Invalid PLZ format - non-numeric
+query I
+SELECT stps_is_valid_plz('ABCDE');
+----
+false
+
+# Invalid PLZ format - contains letters
+query I
+SELECT stps_is_valid_plz('1234A');
+----
+false
+
+# Invalid PLZ format - empty
+query I
+SELECT stps_is_valid_plz('');
+----
+false
+
+# Invalid PLZ format - below minimum (00001 is invalid, should be >= 01000)
+query I
+SELECT stps_is_valid_plz('00001');
+----
+false
+
+query I
+SELECT stps_is_valid_plz('00999');
+----
+false
+
+# stps_get_plz_gist - get current PLZ gist URL
+query I
+SELECT length(stps_get_plz_gist()) > 0;
+----
+true
+
+# stps_set_plz_gist - set custom PLZ gist URL
+query T
+SELECT stps_set_plz_gist('https://example.com/custom-plz.csv');
+----
+PLZ gist URL set to: https://example.com/custom-plz.csv
+
+# Verify the URL was updated
+query T
+SELECT stps_get_plz_gist();
+----
+https://example.com/custom-plz.csv
+
+# Reset to a different URL (simulating re-configuration)
+query T
+SELECT stps_set_plz_gist('https://another-example.com/plz-data.csv');
+----
+PLZ gist URL set to: https://another-example.com/plz-data.csv
+
+# Verify the URL was updated again
+query T
+SELECT stps_get_plz_gist();
+----
+https://another-example.com/plz-data.csv

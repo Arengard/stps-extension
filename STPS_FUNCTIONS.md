@@ -1,6 +1,6 @@
 # Stps Functions - Complete Reference
 
-## ✅ All 17 Functions with `stps_` Prefix
+## ✅ All 20 Functions with `stps_` Prefix
 
 Renamed from `pgm_` to match your original `Stps` class from ldf.py!
 
@@ -21,7 +21,7 @@ SELECT stps_get_guid('test', 'data');
 
 ---
 
-## 📋 Complete Function List (17 Functions)
+## 📋 Complete Function List (20 Functions)
 
 ### UUID/GUID Functions (3)
 
@@ -152,6 +152,47 @@ SELECT stps_map_null_to_empty('test');
 
 ---
 
+### PLZ Validation Functions (3)
+
+#### `stps_is_valid_plz(plz)` - Validate German PLZ format
+```sql
+SELECT stps_is_valid_plz('01067');
+-- Result: true (valid 5-digit format)
+
+SELECT stps_is_valid_plz('1067');
+-- Result: false (only 4 digits)
+
+SELECT stps_is_valid_plz('00999');
+-- Result: false (below valid range 01000-99999)
+```
+
+#### `stps_is_valid_plz(plz, strict)` - Validate PLZ with optional strict mode
+```sql
+-- Strict mode downloads and checks against real German PLZ database
+SELECT stps_is_valid_plz('01067', true);
+-- Result: true (Dresden exists)
+
+SELECT stps_is_valid_plz('01000', true);
+-- Result: false (format ok, but this PLZ doesn't exist)
+```
+
+#### `stps_get_plz_gist()` - Get current PLZ data source URL
+```sql
+SELECT stps_get_plz_gist();
+-- Result: https://gist.githubusercontent.com/jbspeakr/4565964/raw/ (default)
+```
+
+#### `stps_set_plz_gist(url)` - Set custom PLZ data source URL
+```sql
+SELECT stps_set_plz_gist('https://example.com/my-plz-data.csv');
+-- Result: PLZ gist URL set to: https://example.com/my-plz-data.csv
+
+-- After setting, stps_is_valid_plz with strict=true will download from the new URL
+SELECT stps_is_valid_plz('01067', true);
+```
+
+---
+
 ## 💡 Real-World Examples
 
 ### Example 1: Data Deduplication with stps_get_guid
@@ -264,7 +305,8 @@ Now you can use `duckdb` without the `-unsigned` flag!
 | Case Transformations | 7 | `stps_to_*` (snake, camel, pascal, kebab, const, sentence, title) |
 | Text Normalization | 4 | `stps_remove_accents`, `stps_restore_umlauts`, `stps_clean_string`, `stps_normalize` |
 | Null Handling | 2 | `stps_map_empty_to_null`, `stps_map_null_to_empty` |
-| **Total** | **17** | All use `stps_` prefix |
+| PLZ Validation | 4 | `stps_is_valid_plz`, `stps_get_plz_gist`, `stps_set_plz_gist` |
+| **Total** | **20** | All use `stps_` prefix |
 
 ---
 
