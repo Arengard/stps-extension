@@ -467,8 +467,9 @@ static SRes ReadEncodedHeaderStreamsInfo(FILE *f, CEncodedHeaderInfo *info)
     return SZ_OK;
 }
 
-/* Forward declare ParseHeaderFromBuffer */
+/* Forward declarations */
 static SRes ParseHeaderFromBuffer(CSz7zArchive *archive, const Byte *buf, size_t bufSize);
+static SRes ParseStreamsInfoFromBuf(CSz7zArchive *archive, const Byte **bufPtr, const Byte *bufEnd);
 
 /* Decode the encoded header and parse it */
 static SRes DecodeEncodedHeader(CSz7zArchive *archive, UInt64 headerOffset)
@@ -571,6 +572,76 @@ static SRes ReadSubStreamsInfo(FILE *f, CSz7zArchive *archive);
 static SRes ReadFilesInfo(FILE *f, CSz7zArchive *archive);
 static SRes ReadFilesInfoFromBuf(CSz7zArchive *archive, const Byte **buf, const Byte *bufEnd);
 
+/* Parse streams info from buffer to get pack sizes and unpack sizes */
+static SRes ParseStreamsInfoFromBuf(CSz7zArchive *archive, const Byte **bufPtr, const Byte *bufEnd)
+{
+    const Byte *p = *bufPtr;
+    Byte type;
+
+    RINOK(ReadByteFromBuf(&p, bufEnd, &type));
+
+    while (type != k7zIdEnd && p < bufEnd)
+    {
+        switch (type)
+        {
+        case k7zIdPackInfo:
+            {
+                UInt64 packPos, numPackStreams;
+                RINOK(ReadNumberFromBuf(&p, bufEnd, &packPos));
+                RINOK(ReadNumberFromBuf(&p, bufEnd, &numPackStreams));
+
+                archive->numPackStreams = (UInt32)numPackStreams;
+                archive->dataOffset = 32 + packPos;
+
+                RINOK(ReadByteFromBuf(&p, bufEnd, &type));
+                if (type == k7zIdSize)
+                {
+                    archive->packSizes = (UInt64 *)archive->alloc->Alloc(
+                        archive->alloc, sizeof(UInt64) * archive->numPackStreams);
+                    if (!archive->packSizes)
+                        return SZ_ERROR_MEM;
+
+                    for (UInt32 i = 0; i < archive->numPackStreams; i++)
+                    {
+                        RINOK(ReadNumberFromBuf(&p, bufEnd, &archive->packSizes[i]));
+                    }
+                    RINOK(ReadByteFromBuf(&p, bufEnd, &type));
+                }
+                /* Skip to end of PackInfo */
+                while (type != k7zIdEnd && p < bufEnd)
+                {
+                    RINOK(ReadByteFromBuf(&p, bufEnd, &type));
+                }
+            }
+            break;
+
+        case k7zIdUnpackInfo:
+        case k7zIdSubStreamsInfo:
+            /* Skip these sections for now - we'll use file UnpackSize */
+            {
+                int depth = 1;
+                while (depth > 0 && p < bufEnd)
+                {
+                    RINOK(ReadByteFromBuf(&p, bufEnd, &type));
+                    if (type == k7zIdEnd)
+                        depth--;
+                }
+            }
+            break;
+
+        default:
+            /* Unknown section, try to skip */
+            break;
+        }
+
+        if (p < bufEnd)
+            RINOK(ReadByteFromBuf(&p, bufEnd, &type));
+    }
+
+    *bufPtr = p;
+    return SZ_OK;
+}
+
 /* Parse header from buffer (for encoded headers) */
 static SRes ParseHeaderFromBuffer(CSz7zArchive *archive, const Byte *buf, size_t bufSize)
 {
@@ -578,32 +649,47 @@ static SRes ParseHeaderFromBuffer(CSz7zArchive *archive, const Byte *buf, size_t
     const Byte *bufEnd = buf + bufSize;
     Byte type;
     SRes res;
-    
+
     /* Read header type */
     RINOK(ReadByteFromBuf(&p, bufEnd, &type));
-    
+
     if (type != k7zIdHeader)
         return SZ_ERROR_ARCHIVE;
-    
-    /* Scan for FilesInfo section directly to avoid strict stream parsing */
+
+    /* Read next type */
+    RINOK(ReadByteFromBuf(&p, bufEnd, &type));
+
+    /* Parse MainStreamsInfo if present */
+    if (type == k7zIdMainStreamsInfo)
+    {
+        res = ParseStreamsInfoFromBuf(archive, &p, bufEnd);
+        if (res != SZ_OK)
+            return res;
+        RINOK(ReadByteFromBuf(&p, bufEnd, &type));
+    }
+
+    /* Now parse FilesInfo */
+    if (type == k7zIdFilesInfo)
+    {
+        return ReadFilesInfoFromBuf(archive, &p, bufEnd);
+    }
+
+    /* Fallback: scan for FilesInfo section */
     const Byte *files_pos = NULL;
     const Byte *scan;
-    
-    for (scan = p; scan < bufEnd; scan++)
+
+    for (scan = buf; scan < bufEnd; scan++)
     {
-        if (*scan != k7zIdFilesInfo)
-            continue;
-        
-        if (scan == p || (scan > buf && *(scan - 1) == k7zIdEnd))
+        if (*scan == k7zIdFilesInfo)
         {
             files_pos = scan;
             break;
         }
     }
-    
+
     if (!files_pos)
         return SZ_ERROR_ARCHIVE;
-    
+
     const Byte *files_ptr = files_pos + 1;
     return ReadFilesInfoFromBuf(archive, &files_ptr, bufEnd);
 }
