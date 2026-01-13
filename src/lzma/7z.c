@@ -1069,15 +1069,137 @@ const CSz7zFileInfo* Sz7z_GetFileInfo(const CSz7zArchive *archive, UInt32 index)
     return &archive->files[index];
 }
 
-SRes Sz7z_Extract(CSz7zArchive *archive, UInt32 fileIndex, 
+SRes Sz7z_Extract(CSz7zArchive *archive, UInt32 fileIndex,
                    Byte **outBuf, size_t *outSize)
 {
-    /* Full extraction requires more complex stream handling
-       For now, return unsupported */
-    (void)archive;
-    (void)fileIndex;
-    (void)outBuf;
-    (void)outSize;
-    
-    return SZ_ERROR_UNSUPPORTED;
+    if (!archive || !outBuf || !outSize)
+        return SZ_ERROR_PARAM;
+
+    if (fileIndex >= archive->numFiles)
+        return SZ_ERROR_PARAM;
+
+    const CSz7zFileInfo *fileInfo = &archive->files[fileIndex];
+
+    /* Directories have no content */
+    if (fileInfo->IsDir)
+    {
+        *outBuf = NULL;
+        *outSize = 0;
+        return SZ_OK;
+    }
+
+    /* For files with zero size, return empty buffer */
+    if (fileInfo->UnpackSize == 0)
+    {
+        *outBuf = (Byte *)archive->alloc->Alloc(archive->alloc, 1);
+        if (!*outBuf)
+            return SZ_ERROR_MEM;
+        (*outBuf)[0] = 0;
+        *outSize = 0;
+        return SZ_OK;
+    }
+
+    /* Read packed data from archive */
+    if (!archive->file)
+        return SZ_ERROR_READ;
+
+    /* Calculate offset to packed data for this file */
+    /* In a simple 7z archive, packed data starts at dataOffset */
+    UInt64 packOffset = archive->dataOffset;
+    UInt64 packSize = 0;
+
+    /* Sum pack sizes to get total compressed size */
+    for (UInt32 i = 0; i < archive->numPackStreams; i++)
+    {
+        packSize += archive->packSizes[i];
+    }
+
+    /* If no pack info, try to calculate from file positions */
+    if (packSize == 0)
+    {
+        /* Fallback: estimate from archive size minus header */
+        packSize = archive->archiveSize - packOffset;
+    }
+
+    /* Seek to packed data */
+    if (fseek(archive->file, (long)packOffset, SEEK_SET) != 0)
+        return SZ_ERROR_READ;
+
+    /* Allocate buffer for packed data */
+    Byte *packedData = (Byte *)archive->alloc->Alloc(archive->alloc, (size_t)packSize);
+    if (!packedData)
+        return SZ_ERROR_MEM;
+
+    /* Read packed data */
+    if (fread(packedData, 1, (size_t)packSize, archive->file) != (size_t)packSize)
+    {
+        archive->alloc->Free(archive->alloc, packedData);
+        return SZ_ERROR_READ;
+    }
+
+    /* Calculate total unpack size for solid block */
+    UInt64 totalUnpackSize = 0;
+    for (UInt32 i = 0; i < archive->numFiles; i++)
+    {
+        if (!archive->files[i].IsDir)
+            totalUnpackSize += archive->files[i].UnpackSize;
+    }
+
+    /* Allocate output buffer for full decompression */
+    Byte *unpackedData = (Byte *)archive->alloc->Alloc(archive->alloc, (size_t)totalUnpackSize);
+    if (!unpackedData)
+    {
+        archive->alloc->Free(archive->alloc, packedData);
+        return SZ_ERROR_MEM;
+    }
+
+    /* Try LZMA decompression */
+    /* LZMA stream format: 5-byte props + compressed data */
+    if (packSize < 5)
+    {
+        archive->alloc->Free(archive->alloc, packedData);
+        archive->alloc->Free(archive->alloc, unpackedData);
+        return SZ_ERROR_DATA;
+    }
+
+    size_t destLen = (size_t)totalUnpackSize;
+    size_t srcLen = (size_t)packSize - 5;  /* Exclude 5-byte props header */
+    ELzmaStatus status;
+
+    SRes res = LzmaDecode(unpackedData, &destLen,
+                          packedData + 5, &srcLen,
+                          packedData, 5,  /* Props are first 5 bytes */
+                          LZMA_FINISH_END, &status, archive->alloc);
+
+    archive->alloc->Free(archive->alloc, packedData);
+
+    if (res != SZ_OK)
+    {
+        archive->alloc->Free(archive->alloc, unpackedData);
+        return res;
+    }
+
+    /* Find offset for requested file in unpacked stream */
+    UInt64 fileOffset = 0;
+    for (UInt32 i = 0; i < fileIndex; i++)
+    {
+        if (!archive->files[i].IsDir)
+            fileOffset += archive->files[i].UnpackSize;
+    }
+
+    /* Allocate and copy file data */
+    *outSize = (size_t)fileInfo->UnpackSize;
+    *outBuf = (Byte *)archive->alloc->Alloc(archive->alloc, *outSize + 1);
+    if (!*outBuf)
+    {
+        archive->alloc->Free(archive->alloc, unpackedData);
+        return SZ_ERROR_MEM;
+    }
+
+    memcpy(*outBuf, unpackedData + fileOffset, *outSize);
+    (*outBuf)[*outSize] = 0;  /* Null terminate for text files */
+
+    archive->alloc->Free(archive->alloc, unpackedData);
+
+    return SZ_OK;
 }
