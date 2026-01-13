@@ -201,8 +201,31 @@ void Sz7z_Free(CSz7zArchive *archive)
         archive->alloc->Free(archive->alloc, archive->packSizes);
         archive->packSizes = NULL;
     }
+    if (archive->folders)
+    {
+        for (UInt32 i = 0; i < archive->numFolders; i++)
+        {
+            if (archive->folders[i].Coders)
+                archive->alloc->Free(archive->alloc, archive->folders[i].Coders);
+            if (archive->folders[i].UnpackSizes)
+                archive->alloc->Free(archive->alloc, archive->folders[i].UnpackSizes);
+        }
+        archive->alloc->Free(archive->alloc, archive->folders);
+        archive->folders = NULL;
+    }
+    if (archive->fileToFolder)
+    {
+        archive->alloc->Free(archive->alloc, archive->fileToFolder);
+        archive->fileToFolder = NULL;
+    }
+    if (archive->fileIndexInFolder)
+    {
+        archive->alloc->Free(archive->alloc, archive->fileIndexInFolder);
+        archive->fileIndexInFolder = NULL;
+    }
     archive->numFiles = 0;
     archive->numPackStreams = 0;
+    archive->numFolders = 0;
 }
 
 void Sz7z_Close(CSz7zArchive *archive)
