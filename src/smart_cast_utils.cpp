@@ -748,8 +748,10 @@ bool SmartCastUtils::ParseDate(const std::string& value, DateFormat format, date
                     // D Month YY
                     return MakeDate(num2, month, num1, out_result);
                 }
-            } else if (!digits_after.empty()) {
-                // Month YYYY or Month D, YYYY
+                // If digits_before exists but doesn't fit any pattern, don't parse as date
+                // This prevents "4500006182 - NOV24" from being incorrectly parsed
+            } else if (digits_before.empty() && !digits_after.empty()) {
+                // Month YYYY or Month D, YYYY (only when no digits before month)
                 int num = std::stoi(digits_after);
                 if (num >= 1900 || num <= 99) {
                     return MakeDate(num, month, 1, out_result);

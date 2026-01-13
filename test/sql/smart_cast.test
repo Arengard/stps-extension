@@ -99,6 +99,12 @@ SELECT stps_smart_cast('12.3.456');
 ----
 12.3.456
 
+# Mixed content with month names should stay VARCHAR (not parse partial dates)
+query I
+SELECT stps_smart_cast('4500006182 - NOV24');
+----
+4500006182 - NOV24
+
 # Double parsing tests - US format
 query I
 SELECT stps_smart_cast('123.45');
