@@ -1109,9 +1109,12 @@ SRes Sz7z_Extract(CSz7zArchive *archive, UInt32 fileIndex,
     UInt64 packSize = 0;
 
     /* Sum pack sizes to get total compressed size */
-    for (UInt32 i = 0; i < archive->numPackStreams; i++)
+    if (archive->packSizes != NULL)
     {
-        packSize += archive->packSizes[i];
+        for (UInt32 i = 0; i < archive->numPackStreams; i++)
+        {
+            packSize += archive->packSizes[i];
+        }
     }
 
     /* If no pack info, try to calculate from file positions */
@@ -1143,6 +1146,12 @@ SRes Sz7z_Extract(CSz7zArchive *archive, UInt32 fileIndex,
     {
         if (!archive->files[i].IsDir)
             totalUnpackSize += archive->files[i].UnpackSize;
+    }
+
+    if (totalUnpackSize == 0)
+    {
+        archive->alloc->Free(archive->alloc, packedData);
+        return SZ_ERROR_DATA;
     }
 
     /* Allocate output buffer for full decompression */
@@ -1189,6 +1198,13 @@ SRes Sz7z_Extract(CSz7zArchive *archive, UInt32 fileIndex,
 
     /* Allocate and copy file data */
     *outSize = (size_t)fileInfo->UnpackSize;
+
+    if (fileOffset + fileInfo->UnpackSize > totalUnpackSize)
+    {
+        archive->alloc->Free(archive->alloc, unpackedData);
+        return SZ_ERROR_DATA;
+    }
+
     *outBuf = (Byte *)archive->alloc->Alloc(archive->alloc, *outSize + 1);
     if (!*outBuf)
     {
