@@ -34,6 +34,27 @@ typedef struct
     Bool AttribDefined;
 } CSz7zFileInfo;
 
+/* Coder info for decompression */
+typedef struct
+{
+    UInt32 MethodID;        /* Compression method ID */
+    Byte Props[16];         /* Coder properties (max 16 bytes) */
+    UInt32 PropsSize;       /* Size of properties */
+    UInt32 NumInStreams;
+    UInt32 NumOutStreams;
+} CSz7zCoder;
+
+/* Folder represents a compression unit */
+typedef struct
+{
+    CSz7zCoder *Coders;
+    UInt32 NumCoders;
+    UInt64 *UnpackSizes;    /* Unpack size per output stream */
+    UInt32 NumUnpackStreams;
+    UInt32 UnpackCRCDefined;
+    UInt32 UnpackCRC;
+} CSz7zFolder;
+
 /* Main archive structure */
 typedef struct
 {
@@ -48,7 +69,15 @@ typedef struct
     /* Packed streams info */
     UInt64 *packSizes;
     UInt32 numPackStreams;
-    
+
+    /* Folders info */
+    CSz7zFolder *folders;
+    UInt32 numFolders;
+
+    /* File to folder mapping */
+    UInt32 *fileToFolder;      /* Which folder contains each file */
+    UInt32 *fileIndexInFolder; /* Index within the folder's output */
+
     /* Memory allocator */
     ISzAlloc *alloc;
 } CSz7zArchive;
