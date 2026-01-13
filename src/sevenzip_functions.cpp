@@ -353,32 +353,54 @@ static unique_ptr<FunctionData> SevenZipBind(ClientContext &context, TableFuncti
 static unique_ptr<GlobalTableFunctionState> SevenZipInit(ClientContext &context, TableFunctionInitInput &input) {
     auto &bind_data = input.bind_data->Cast<SevenZipBindData>();
     auto result = make_uniq<SevenZipGlobalState>();
-    
-    // Since full extraction is complex, we provide a helpful message
+
+    // Open the archive
     CSz7zArchive archive;
     Sz7z_Init(&archive, nullptr);
-    
+
     SRes res = Sz7z_Open(&archive, bind_data.archive_path.c_str());
-    if (res == SZ_OK) {
-        UInt32 numFiles = Sz7z_GetNumFiles(&archive);
-        
-        // Use stringstream for cleaner string building
-        std::stringstream ss;
-        ss << "7z archive contains " << numFiles << " file(s). ";
-        ss << "Full content extraction is not yet implemented. ";
-        ss << "Use stps_view_7zip() to list files. ";
-        ss << "For extractable archives, consider using ZIP format with stps_zip().";
-        
-        result->column_names = {"message"};
-        result->column_types = {LogicalType::VARCHAR};
-        result->rows.push_back({Value(ss.str())});
-        result->parsed = true;
-        
-        Sz7z_Close(&archive);
-    } else {
-        result->error_message = "Failed to open 7z archive";
+    if (res != SZ_OK) {
+        result->error_message = "Failed to open 7z archive: " + bind_data.archive_path;
+        return std::move(result);
     }
-    
+
+    // Find the file
+    int file_index = -1;
+    UInt32 numFiles = Sz7z_GetNumFiles(&archive);
+
+    for (UInt32 i = 0; i < numFiles; i++) {
+        const CSz7zFileInfo *info = Sz7z_GetFileInfo(&archive, i);
+        if (info && info->Name && bind_data.inner_filename == info->Name) {
+            file_index = i;
+            break;
+        }
+    }
+
+    if (file_index < 0) {
+        Sz7z_Close(&archive);
+        result->error_message = "File not found in 7z archive: " + bind_data.inner_filename;
+        return std::move(result);
+    }
+
+    // Extract file content
+    Byte *outBuf = nullptr;
+    size_t outSize = 0;
+
+    res = Sz7z_Extract(&archive, file_index, &outBuf, &outSize);
+    if (res != SZ_OK) {
+        Sz7z_Close(&archive);
+        result->error_message = "Failed to extract file from 7z archive";
+        return std::move(result);
+    }
+
+    string content(reinterpret_cast<char*>(outBuf), outSize);
+    free(outBuf);
+    Sz7z_Close(&archive);
+
+    // Parse CSV content
+    ParseCSVContent(content, result->column_names, result->column_types, result->rows);
+    result->parsed = true;
+
     return std::move(result);
 }
 
