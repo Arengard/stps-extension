@@ -577,12 +577,6 @@ static void StpsGetAddressFunction(DataChunk &args, ExpressionState &state, Vect
 
     auto &result_validity = FlatVector::Validity(result);
 
-    UnaryExecutor::Execute<string_t, bool>(
-        input, result, count,
-        [&](string_t company_name) {
-            return false; // Placeholder, actual work done in loop below
-        });
-
     // Process each row
     for (idx_t i = 0; i < count; i++) {
         if (FlatVector::IsNull(input, i)) {
