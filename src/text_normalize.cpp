@@ -5,6 +5,9 @@
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 #include <unordered_map>
 #include <cctype>
+#include <algorithm>
+#include <cctype>
+#include <string>
 
 namespace duckdb {
 namespace stps {
@@ -145,13 +148,34 @@ std::string normalize_text(const std::string& input, bool trim_ws, bool lower_ca
 std::string clean_string(const std::string& input) {
     std::string result = trim(input);
 
-    // Normalize whitespace (no regex)
+    // --- Remove NBSP (UTF-8 and Latin-1) ---
+    for (size_t i = 0; i < result.size();) {
+        // UTF-8 NBSP: 0xC2 0xA0
+        if (i + 1 < result.size() &&
+            static_cast<unsigned char>(result[i]) == 0xC2 &&
+            static_cast<unsigned char>(result[i + 1]) == 0xA0) {
+            result.replace(i, 2, " ");
+        }
+        // Latin-1 NBSP: 0xA0
+        else if (static_cast<unsigned char>(result[i]) == 0xA0) {
+            result[i] = ' ';
+            ++i;
+        } else {
+            ++i;
+        }
+    }
+
+    // Normalize whitespace
     result = collapse_whitespace(result);
 
-    // Remove control characters
-    result.erase(std::remove_if(result.begin(), result.end(),
-                                 [](unsigned char c) { return std::iscntrl(c) && c != '\n' && c != '\t'; }),
-                 result.end());
+    // Remove ASCII control characters
+    result.erase(
+        std::remove_if(result.begin(), result.end(),
+            [](unsigned char c) {
+                return std::iscntrl(c) && c != '\n' && c != '\t';
+            }),
+        result.end()
+    );
 
     return result;
 }

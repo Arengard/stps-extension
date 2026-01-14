@@ -18,6 +18,7 @@
 #include "drop_null_columns_function.hpp"
 #include "street_split.hpp"
 #include "plz_validation.hpp"
+#include "address_lookup.hpp"
 // #include "search_columns_function.hpp"  // Uncommitted work-in-progress
 #include "account_validation.hpp"
 #include "smart_cast_scalar.hpp"
@@ -60,6 +61,9 @@ public:
 
         // Register PLZ validation function
         stps::RegisterPlzValidationFunctions(loader);
+
+        // Register address lookup function (Google Impressum search)
+        stps::RegisterAddressLookupFunctions(loader);
 
         // Register smart cast functions
         stps::RegisterSmartCastScalarFunction(loader);
