@@ -23,3 +23,67 @@ query T
 SELECT (stps_split_street('Alemmanenstraße 1-41')).street_number;
 ----
 1-41
+
+# Test compound word abbreviation
+query T
+SELECT (stps_split_street('Siemensstraße 2')).street_name;
+----
+Siemensstr.
+
+query T
+SELECT (stps_split_street('Siemensstraße 2')).street_number;
+----
+2
+
+query T
+SELECT (stps_split_street('Siemensstrasse 2')).street_name;
+----
+Siemensstr.
+
+query T
+SELECT (stps_split_street('Siemensstrasse 2')).street_number;
+----
+2
+
+# Test that separate words are NOT abbreviated
+query T
+SELECT (stps_split_street('Lange Straße 15')).street_name;
+----
+Lange Straße
+
+query T
+SELECT (stps_split_street('Lange Straße 15')).street_number;
+----
+15
+
+query T
+SELECT (stps_split_street('Lange Strasse 15')).street_name;
+----
+Lange Strasse
+
+query T
+SELECT (stps_split_street('Lange Strasse 15')).street_number;
+----
+15
+
+# Test various compound words
+query T
+SELECT (stps_split_street('Hauptstraße 100')).street_name;
+----
+Hauptstr.
+
+query T
+SELECT (stps_split_street('Bahnhofstrasse 42')).street_name;
+----
+Bahnhofstr.
+
+# Test that "Straße" at the beginning stays unchanged
+query T
+SELECT (stps_split_street('Straße des 17. Juni 135')).street_name;
+----
+Straße des 17. Juni
+
+query T
+SELECT (stps_split_street('Straße des 17. Juni 135')).street_number;
+----
+135

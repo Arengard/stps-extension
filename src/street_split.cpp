@@ -40,7 +40,8 @@ static std::string apply_abbreviation(const std::string& street_name) {
     std::string result = street_name;
 
     // Check for compound "straße" or "strasse" at the end
-    // Must be preceded by a non-space character (compound word)
+    // Only abbreviate compound words (e.g., "Siemensstraße" -> "Siemensstr.")
+    // Do NOT abbreviate separate words (e.g., "Lange Straße" stays "Lange Straße")
     if (result.size() > 7) {  // "xstraße" minimum
         // Check for "straße" (UTF-8: 7 bytes) and "strasse" (ASCII: 7 bytes)
         bool has_strasse = ends_with_icase(result, "strasse");
@@ -61,12 +62,21 @@ static std::string apply_abbreviation(const std::string& street_name) {
         }
 
         if (has_strasse || has_strasse_utf8) {
-            // Check if preceded by non-space (compound word)
             size_t suffix_len = 7;
             size_t suffix_start = result.size() - suffix_len;
+
+            // Only abbreviate if:
+            // 1. Preceded by non-space character (compound word)
+            // 2. The 's' in "straße"/"strasse" is lowercase (not a separate word)
             if (suffix_start > 0 && !std::isspace(static_cast<unsigned char>(result[suffix_start - 1]))) {
-                // Replace with "str."
-                result = result.substr(0, suffix_start) + "str.";
+                char first_char = result[suffix_start];
+
+                // If lowercase 's' -> compound word like "Hauptstraße" -> abbreviate
+                // If uppercase 'S' -> separate word like "Lange Straße" -> don't abbreviate
+                if (std::islower(static_cast<unsigned char>(first_char))) {
+                    // Replace with "str."
+                    result = result.substr(0, suffix_start) + "str.";
+                }
             }
         }
     }
