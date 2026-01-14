@@ -416,10 +416,10 @@ static std::vector<std::string> split_lines(const std::string& text) {
 }
 
 // ============================================================================
-// Handelsregister/NorthData parsing
+// Handelsregister parsing
 // ============================================================================
 
-static AddressResult parse_northdata_company_page(const std::string& html) {
+static AddressResult parse_handelsregister_company_page(const std::string& html) {
     AddressResult result;
     result.found = false;
 
@@ -427,11 +427,7 @@ static AddressResult parse_northdata_company_page(const std::string& html) {
     std::string text = strip_html_tags(html);
     std::vector<std::string> lines = split_lines(text);
 
-    // NorthData typically has address in format:
-    // Company Name
-    // Street Number
-    // PLZ City
-    // Look for PLZ + City pattern first
+    // Handelsregister has address in various formats, look for PLZ + City pattern
     for (size_t i = 0; i < lines.size(); i++) {
         std::string plz, city;
         if (parse_plz_city(lines[i], plz, city)) {
@@ -588,67 +584,66 @@ AddressResult lookup_company_address(const std::string& company_name) {
         return result;
     }
 
-    // Step 1: Try NorthData first (most reliable for German companies)
-    // NorthData URL format: https://www.northdata.de/_[company-name]
-    std::string company_encoded = company_name;
-    // Replace spaces with dashes and encode special chars
-    std::replace(company_encoded.begin(), company_encoded.end(), ' ', '-');
-    company_encoded = url_encode(company_encoded);
+    // Step 1: Search on Handelsregister.de
+    // URL format: https://www.handelsregister.de/rp_web/search.xhtml
+    // Uses POST request with search parameters
+    std::string search_url = "https://www.handelsregister.de/rp_web/normalesuche.xhtml?form=simple&query=" + url_encode(company_name);
 
-    std::string northdata_url = "https://www.northdata.de/_" + company_encoded;
-
-    // Step 2: Fetch NorthData page (with rate limiting)
-    std::string northdata_html = fetch_url(northdata_url);
-    if (!northdata_html.empty()) {
-        result = parse_northdata_company_page(northdata_html);
-        if (result.found) {
-            cache_address_result(company_name, result);
-            return result;
-        }
+    // Step 2: Fetch search results (with rate limiting)
+    std::string search_html = fetch_url(search_url);
+    if (search_html.empty()) {
+        cache_address_result(company_name, result);
+        return result;
     }
 
-    // Step 3: Fallback to search on NorthData
-    std::string search_url = "https://www.northdata.de/search?q=" + url_encode(company_name);
-    std::string search_html = fetch_url(search_url);
+    // Step 3: Parse the search results page directly for address info
+    // Handelsregister often shows basic info in search results
+    result = parse_handelsregister_company_page(search_html);
 
-    if (!search_html.empty()) {
-        // Find first company link in search results
-        // NorthData links format: href="/Company-Name,City/HRB-123456"
-        size_t pos = 0;
-        std::string marker = "href=\"/";
+    if (result.found) {
+        cache_address_result(company_name, result);
+        return result;
+    }
 
-        while ((pos = search_html.find(marker, pos)) != std::string::npos) {
-            pos += marker.length();
-            size_t end = search_html.find("\"", pos);
-            if (end == std::string::npos) break;
+    // Step 4: Try to find detail page link
+    // Look for links to individual company pages
+    size_t pos = 0;
+    std::string marker = "href=\"";
 
-            std::string path = search_html.substr(pos, end - pos);
+    while ((pos = search_html.find(marker, pos)) != std::string::npos) {
+        pos += marker.length();
+        size_t end = search_html.find("\"", pos);
+        if (end == std::string::npos) break;
 
-            // Skip footer/navigation links
-            if (path.find("/") == std::string::npos ||
-                path.find("search") != std::string::npos ||
-                path.find("impressum") != std::string::npos ||
-                path.find("about") != std::string::npos) {
-                pos = end;
-                continue;
+        std::string url = search_html.substr(pos, end - pos);
+
+        // Look for detail page URLs (typically contain "ergebnisse" or company identifiers)
+        if (url.find("ergebnisse") != std::string::npos ||
+            url.find("?id=") != std::string::npos ||
+            url.find("detailansicht") != std::string::npos) {
+
+            // Make URL absolute if relative
+            if (url[0] == '/') {
+                url = "https://www.handelsregister.de" + url;
+            } else if (url.find("http") != 0) {
+                url = "https://www.handelsregister.de/rp_web/" + url;
             }
 
-            // Found a company link
-            std::string company_url = "https://www.northdata.de/" + path;
-            std::string company_html = fetch_url(company_url);
-
-            if (!company_html.empty()) {
-                result = parse_northdata_company_page(company_html);
+            std::string detail_html = fetch_url(url);
+            if (!detail_html.empty()) {
+                result = parse_handelsregister_company_page(detail_html);
                 if (result.found) {
                     cache_address_result(company_name, result);
                     return result;
                 }
             }
-            break; // Only try first result
+            break; // Only try first detail link
         }
+
+        pos = end;
     }
 
-    // Step 4: Cache negative result to avoid repeated failed lookups
+    // Step 5: Cache negative result to avoid repeated failed lookups
     cache_address_result(company_name, result);
     return result;
 }
