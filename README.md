@@ -253,32 +253,35 @@ SELECT * FROM stps_smart_cast_analyze('my_data');
 
 ### 🆔 UUID Functions
 
-#### `stps_uuid() → VARCHAR`
+#### `stps_uuid() → UUID`
 Generate random UUID v4.
 ```sql
 SELECT stps_uuid() AS id;
--- Result: '550e8400-e29b-41d4-a716-446655440000'
+-- Result: 550e8400-e29b-41d4-a716-446655440000 (UUID type)
 ```
 
-#### `stps_uuid_from_string(text VARCHAR) → VARCHAR`
+#### `stps_uuid_from_string(text VARCHAR) → UUID`
 Generate deterministic UUID v5 from string.
 ```sql
 SELECT stps_uuid_from_string('my-unique-key') AS id;
--- Result: always same UUID for same input
+-- Result: always same UUID for same input (UUID type)
 ```
 
-#### `stps_get_guid(col1 VARCHAR, col2 VARCHAR, ...) → VARCHAR`
+#### `stps_get_guid(col1 VARCHAR, col2 VARCHAR, ...) → UUID`
 Generate deterministic UUID from multiple columns (composite key).
 ```sql
 SELECT stps_get_guid('customer', 'order123', '2024-01-15') AS guid;
--- Result: deterministic UUID based on all inputs
+-- Result: deterministic UUID based on all inputs (UUID type)
 ```
 
-#### `stps_guid_to_path(guid VARCHAR) → VARCHAR`
-Convert GUID to 4-level folder path (0-255 decimal values).
+#### `stps_guid_to_path(guid UUID) → VARCHAR`
+Convert GUID/UUID to 4-level folder path (0-255 decimal values).
 ```sql
-SELECT stps_guid_to_path('550e8400-e29b-41d4-a716-446655440000') AS path;
+SELECT stps_guid_to_path('550e8400-e29b-41d4-a716-446655440000'::UUID) AS path;
 -- Result: '85/14/132/0'
+
+-- Also accepts VARCHAR input
+SELECT stps_guid_to_path('550e8400-e29b-41d4-a716-446655440000') AS path;
 ```
 
 ---

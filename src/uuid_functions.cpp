@@ -159,28 +159,32 @@ static void StpsGuidToPathFunction(DataChunk &args, ExpressionState &state, Vect
 void RegisterUuidFunctions(ExtensionLoader &loader) {
     // stps_uuid() - Generate random UUID v4
     ScalarFunctionSet uuid_set("stps_uuid");
-    uuid_set.AddFunction(ScalarFunction({}, LogicalType::VARCHAR, PgmUuidFunction));
+    uuid_set.AddFunction(ScalarFunction({}, LogicalType::UUID, PgmUuidFunction));
     loader.RegisterFunction(uuid_set);
 
     // stps_uuid_from_string(text) - Generate deterministic UUID v5 from string
     ScalarFunctionSet uuid_from_string_set("stps_uuid_from_string");
-    uuid_from_string_set.AddFunction(ScalarFunction({LogicalType::VARCHAR}, LogicalType::VARCHAR,
+    uuid_from_string_set.AddFunction(ScalarFunction({LogicalType::VARCHAR}, LogicalType::UUID,
                                                      PgmUuidFromStringFunction));
     loader.RegisterFunction(uuid_from_string_set);
 
     // stps_get_guid(...columns) - Generate deterministic UUID from multiple columns
     // Register variadic version
     ScalarFunctionSet get_guid_set("stps_get_guid");
-    get_guid_set.AddFunction(ScalarFunction({LogicalType::VARCHAR}, LogicalType::VARCHAR,
+    get_guid_set.AddFunction(ScalarFunction({LogicalType::VARCHAR}, LogicalType::UUID,
                                             PgmGetGuidFunction));
     get_guid_set.AddFunction(ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR},
-                                            LogicalType::VARCHAR, PgmGetGuidFunction));
+                                            LogicalType::UUID, PgmGetGuidFunction));
     get_guid_set.AddFunction(ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR},
-                                            LogicalType::VARCHAR, PgmGetGuidFunction));
+                                            LogicalType::UUID, PgmGetGuidFunction));
     loader.RegisterFunction(get_guid_set);
 
     // stps_guid_to_path(guid) - Convert GUID to 4-level folder path
+    // This one should stay VARCHAR as it returns a path string
     ScalarFunctionSet guid_to_path_set("stps_guid_to_path");
+    guid_to_path_set.AddFunction(ScalarFunction({LogicalType::UUID}, LogicalType::VARCHAR,
+                                                 StpsGuidToPathFunction));
+    // Also accept VARCHAR input for compatibility
     guid_to_path_set.AddFunction(ScalarFunction({LogicalType::VARCHAR}, LogicalType::VARCHAR,
                                                  StpsGuidToPathFunction));
     loader.RegisterFunction(guid_to_path_set);
