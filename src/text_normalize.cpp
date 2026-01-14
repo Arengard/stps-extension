@@ -146,38 +146,105 @@ std::string normalize_text(const std::string& input, bool trim_ws, bool lower_ca
 }
 
 std::string clean_string(const std::string& input) {
-    std::string result = trim(input);
+    // Step 1: Trim leading and trailing whitespace
+    size_t start = input.find_first_not_of(" \t\n\r");
+    if (start == std::string::npos) return "";
+    size_t end = input.find_last_not_of(" \t\n\r");
+    std::string result = input.substr(start, end - start + 1);
 
-    // --- Remove NBSP (UTF-8 and Latin-1) ---
+    // Step 2: Remove/replace non-printable characters and special whitespace
+    std::string cleaned;
+    cleaned.reserve(result.size());
+
     for (size_t i = 0; i < result.size();) {
-        // UTF-8 NBSP: 0xC2 0xA0
-        if (i + 1 < result.size() &&
-            static_cast<unsigned char>(result[i]) == 0xC2 &&
+        unsigned char c = static_cast<unsigned char>(result[i]);
+
+        // UTF-8 NBSP: 0xC2 0xA0 -> replace with space
+        if (i + 1 < result.size() && c == 0xC2 &&
             static_cast<unsigned char>(result[i + 1]) == 0xA0) {
-            result.replace(i, 2, " ");
+            cleaned += ' ';
+            i += 2;
+            continue;
         }
-        // Latin-1 NBSP: 0xA0
-        else if (static_cast<unsigned char>(result[i]) == 0xA0) {
-            result[i] = ' ';
+
+        // Latin-1 NBSP: 0xA0 -> replace with space
+        if (c == 0xA0) {
+            cleaned += ' ';
             ++i;
+            continue;
+        }
+
+        // Zero-width space: 0xE2 0x80 0x8B -> remove
+        if (i + 2 < result.size() && c == 0xE2 &&
+            static_cast<unsigned char>(result[i + 1]) == 0x80 &&
+            static_cast<unsigned char>(result[i + 2]) == 0x8B) {
+            i += 3;
+            continue;
+        }
+
+        // Zero-width non-joiner: 0xE2 0x80 0x8C -> remove
+        if (i + 2 < result.size() && c == 0xE2 &&
+            static_cast<unsigned char>(result[i + 1]) == 0x80 &&
+            static_cast<unsigned char>(result[i + 2]) == 0x8C) {
+            i += 3;
+            continue;
+        }
+
+        // Zero-width joiner: 0xE2 0x80 0x8D -> remove
+        if (i + 2 < result.size() && c == 0xE2 &&
+            static_cast<unsigned char>(result[i + 1]) == 0x80 &&
+            static_cast<unsigned char>(result[i + 2]) == 0x8D) {
+            i += 3;
+            continue;
+        }
+
+        // Soft hyphen: 0xC2 0xAD -> remove
+        if (i + 1 < result.size() && c == 0xC2 &&
+            static_cast<unsigned char>(result[i + 1]) == 0xAD) {
+            i += 2;
+            continue;
+        }
+
+        // ASCII control characters (0x00-0x1F and 0x7F)
+        // Convert \n, \t, \r to space; remove other control chars
+        if (c < 0x20 || c == 0x7F) {
+            if (c == '\n' || c == '\t' || c == '\r') {
+                cleaned += ' ';
+            }
+            // Otherwise skip control characters
+            ++i;
+            continue;
+        }
+
+        // Keep printable ASCII (0x20-0x7E) and UTF-8 continuation bytes
+        cleaned += result[i];
+        ++i;
+    }
+
+    // Step 3: Collapse consecutive whitespace into single spaces
+    std::string collapsed;
+    collapsed.reserve(cleaned.size());
+    bool prev_was_space = false;
+
+    for (char c : cleaned) {
+        bool is_space = std::isspace(static_cast<unsigned char>(c));
+        if (is_space) {
+            if (!prev_was_space) {
+                collapsed += ' ';
+            }
+            prev_was_space = true;
         } else {
-            ++i;
+            collapsed += c;
+            prev_was_space = false;
         }
     }
 
-    // Normalize whitespace
-    result = collapse_whitespace(result);
+    // Step 4: Final trim to remove any leading/trailing spaces from collapsing
+    start = collapsed.find_first_not_of(' ');
+    if (start == std::string::npos) return "";
+    end = collapsed.find_last_not_of(' ');
 
-    // Remove ASCII control characters
-    result.erase(
-        std::remove_if(result.begin(), result.end(),
-            [](unsigned char c) {
-                return std::iscntrl(c) && c != '\n' && c != '\t';
-            }),
-        result.end()
-    );
-
-    return result;
+    return collapsed.substr(start, end - start + 1);
 }
 
 // DuckDB scalar function wrappers
