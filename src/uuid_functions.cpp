@@ -2,6 +2,7 @@
 #include "duckdb/function/scalar_function.hpp"
 #include "duckdb/common/types/data_chunk.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
+#include "duckdb/common/types/uuid.hpp"
 #include <random>
 #include <sstream>
 #include <iomanip>
@@ -101,28 +102,28 @@ std::string stps_guid_to_path_impl(const std::string& guid) {
 static void PgmUuidFunction(DataChunk &args, ExpressionState &state, Vector &result) {
     // Generate UUID v4 for each row
     auto count = args.size();
-    auto result_data = FlatVector::GetData<string_t>(result);
+    auto result_data = FlatVector::GetData<hugeint_t>(result);
 
     for (idx_t i = 0; i < count; i++) {
-        std::string uuid = generate_uuid_v4();
-        result_data[i] = StringVector::AddString(result, uuid);
+        std::string uuid_str = generate_uuid_v4();
+        result_data[i] = UUID::FromString(uuid_str);
     }
 }
 
 static void PgmUuidFromStringFunction(DataChunk &args, ExpressionState &state, Vector &result) {
-    UnaryExecutor::Execute<string_t, string_t>(
+    UnaryExecutor::Execute<string_t, hugeint_t>(
         args.data[0], result, args.size(),
         [&](string_t input) {
             std::string input_str = input.GetString();
-            std::string uuid = generate_uuid_v5(input_str);
-            return StringVector::AddString(result, uuid);
+            std::string uuid_str = generate_uuid_v5(input_str);
+            return UUID::FromString(uuid_str);
         });
 }
 
 static void PgmGetGuidFunction(DataChunk &args, ExpressionState &state, Vector &result) {
     // Concatenate all input columns and generate deterministic UUID
     auto count = args.size();
-    auto result_data = FlatVector::GetData<string_t>(result);
+    auto result_data = FlatVector::GetData<hugeint_t>(result);
     auto num_args = args.ColumnCount();
 
     for (idx_t i = 0; i < count; i++) {
@@ -141,16 +142,29 @@ static void PgmGetGuidFunction(DataChunk &args, ExpressionState &state, Vector &
             }
         }
 
-        std::string uuid = generate_uuid_v5(combined.str());
-        result_data[i] = StringVector::AddString(result, uuid);
+        std::string uuid_str = generate_uuid_v5(combined.str());
+        result_data[i] = UUID::FromString(uuid_str);
     }
 }
 
-static void StpsGuidToPathFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+// For VARCHAR input
+static void StpsGuidToPathFunctionVarchar(DataChunk &args, ExpressionState &state, Vector &result) {
     UnaryExecutor::Execute<string_t, string_t>(
         args.data[0], result, args.size(),
         [&](string_t input) {
             std::string guid = input.GetString();
+            std::string path = stps_guid_to_path_impl(guid);
+            return StringVector::AddString(result, path);
+        });
+}
+
+// For UUID input
+static void StpsGuidToPathFunctionUUID(DataChunk &args, ExpressionState &state, Vector &result) {
+    UnaryExecutor::Execute<hugeint_t, string_t>(
+        args.data[0], result, args.size(),
+        [&](hugeint_t input) {
+            // Convert UUID (hugeint_t) to string representation
+            std::string guid = UUID::ToString(input);
             std::string path = stps_guid_to_path_impl(guid);
             return StringVector::AddString(result, path);
         });
@@ -183,10 +197,10 @@ void RegisterUuidFunctions(ExtensionLoader &loader) {
     // This one should stay VARCHAR as it returns a path string
     ScalarFunctionSet guid_to_path_set("stps_guid_to_path");
     guid_to_path_set.AddFunction(ScalarFunction({LogicalType::UUID}, LogicalType::VARCHAR,
-                                                 StpsGuidToPathFunction));
+                                                 StpsGuidToPathFunctionUUID));
     // Also accept VARCHAR input for compatibility
     guid_to_path_set.AddFunction(ScalarFunction({LogicalType::VARCHAR}, LogicalType::VARCHAR,
-                                                 StpsGuidToPathFunction));
+                                                 StpsGuidToPathFunctionVarchar));
     loader.RegisterFunction(guid_to_path_set);
 }
 
