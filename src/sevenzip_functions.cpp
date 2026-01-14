@@ -364,21 +364,37 @@ static unique_ptr<GlobalTableFunctionState> SevenZipInit(ClientContext &context,
         return std::move(result);
     }
 
-    // Find the file
+    // Find the file (case-insensitive search)
     int file_index = -1;
     UInt32 numFiles = Sz7z_GetNumFiles(&archive);
+    string target_lower = bind_data.inner_filename;
+    std::transform(target_lower.begin(), target_lower.end(), target_lower.begin(), ::tolower);
 
     for (UInt32 i = 0; i < numFiles; i++) {
         const CSz7zFileInfo *info = Sz7z_GetFileInfo(&archive, i);
-        if (info && info->Name && bind_data.inner_filename == info->Name) {
-            file_index = i;
-            break;
+        if (info && info->Name) {
+            string name_lower = info->Name;
+            std::transform(name_lower.begin(), name_lower.end(), name_lower.begin(), ::tolower);
+
+            if (target_lower == name_lower) {
+                file_index = i;
+                break;
+            }
         }
     }
 
     if (file_index < 0) {
         Sz7z_Close(&archive);
-        result->error_message = "File not found in 7z archive: " + bind_data.inner_filename;
+        result->error_message = "File not found in 7z archive: '" + bind_data.inner_filename + "'. Available files: ";
+        // List available files to help user
+        for (UInt32 i = 0; i < std::min(numFiles, (UInt32)5); i++) {
+            const CSz7zFileInfo *info = Sz7z_GetFileInfo(&archive, i);
+            if (info && info->Name && !info->IsDir) {
+                if (i > 0) result->error_message += ", ";
+                result->error_message += "'" + string(info->Name) + "'";
+            }
+        }
+        if (numFiles > 5) result->error_message += ", ...";
         return std::move(result);
     }
 
@@ -400,6 +416,14 @@ static unique_ptr<GlobalTableFunctionState> SevenZipInit(ClientContext &context,
     // Parse CSV content
     ParseCSVContent(content, result->column_names, result->column_types, result->rows);
     result->parsed = true;
+
+    // If parsing returned no columns, treat as raw text
+    if (result->column_names.empty()) {
+        result->error_message = "Failed to parse file as CSV/TXT. File size: " + std::to_string(outSize) + " bytes. " +
+                               "Content preview: " + content.substr(0, std::min((size_t)100, content.size()));
+        Sz7z_Close(&archive);
+        return std::move(result);
+    }
 
     return std::move(result);
 }
