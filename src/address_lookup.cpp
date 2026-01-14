@@ -10,6 +10,10 @@
 #include <sstream>
 #include <iostream>
 #include <iomanip>
+#include <chrono>
+#include <thread>
+#include <mutex>
+#include <unordered_map>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -22,6 +26,78 @@
 
 namespace duckdb {
 namespace stps {
+
+// ============================================================================
+// Rate limiting and caching
+// ============================================================================
+
+// Simple in-memory cache with TTL
+struct CacheEntry {
+    AddressResult result;
+    std::chrono::steady_clock::time_point timestamp;
+};
+
+static std::mutex cache_mutex;
+static std::unordered_map<std::string, CacheEntry> address_cache;
+static std::chrono::steady_clock::time_point last_request_time;
+static const int MIN_REQUEST_INTERVAL_MS = 2000; // 2 seconds between requests
+static const int CACHE_TTL_SECONDS = 3600; // 1 hour cache
+
+static void rate_limit_delay() {
+    std::lock_guard<std::mutex> lock(cache_mutex);
+
+    auto now = std::chrono::steady_clock::now();
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_request_time).count();
+
+    if (elapsed < MIN_REQUEST_INTERVAL_MS) {
+        int sleep_time = MIN_REQUEST_INTERVAL_MS - static_cast<int>(elapsed);
+        std::this_thread::sleep_for(std::chrono::milliseconds(sleep_time));
+    }
+
+    last_request_time = std::chrono::steady_clock::now();
+}
+
+static bool get_cached_address(const std::string& company_name, AddressResult& result) {
+    std::lock_guard<std::mutex> lock(cache_mutex);
+
+    auto it = address_cache.find(company_name);
+    if (it != address_cache.end()) {
+        auto now = std::chrono::steady_clock::now();
+        auto age = std::chrono::duration_cast<std::chrono::seconds>(now - it->second.timestamp).count();
+
+        if (age < CACHE_TTL_SECONDS) {
+            result = it->second.result;
+            return true;
+        } else {
+            // Expired, remove from cache
+            address_cache.erase(it);
+        }
+    }
+
+    return false;
+}
+
+static void cache_address_result(const std::string& company_name, const AddressResult& result) {
+    std::lock_guard<std::mutex> lock(cache_mutex);
+
+    CacheEntry entry;
+    entry.result = result;
+    entry.timestamp = std::chrono::steady_clock::now();
+
+    address_cache[company_name] = entry;
+
+    // Limit cache size to 1000 entries
+    if (address_cache.size() > 1000) {
+        // Remove oldest entry (simple LRU)
+        auto oldest = address_cache.begin();
+        for (auto it = address_cache.begin(); it != address_cache.end(); ++it) {
+            if (it->second.timestamp < oldest->second.timestamp) {
+                oldest = it;
+            }
+        }
+        address_cache.erase(oldest);
+    }
+}
 
 // ============================================================================
 // String utilities
@@ -124,17 +200,37 @@ static std::string read_file_content(const std::string& path) {
 }
 
 static std::string fetch_url(const std::string& url) {
+    // Apply rate limiting before making request
+    rate_limit_delay();
+
     std::string temp_file = get_temp_filename();
 
-    // Build curl command with User-Agent to avoid blocking
+    // Build curl command with realistic browser headers to avoid bot detection
+    // Updated User-Agent to latest Chrome version
+    // Added Accept-Language for German locale
+    // Added DNT (Do Not Track) header
     std::string cmd = "curl -s -L -m 15 "
-                      "-A \"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36\" "
+                      "-H \"User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36\" "
+                      "-H \"Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8\" "
+                      "-H \"Accept-Language: de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7\" "
+                      "-H \"Accept-Encoding: gzip, deflate, br\" "
+                      "-H \"DNT: 1\" "
+                      "-H \"Connection: keep-alive\" "
+                      "-H \"Upgrade-Insecure-Requests: 1\" "
+                      "--compressed "
                       "-o \"" + temp_file + "\" "
                       "\"" + url + "\" 2>/dev/null";
 
 #ifdef _WIN32
     cmd = "curl -s -L -m 15 "
-          "-A \"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36\" "
+          "-H \"User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36\" "
+          "-H \"Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8\" "
+          "-H \"Accept-Language: de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7\" "
+          "-H \"Accept-Encoding: gzip, deflate, br\" "
+          "-H \"DNT: 1\" "
+          "-H \"Connection: keep-alive\" "
+          "-H \"Upgrade-Insecure-Requests: 1\" "
+          "--compressed "
           "-o \"" + temp_file + "\" "
           "\"" + url + "\" 2>nul";
 #endif
@@ -142,14 +238,16 @@ static std::string fetch_url(const std::string& url) {
     int result = system(cmd.c_str());
 
     if (result != 0) {
-        // Fallback to wget
+        // Fallback to wget with similar headers
 #ifdef _WIN32
         cmd = "wget -q -O \"" + temp_file + "\" "
-              "-U \"Mozilla/5.0 (Windows NT 10.0; Win64; x64)\" "
+              "--user-agent=\"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36\" "
+              "--header=\"Accept-Language: de-DE,de;q=0.9\" "
               "\"" + url + "\" 2>nul";
 #else
         cmd = "wget -q -O \"" + temp_file + "\" "
-              "-U \"Mozilla/5.0 (Windows NT 10.0; Win64; x64)\" "
+              "--user-agent=\"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36\" "
+              "--header=\"Accept-Language: de-DE,de;q=0.9\" "
               "\"" + url + "\" 2>/dev/null";
 #endif
         result = system(cmd.c_str());
@@ -531,30 +629,42 @@ AddressResult lookup_company_address(const std::string& company_name) {
         return result;
     }
 
+    // Step 0: Check cache first
+    if (get_cached_address(company_name, result)) {
+        return result;
+    }
+
     // Step 1: Build Google search URL
     std::string search_query = url_encode(company_name + " impressum");
     std::string google_url = "https://www.google.com/search?q=" + search_query + "&hl=de";
 
-    // Step 2: Fetch Google search results
+    // Step 2: Fetch Google search results (with rate limiting)
     std::string google_html = fetch_url(google_url);
     if (google_html.empty()) {
+        // Cache negative result to avoid repeated failed lookups
+        cache_address_result(company_name, result);
         return result;
     }
 
     // Step 3: Find Impressum URL from search results
     std::string impressum_url = find_impressum_url(google_html, company_name);
     if (impressum_url.empty()) {
+        cache_address_result(company_name, result);
         return result;
     }
 
-    // Step 4: Fetch Impressum page
+    // Step 4: Fetch Impressum page (with rate limiting)
     std::string impressum_html = fetch_url(impressum_url);
     if (impressum_html.empty()) {
+        cache_address_result(company_name, result);
         return result;
     }
 
     // Step 5: Parse address from Impressum
     result = parse_impressum_address(impressum_html);
+
+    // Step 6: Cache the result (success or failure)
+    cache_address_result(company_name, result);
 
     return result;
 }

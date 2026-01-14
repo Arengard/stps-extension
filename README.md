@@ -209,10 +209,32 @@ SELECT * FROM (SELECT stps_split_street('Hauptstraße 100') AS addr);
 
 #### `stps_get_address(company_name VARCHAR) → STRUCT(...)`
 Look up company address via Google Impressum search (requires internet).
+
+**Features:**
+- ✅ Automatic rate limiting (2 seconds between requests)
+- ✅ In-memory caching (1 hour TTL, up to 1000 entries)
+- ✅ Realistic browser headers to avoid bot detection
+- ✅ Automatic retry with fallback to wget
+
 ```sql
 SELECT * FROM (SELECT stps_get_address('Deutsche Bank AG') AS addr);
 -- Returns: {city, plz, address, street_name, street_number}
+
+-- Works with multiple companies (cached for performance)
+SELECT
+    company_name,
+    (stps_get_address(company_name)).city AS city,
+    (stps_get_address(company_name)).plz AS plz
+FROM companies;
+
+-- Note: First call takes 4-6 seconds (web scraping + rate limit)
+--       Subsequent calls for same company are instant (cached)
 ```
+
+**Requirements:**
+- Internet connection
+- `curl` or `wget` installed
+- Respectful use (rate limited to avoid Google blocks)
 
 ---
 
