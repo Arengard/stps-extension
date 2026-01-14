@@ -734,6 +734,15 @@ bool SmartCastUtils::ParseDate(const std::string& value, DateFormat format, date
             }
 
             if (!digits_before.empty() && !digits_after.empty()) {
+                // Reject if digits_before or digits_after are too long to be valid date components
+                // Valid date components: day (1-31, max 2 digits) or year (4 digits or 2 digits)
+                // Anything longer is likely an ID or other non-date value
+                if (digits_before.length() > 4 || digits_after.length() > 4) {
+                    // Too many digits - likely not a date
+                    // e.g., "4500006182 - NOV24" or "NOV - 123456" should not be parsed as date
+                    return false;
+                }
+
                 int num1 = std::stoi(digits_before);
                 int num2 = std::stoi(digits_after);
 
@@ -741,15 +750,15 @@ bool SmartCastUtils::ParseDate(const std::string& value, DateFormat format, date
                 if (num1 <= 31 && num2 >= 1900) {
                     // D Month YYYY
                     return MakeDate(num2, month, num1, out_result);
-                } else if (num2 <= 31 && num1 >= 1900) {
-                    // YYYY Month D
+                } else if (num2 <= 31 && num1 >= 1900 && num1 <= 2100) {
+                    // YYYY Month D (validate year is in reasonable range)
                     return MakeDate(num1, month, num2, out_result);
                 } else if (num1 <= 31 && num2 <= 99) {
                     // D Month YY
                     return MakeDate(num2, month, num1, out_result);
                 }
                 // If digits_before exists but doesn't fit any pattern, don't parse as date
-                // This prevents "4500006182 - NOV24" from being incorrectly parsed
+                // This prevents strings like "4500006182 - NOV24" from being incorrectly parsed
             } else if (digits_before.empty() && !digits_after.empty()) {
                 // Month YYYY or Month D, YYYY (only when no digits before month)
                 int num = std::stoi(digits_after);

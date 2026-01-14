@@ -305,3 +305,31 @@ col	VARCHAR	3	0	3	0
 
 statement ok
 DROP TABLE test_mixed;
+
+# Test that IDs with month names are not parsed as dates
+# Regression test for issue where '4500006182 - NOV24' was incorrectly parsed as date
+query I
+SELECT stps_smart_cast('4500006182 - NOV24');
+----
+4500006182 - NOV24
+
+query I
+SELECT stps_smart_cast('ID123456789 - DEC25');
+----
+ID123456789 - DEC25
+
+query I
+SELECT stps_smart_cast('12345 - JAN26');
+----
+12345 - JAN26
+
+# But valid date formats with month names should still work
+query I
+SELECT stps_smart_cast('15 Nov 2024')::VARCHAR;
+----
+2024-11-15
+
+query I
+SELECT stps_smart_cast('Nov 24')::VARCHAR;
+----
+2024-11-01
