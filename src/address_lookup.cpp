@@ -416,57 +416,68 @@ static std::vector<std::string> split_lines(const std::string& text) {
 }
 
 // ============================================================================
-// Google search result parsing
+// Handelsregister/NorthData parsing
 // ============================================================================
 
-static std::string find_impressum_url(const std::string& google_html, const std::string& company_name) {
-    std::vector<std::string> candidates;
+static AddressResult parse_northdata_company_page(const std::string& html) {
+    AddressResult result;
+    result.found = false;
 
-    // Google wraps links in /url?q= pattern
-    std::string marker = "href=\"/url?q=";
-    size_t pos = 0;
+    // Strip HTML and get plain text
+    std::string text = strip_html_tags(html);
+    std::vector<std::string> lines = split_lines(text);
 
-    while ((pos = google_html.find(marker, pos)) != std::string::npos) {
-        pos += marker.length();
+    // NorthData typically has address in format:
+    // Company Name
+    // Street Number
+    // PLZ City
+    // Look for PLZ + City pattern first
+    for (size_t i = 0; i < lines.size(); i++) {
+        std::string plz, city;
+        if (parse_plz_city(lines[i], plz, city)) {
+            result.plz = plz;
+            result.city = city;
 
-        // Find end of URL (& for next parameter or " for end of href)
-        size_t end = google_html.find_first_of("&\"", pos);
-        if (end == std::string::npos) break;
+            // Street is typically the line BEFORE PLZ+City
+            if (i > 0) {
+                std::string prev_line = lines[i - 1];
+                if (looks_like_street_address(prev_line)) {
+                    result.full_address = prev_line;
+                } else if (i > 1 && looks_like_street_address(lines[i - 2])) {
+                    result.full_address = lines[i - 2];
+                }
+            }
 
-        std::string url = url_decode(google_html.substr(pos, end - pos));
-        std::string url_lower = to_lower(url);
+            // Also check if street+number has house number at end
+            if (result.full_address.empty() && i > 0) {
+                // Try previous line even if it doesn't match street patterns
+                std::string prev_line = lines[i - 1];
+                // Check if it has a number at the end (likely house number)
+                if (!prev_line.empty() && prev_line.length() > 2) {
+                    char last = prev_line.back();
+                    if (std::isdigit(last) || last == 'a' || last == 'b' || last == 'c') {
+                        result.full_address = prev_line;
+                    }
+                }
+            }
 
-        // Skip Google's own URLs
-        if (url_lower.find("google.") != std::string::npos) continue;
-        if (url_lower.find("youtube.") != std::string::npos) continue;
-
-        // Look for impressum-related URLs
-        if (url_lower.find("impressum") != std::string::npos ||
-            url_lower.find("imprint") != std::string::npos ||
-            url_lower.find("/legal") != std::string::npos ||
-            url_lower.find("/kontakt") != std::string::npos ||
-            url_lower.find("/about") != std::string::npos) {
-            candidates.push_back(url);
+            result.found = true;
+            break;
         }
     }
 
-    if (candidates.empty()) {
-        return "";
+    // Split street address into name and number
+    if (!result.full_address.empty()) {
+        auto parsed = parse_street_address(result.full_address);
+        result.street_name = parsed.street_name;
+        result.street_number = parsed.street_number;
     }
 
-    // Prefer URLs with "impressum" in them
-    for (const auto& url : candidates) {
-        if (to_lower(url).find("impressum") != std::string::npos) {
-            return url;
-        }
-    }
-
-    // Otherwise return first candidate
-    return candidates[0];
+    return result;
 }
 
 // ============================================================================
-// German address parsing
+// Address parsing utilities
 // ============================================================================
 
 static bool parse_plz_city(const std::string& line, std::string& plz, std::string& city) {
@@ -560,63 +571,6 @@ static bool looks_like_street_address(const std::string& line) {
     return false;
 }
 
-static AddressResult parse_impressum_address(const std::string& html) {
-    AddressResult result;
-    result.found = false;
-
-    // Strip HTML and get plain text
-    std::string text = strip_html_tags(html);
-    std::vector<std::string> lines = split_lines(text);
-
-    // Look for PLZ + City pattern
-    for (size_t i = 0; i < lines.size(); i++) {
-        std::string plz, city;
-        if (parse_plz_city(lines[i], plz, city)) {
-            result.plz = plz;
-            result.city = city;
-
-            // Street is typically the line BEFORE PLZ+City
-            if (i > 0) {
-                std::string prev_line = lines[i - 1];
-                if (looks_like_street_address(prev_line)) {
-                    result.full_address = prev_line;
-                } else if (i > 1 && looks_like_street_address(lines[i - 2])) {
-                    // Sometimes there's an extra line between
-                    result.full_address = lines[i - 2];
-                }
-            }
-
-            // Also check if street is on same line (before PLZ)
-            if (result.full_address.empty()) {
-                size_t plz_pos = lines[i].find(plz);
-                if (plz_pos > 5) {
-                    std::string before_plz = trim(lines[i].substr(0, plz_pos));
-                    // Remove trailing comma
-                    if (!before_plz.empty() && before_plz.back() == ',') {
-                        before_plz.pop_back();
-                        before_plz = trim(before_plz);
-                    }
-                    if (looks_like_street_address(before_plz)) {
-                        result.full_address = before_plz;
-                    }
-                }
-            }
-
-            result.found = true;
-            break;
-        }
-    }
-
-    // Split street address into name and number using existing function
-    if (!result.full_address.empty()) {
-        auto parsed = parse_street_address(result.full_address);
-        result.street_name = parsed.street_name;
-        result.street_number = parsed.street_number;
-    }
-
-    return result;
-}
-
 // ============================================================================
 // Main lookup function
 // ============================================================================
@@ -634,38 +588,68 @@ AddressResult lookup_company_address(const std::string& company_name) {
         return result;
     }
 
-    // Step 1: Build Google search URL
-    std::string search_query = url_encode(company_name + " impressum");
-    std::string google_url = "https://www.google.com/search?q=" + search_query + "&hl=de";
+    // Step 1: Try NorthData first (most reliable for German companies)
+    // NorthData URL format: https://www.northdata.de/_[company-name]
+    std::string company_encoded = company_name;
+    // Replace spaces with dashes and encode special chars
+    std::replace(company_encoded.begin(), company_encoded.end(), ' ', '-');
+    company_encoded = url_encode(company_encoded);
 
-    // Step 2: Fetch Google search results (with rate limiting)
-    std::string google_html = fetch_url(google_url);
-    if (google_html.empty()) {
-        // Cache negative result to avoid repeated failed lookups
-        cache_address_result(company_name, result);
-        return result;
+    std::string northdata_url = "https://www.northdata.de/_" + company_encoded;
+
+    // Step 2: Fetch NorthData page (with rate limiting)
+    std::string northdata_html = fetch_url(northdata_url);
+    if (!northdata_html.empty()) {
+        result = parse_northdata_company_page(northdata_html);
+        if (result.found) {
+            cache_address_result(company_name, result);
+            return result;
+        }
     }
 
-    // Step 3: Find Impressum URL from search results
-    std::string impressum_url = find_impressum_url(google_html, company_name);
-    if (impressum_url.empty()) {
-        cache_address_result(company_name, result);
-        return result;
+    // Step 3: Fallback to search on NorthData
+    std::string search_url = "https://www.northdata.de/search?q=" + url_encode(company_name);
+    std::string search_html = fetch_url(search_url);
+
+    if (!search_html.empty()) {
+        // Find first company link in search results
+        // NorthData links format: href="/Company-Name,City/HRB-123456"
+        size_t pos = 0;
+        std::string marker = "href=\"/";
+
+        while ((pos = search_html.find(marker, pos)) != std::string::npos) {
+            pos += marker.length();
+            size_t end = search_html.find("\"", pos);
+            if (end == std::string::npos) break;
+
+            std::string path = search_html.substr(pos, end - pos);
+
+            // Skip footer/navigation links
+            if (path.find("/") == std::string::npos ||
+                path.find("search") != std::string::npos ||
+                path.find("impressum") != std::string::npos ||
+                path.find("about") != std::string::npos) {
+                pos = end;
+                continue;
+            }
+
+            // Found a company link
+            std::string company_url = "https://www.northdata.de/" + path;
+            std::string company_html = fetch_url(company_url);
+
+            if (!company_html.empty()) {
+                result = parse_northdata_company_page(company_html);
+                if (result.found) {
+                    cache_address_result(company_name, result);
+                    return result;
+                }
+            }
+            break; // Only try first result
+        }
     }
 
-    // Step 4: Fetch Impressum page (with rate limiting)
-    std::string impressum_html = fetch_url(impressum_url);
-    if (impressum_html.empty()) {
-        cache_address_result(company_name, result);
-        return result;
-    }
-
-    // Step 5: Parse address from Impressum
-    result = parse_impressum_address(impressum_html);
-
-    // Step 6: Cache the result (success or failure)
+    // Step 4: Cache negative result to avoid repeated failed lookups
     cache_address_result(company_name, result);
-
     return result;
 }
 
