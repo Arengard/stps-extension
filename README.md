@@ -1,324 +1,577 @@
 # STPS DuckDB Extension
 
-A DuckDB extension providing STPS-specific functions for data transformation, validation, and file operations.
+A comprehensive DuckDB extension providing 45+ functions for data transformation, validation, file operations, and German business data processing.
 
-## Features
+## 📦 Installation
 
-- **Text Transformations** – Case conversion, normalization, and text processing
-- **Data Validation** – IBAN validation and other data quality checks
-- **UUID Functions** – UUID generation and manipulation
-- **Null Handling** – Enhanced null value processing
-- **XML Parsing** – XML data parsing and extraction
-- **File Operations** – Filesystem scanning and path manipulation
-- **GOBD Reader** – German GOBD standard compliance tools
-- **Smart Cast** – Automatic type detection and casting for VARCHAR columns
+### Quick Start (Prebuilt Binaries - Recommended)
 
-## Quick Start (Prebuilt Binaries)
+1. **Download** from [GitHub Actions](https://github.com/Arengard/stps-extension/actions)
+   - Click latest successful workflow (green ✅)
+   - Download `stps-windows-amd64-latest-master`
+   - Extract `stps.duckdb_extension`
 
-**No build tools required!** Download prebuilt binaries from GitHub Actions:
-
-### Step 1: Download the Extension
-
-1. Go to [GitHub Actions](https://github.com/Arengard/stps-extension/actions)
-2. Click on the latest successful "Windows Build on Push" workflow (green checkmark ✅)
-3. Scroll to the **Artifacts** section at the bottom
-4. Download `stps-windows-amd64-latest-master` (or your preferred version)
-5. Extract the ZIP file to get `stps.duckdb_extension`
-
-### Step 2: Load in DuckDB
-
+2. **Load in DuckDB**
 ```sql
--- Start DuckDB (unsigned mode required for loading extensions)
 duckdb -unsigned
-
--- Install the extension
 INSTALL './stps.duckdb_extension';
+LOAD stps;
+```
 
--- Load it
+3. **Verify**
+```sql
+SELECT stps_is_valid_iban('DE89370400440532013000');
+```
+
+## 📚 Complete Function Reference
+
+### 📝 Text Processing & Normalization
+
+#### `stps_clean_string(text VARCHAR) → VARCHAR`
+Remove non-printable characters, normalize whitespace, handle special Unicode characters.
+```sql
+SELECT stps_clean_string('Hello   World​') AS cleaned;
+-- Result: 'Hello World'
+
+SELECT stps_clean_string('Text with\t\ttabs and\n\nnewlines') AS cleaned;
+-- Result: 'Text with tabs and newlines'
+```
+
+#### `stps_normalize(text VARCHAR) → VARCHAR`
+Normalize text: collapse whitespace, trim, optionally lowercase.
+```sql
+SELECT stps_normalize('  Multiple   Spaces  ') AS normalized;
+-- Result: 'Multiple Spaces'
+```
+
+#### `stps_remove_accents(text VARCHAR, keep_umlauts BOOLEAN DEFAULT false) → VARCHAR`
+Remove accents from text, optionally preserve German umlauts.
+```sql
+SELECT stps_remove_accents('Café München', false) AS no_accents;
+-- Result: 'Cafe Muenchen'
+
+SELECT stps_remove_accents('Café München', true) AS keep_umlauts;
+-- Result: 'Cafe München'
+```
+
+#### `stps_restore_umlauts(text VARCHAR) → VARCHAR`
+Convert ASCII representations back to German umlauts (ae→ä, oe→ö, ue→ü, ss→ß).
+```sql
+SELECT stps_restore_umlauts('Muenchen') AS restored;
+-- Result: 'München'
+
+SELECT stps_restore_umlauts('Strasse') AS restored;
+-- Result: 'Straße'
+```
+
+---
+
+### 🔤 Case Transformations
+
+#### `stps_to_snake_case(text VARCHAR) → VARCHAR`
+Convert to snake_case.
+```sql
+SELECT stps_to_snake_case('HelloWorld') AS snake;
+-- Result: 'hello_world'
+```
+
+#### `stps_to_camel_case(text VARCHAR) → VARCHAR`
+Convert to camelCase.
+```sql
+SELECT stps_to_camel_case('hello_world') AS camel;
+-- Result: 'helloWorld'
+```
+
+#### `stps_to_pascal_case(text VARCHAR) → VARCHAR`
+Convert to PascalCase.
+```sql
+SELECT stps_to_pascal_case('hello_world') AS pascal;
+-- Result: 'HelloWorld'
+```
+
+#### `stps_to_kebab_case(text VARCHAR) → VARCHAR`
+Convert to kebab-case.
+```sql
+SELECT stps_to_kebab_case('HelloWorld') AS kebab;
+-- Result: 'hello-world'
+```
+
+#### `stps_to_const_case(text VARCHAR) → VARCHAR`
+Convert to CONST_CASE.
+```sql
+SELECT stps_to_const_case('helloWorld') AS const;
+-- Result: 'HELLO_WORLD'
+```
+
+#### `stps_to_title_case(text VARCHAR) → VARCHAR`
+Convert to Title Case.
+```sql
+SELECT stps_to_title_case('hello world') AS title;
+-- Result: 'Hello World'
+```
+
+#### `stps_to_sentence_case(text VARCHAR) → VARCHAR`
+Convert to Sentence case.
+```sql
+SELECT stps_to_sentence_case('HELLO WORLD') AS sentence;
+-- Result: 'Hello world'
+```
+
+---
+
+### ✅ Data Validation
+
+#### `stps_is_valid_iban(iban VARCHAR) → BOOLEAN`
+Validate IBAN (International Bank Account Number) using mod-97 algorithm.
+```sql
+SELECT stps_is_valid_iban('DE89370400440532013000') AS valid;
+-- Result: true
+
+SELECT stps_is_valid_iban('DE12345678901234567890') AS valid;
+-- Result: false
+```
+
+#### `stps_is_valid_german_iban(iban VARCHAR) → BOOLEAN`
+Validate German IBAN (DE country code + 20 characters).
+```sql
+SELECT stps_is_valid_german_iban('DE89370400440532013000') AS valid;
+-- Result: true
+```
+
+#### `stps_get_iban_country_code(iban VARCHAR) → VARCHAR`
+Extract country code from IBAN.
+```sql
+SELECT stps_get_iban_country_code('DE89370400440532013000') AS country;
+-- Result: 'DE'
+```
+
+#### `stps_get_iban_check_digits(iban VARCHAR) → VARCHAR`
+Extract check digits from IBAN.
+```sql
+SELECT stps_get_iban_check_digits('DE89370400440532013000') AS check_digits;
+-- Result: '89'
+```
+
+#### `stps_get_bban(iban VARCHAR) → VARCHAR`
+Extract BBAN (Basic Bank Account Number) from IBAN.
+```sql
+SELECT stps_get_bban('DE89370400440532013000') AS bban;
+-- Result: '370400440532013000'
+```
+
+#### `stps_format_iban(iban VARCHAR) → VARCHAR`
+Format IBAN with spaces (4-character groups).
+```sql
+SELECT stps_format_iban('DE89370400440532013000') AS formatted;
+-- Result: 'DE89 3704 0044 0532 0130 00'
+```
+
+#### `stps_is_valid_plz(plz VARCHAR) → BOOLEAN`
+Validate German postal code (5 digits).
+```sql
+SELECT stps_is_valid_plz('10115') AS valid;
+-- Result: true
+
+SELECT stps_is_valid_plz('123') AS valid;
+-- Result: false
+```
+
+#### `stps_validate_account_number(account VARCHAR, bank_code VARCHAR) → BOOLEAN`
+Validate German bank account number using check digit algorithms.
+```sql
+SELECT stps_validate_account_number('532013000', '37040044') AS valid;
+```
+
+#### `stps_validate_account_result(account VARCHAR, bank_code VARCHAR) → VARCHAR`
+Get detailed validation result.
+```sql
+SELECT stps_validate_account_result('532013000', '37040044') AS result;
+-- Result: 'VALID' or 'INVALID'
+```
+
+---
+
+### 🏠 Address Processing
+
+#### `stps_split_street(address VARCHAR) → STRUCT(street_name VARCHAR, street_number VARCHAR)`
+Split German street address into name and number. Abbreviates compound street names.
+```sql
+SELECT (stps_split_street('Siemensstraße 2')).street_name AS street,
+       (stps_split_street('Siemensstraße 2')).street_number AS number;
+-- street: 'Siemensstr.', number: '2'
+
+SELECT (stps_split_street('Lange Straße 15')).street_name AS street;
+-- street: 'Lange Straße' (not abbreviated - separate words)
+
+SELECT * FROM (SELECT stps_split_street('Hauptstraße 100') AS addr);
+-- Returns: {street_name: 'Hauptstr.', street_number: '100'}
+```
+
+#### `stps_get_address(company_name VARCHAR) → STRUCT(...)`
+Look up company address via Google Impressum search (requires internet).
+```sql
+SELECT * FROM (SELECT stps_get_address('Deutsche Bank AG') AS addr);
+-- Returns: {city, plz, address, street_name, street_number}
+```
+
+---
+
+### 🔢 Smart Type Casting
+
+#### `stps_smart_cast(value VARCHAR) → <detected type>`
+Automatically detect and cast VARCHAR to appropriate type (BOOLEAN, INTEGER, DOUBLE, DATE, TIMESTAMP, UUID, VARCHAR).
+```sql
+SELECT stps_smart_cast('123') AS value;
+-- Result: 123 (INTEGER)
+
+SELECT stps_smart_cast('123.45') AS value;
+-- Result: 123.45 (DOUBLE)
+
+SELECT stps_smart_cast('2024-01-15') AS value;
+-- Result: 2024-01-15 (DATE)
+
+SELECT stps_smart_cast('true') AS value;
+-- Result: true (BOOLEAN)
+
+SELECT stps_smart_cast('15.01.2024') AS value;
+-- Result: 2024-01-15 (DATE, German format)
+
+SELECT stps_smart_cast('1.234,56') AS value;
+-- Result: 1234.56 (DOUBLE, German number format)
+```
+
+#### `stps_smart_cast_analyze(table_name VARCHAR) → TABLE`
+Analyze a table and recommend type conversions for VARCHAR columns.
+```sql
+CREATE TABLE my_data AS SELECT '123' as col1, '2024-01-15' as col2;
+
+SELECT * FROM stps_smart_cast_analyze('my_data');
+-- Returns: column_name, detected_type, total_rows, null_count, cast_success_count, cast_failure_count
+```
+
+---
+
+### 🆔 UUID Functions
+
+#### `stps_uuid() → VARCHAR`
+Generate random UUID v4.
+```sql
+SELECT stps_uuid() AS id;
+-- Result: '550e8400-e29b-41d4-a716-446655440000'
+```
+
+#### `stps_uuid_from_string(text VARCHAR) → VARCHAR`
+Generate deterministic UUID v5 from string.
+```sql
+SELECT stps_uuid_from_string('my-unique-key') AS id;
+-- Result: always same UUID for same input
+```
+
+#### `stps_get_guid(col1 VARCHAR, col2 VARCHAR, ...) → VARCHAR`
+Generate deterministic UUID from multiple columns (composite key).
+```sql
+SELECT stps_get_guid('customer', 'order123', '2024-01-15') AS guid;
+-- Result: deterministic UUID based on all inputs
+```
+
+#### `stps_guid_to_path(guid VARCHAR) → VARCHAR`
+Convert GUID to 4-level folder path (0-255 decimal values).
+```sql
+SELECT stps_guid_to_path('550e8400-e29b-41d4-a716-446655440000') AS path;
+-- Result: '85/14/132/0'
+```
+
+---
+
+### 🗃️ Archive Functions (ZIP & 7-Zip)
+
+#### `stps_zip(archive_path VARCHAR, inner_filename VARCHAR) → TABLE`
+Extract and parse CSV/TXT file from ZIP archive.
+```sql
+SELECT * FROM stps_zip('data.zip', 'customers.csv');
+-- Returns: parsed CSV as table with auto-detected columns
+
+SELECT * FROM stps_zip('C:/data/archive.zip', 'report.txt');
+```
+
+#### `stps_view_zip(archive_path VARCHAR) → TABLE`
+List files in ZIP archive.
+```sql
+SELECT * FROM stps_view_zip('data.zip');
+-- Returns: filename, uncompressed_size, is_directory, index
+```
+
+#### `stps_7zip(archive_path VARCHAR, inner_filename VARCHAR) → TABLE`
+Extract and parse CSV/TXT file from 7-Zip archive.
+```sql
+SELECT * FROM stps_7zip('data.7z', 'customers.csv');
+-- Returns: parsed CSV as table
+
+-- Auto-detect first file
+SELECT * FROM stps_7zip('data.7z');
+```
+
+#### `stps_view_7zip(archive_path VARCHAR) → TABLE`
+List files in 7-Zip archive.
+```sql
+SELECT * FROM stps_view_7zip('data.7z');
+-- Returns: filename, uncompressed_size, is_directory, index
+```
+
+---
+
+### 📁 Filesystem Functions
+
+#### `stps_path(path VARCHAR) → TABLE`
+Recursively scan directory and return file paths.
+```sql
+SELECT * FROM stps_path('C:/data/');
+-- Returns: full_path for each file
+
+SELECT * FROM stps_path('/home/user/documents/');
+```
+
+#### `stps_read_folders(path VARCHAR) → TABLE`
+List directories only (non-recursive).
+```sql
+SELECT * FROM stps_read_folders('C:/data/');
+-- Returns: folder_name, full_path
+```
+
+#### `stps_scan(path VARCHAR) → TABLE`
+Scan directory structure.
+```sql
+SELECT * FROM stps_scan('C:/data/');
+```
+
+#### `stps_copy_io(source VARCHAR, destination VARCHAR) → VARCHAR`
+Copy file.
+```sql
+SELECT stps_copy_io('data.csv', 'backup/data.csv') AS result;
+-- Result: 'SUCCESS' or error message
+```
+
+#### `stps_move_io(source VARCHAR, destination VARCHAR) → VARCHAR`
+Move file.
+```sql
+SELECT stps_move_io('old_path.csv', 'new_path.csv') AS result;
+```
+
+#### `stps_io_rename(old_path VARCHAR, new_path VARCHAR) → VARCHAR`
+Rename file.
+```sql
+SELECT stps_io_rename('old_name.csv', 'new_name.csv') AS result;
+```
+
+#### `stps_delete_io(path VARCHAR) → VARCHAR`
+Delete file.
+```sql
+SELECT stps_delete_io('temp_file.csv') AS result;
+```
+
+---
+
+### 📄 XML Parsing
+
+#### `stps_read_xml(file_path VARCHAR) → VARCHAR`
+Read XML file as text.
+```sql
+SELECT stps_read_xml('data.xml') AS content;
+```
+
+#### `stps_read_xml_json(file_path VARCHAR) → JSON`
+Parse XML file and convert to JSON.
+```sql
+SELECT stps_read_xml_json('data.xml') AS json_data;
+```
+
+---
+
+### 📊 GOBD Functions (German Business Data)
+
+#### `stps_read_gobd(file_path VARCHAR) → TABLE`
+Parse GoBD (Grundsätze zur ordnungsmäßigen Führung und Aufbewahrung von Büchern) XML files.
+```sql
+SELECT * FROM stps_read_gobd('index.xml');
+-- Returns: parsed business data according to GoBD standard
+```
+
+#### `gobd_list_tables(file_path VARCHAR) → TABLE`
+List tables defined in GoBD file.
+```sql
+SELECT * FROM gobd_list_tables('index.xml');
+-- Returns: name, url, description, column_count
+```
+
+#### `gobd_table_schema(file_path VARCHAR, table_name VARCHAR) → TABLE`
+Get schema of specific GoBD table.
+```sql
+SELECT * FROM gobd_table_schema('index.xml', 'transactions');
+-- Returns: column_name, data_type, description
+```
+
+---
+
+### 🔄 NULL Handling
+
+#### `stps_map_null_to_empty(value VARCHAR) → VARCHAR`
+Convert NULL to empty string.
+```sql
+SELECT stps_map_null_to_empty(NULL) AS result;
+-- Result: ''
+
+SELECT stps_map_null_to_empty('text') AS result;
+-- Result: 'text'
+```
+
+#### `stps_map_empty_to_null(value VARCHAR) → VARCHAR`
+Convert empty string to NULL.
+```sql
+SELECT stps_map_empty_to_null('') AS result;
+-- Result: NULL
+
+SELECT stps_map_empty_to_null('text') AS result;
+-- Result: 'text'
+```
+
+#### `stps_drop_null_columns(table_name VARCHAR) → TABLE`
+Remove columns that are entirely NULL.
+```sql
+CREATE TABLE test AS SELECT 1 as a, NULL as b, 2 as c;
+SELECT * FROM stps_drop_null_columns('test');
+-- Returns: only columns 'a' and 'c'
+```
+
+---
+
+### 🔧 Advanced Functions
+
+#### `stps_lambda(input ARRAY, function VARCHAR) → ARRAY`
+Apply lambda function to array elements.
+```sql
+SELECT stps_lambda([1, 2, 3], 'x -> x * 2') AS doubled;
+-- Result: [2, 4, 6]
+```
+
+---
+
+## 🚀 Common Use Cases
+
+### Data Cleaning Pipeline
+```sql
+-- Clean and standardize text data
+SELECT
+    stps_clean_string(raw_text) AS cleaned,
+    stps_normalize(raw_text) AS normalized,
+    stps_remove_accents(raw_text, true) AS no_accents
+FROM raw_data;
+```
+
+### IBAN Validation & Formatting
+```sql
+-- Validate and format IBANs
+SELECT
+    iban,
+    stps_is_valid_iban(iban) AS is_valid,
+    stps_format_iban(iban) AS formatted,
+    stps_get_iban_country_code(iban) AS country
+FROM accounts
+WHERE stps_is_valid_iban(iban);
+```
+
+### Type Detection & Casting
+```sql
+-- Automatically detect types
+CREATE TABLE cleaned AS
+SELECT
+    stps_smart_cast(col1) AS col1_typed,
+    stps_smart_cast(col2) AS col2_typed,
+    stps_smart_cast(col3) AS col3_typed
+FROM raw_varchar_table;
+```
+
+### Archive Processing
+```sql
+-- Extract CSV from 7z archive
+SELECT customer_id, amount, date
+FROM stps_7zip('monthly_reports.7z', 'january.csv')
+WHERE amount > 1000;
+```
+
+### Address Parsing
+```sql
+-- Parse German addresses
+SELECT
+    address,
+    (stps_split_street(address)).street_name AS street,
+    (stps_split_street(address)).street_number AS number
+FROM locations;
+```
+
+---
+
+## 📖 Documentation
+
+- **[Complete Function List](STPS_FUNCTIONS.md)** - Detailed function reference
+- **[Troubleshooting 7-Zip](TROUBLESHOOTING_7ZIP.md)** - Common 7z issues
+- **[How to Update](HOW_TO_UPDATE_EXTENSION.md)** - Get latest version
+- **[Build Process](BUILD_PROCESS.md)** - GitHub Actions build info
+
+---
+
+## ⚙️ Requirements
+
+- **DuckDB** 0.10.0 or later
+- **Windows** (x64)
+- **Unsigned mode** for loading extensions: `duckdb -unsigned`
+
+---
+
+## 🐛 Troubleshooting
+
+### Function Not Found
+```sql
+-- Make sure extension is loaded
 LOAD stps;
 
--- Test it works
-SELECT stps_is_valid_iban('DE89370400440532013000') as is_valid;
+-- Check loaded functions
+SELECT * FROM duckdb_functions() WHERE function_name LIKE 'stps_%';
 ```
 
-### Step 3: Use the Functions
+### Old Version Issues
+If you see outdated error messages, download the latest build from GitHub Actions:
+https://github.com/Arengard/stps-extension/actions
 
+### Path Issues on Windows
+Use forward slashes or escape backslashes:
 ```sql
--- Case transformations
-SELECT stps_to_snake_case('HelloWorld') as snake_case;
-SELECT stps_to_camel_case('hello_world') as camel_case;
+-- Good: forward slashes
+SELECT * FROM stps_7zip('C:/data/archive.7z', 'file.csv');
 
--- IBAN validation
-SELECT stps_is_valid_iban('DE89370400440532013000') as valid_iban;
-SELECT stps_format_iban('DE89370400440532013000') as formatted_iban;
+-- Good: escaped backslashes
+SELECT * FROM stps_7zip('C:\\data\\archive.7z', 'file.csv');
 
--- UUID generation
-SELECT stps_uuid() as new_uuid;
-
--- File operations
-SELECT * FROM stps_scan('C:/path/to/folder');
-SELECT * FROM stps_path('C:/base/path', 'subdir', 'file.txt');
+-- Bad: unescaped backslashes
+SELECT * FROM stps_7zip('C:\data\archive.7z', 'file.csv');  -- ERROR
 ```
 
-## Available Functions
+---
 
-### 🔥 Lambda Functions (NEW!)
+## 🤝 Contributing
 
-Apply transformations to all columns at once using lambda-like expressions. Perfect for bulk data cleaning.
+Issues and pull requests welcome!
+https://github.com/Arengard/stps-extension/issues
 
-#### `stps_lambda(table_name, lambda_expr, [varchar_only], [column_pattern])`
+---
 
-**Quick Examples:**
-```sql
--- Trim all VARCHAR columns
-SELECT * FROM stps_lambda('my_table', 'c -> trim(c)');
+## 📝 License
 
--- Convert all text to uppercase
-SELECT * FROM stps_lambda('my_table', 'c -> upper(c)');
+See [LICENSE](LICENSE) file.
 
--- Apply STPS functions to all columns
-SELECT * FROM stps_lambda('my_table', 'c -> stps_to_snake_case(c)');
+---
 
--- Only columns containing 'name'
-SELECT * FROM stps_lambda('my_table', 'c -> upper(c)', true, 'name');
-```
+## 🔗 Links
 
-**Parameters:**
-- `table_name` - Table to transform
-- `lambda_expr` - Transformation expression (`c -> function(c)` or just `function(c)`)
-- `varchar_only` - Only apply to VARCHAR columns (default: true)
-- `column_pattern` - Only columns matching this pattern
-
-**Supported Transformations:**
-- Built-in SQL: `TRIM`, `UPPER`, `LOWER`, `SUBSTR`, etc.
-- All STPS functions: `stps_normalize`, `stps_clean_string`, case conversions, etc.
-- Custom SQL expressions: `CASE WHEN c IS NULL THEN 'empty' ELSE c END`
-
-### Case Transformation Functions
-- `stps_to_snake_case(text)` - Convert to snake_case
-- `stps_to_camel_case(text)` - Convert to camelCase
-- `stps_to_pascal_case(text)` - Convert to PascalCase
-- `stps_to_kebab_case(text)` - Convert to kebab-case
-- `stps_to_const_case(text)` - Convert to CONST_CASE
-- `stps_to_sentence_case(text)` - Convert to Sentence case
-- `stps_to_title_case(text)` - Convert to Title Case
-
-### Text Normalization Functions
-- `stps_remove_accents(text, [keep_umlauts])` - Remove accents from text
-- `stps_restore_umlauts(text)` - Restore German umlauts
-- `stps_clean_string(text)` - Clean and normalize string
-- `stps_normalize(text)` - Full text normalization
-
-### IBAN Validation Functions
-- `stps_is_valid_iban(iban)` - Validate IBAN format
-- `stps_format_iban(iban)` - Format IBAN with spaces
-- `stps_get_iban_country_code(iban)` - Extract country code
-- `stps_get_iban_check_digits(iban)` - Extract check digits
-- `stps_get_bban(iban)` - Extract BBAN
-
-### UUID Functions
-- `stps_uuid()` - Generate random UUID v4
-- `stps_uuid_from_string(text)` - Generate deterministic UUID v5
-- `stps_get_guid(...)` - Generate GUID from parts
-- `stps_guid_to_path(guid)` - Convert GUID to folder path
-
-### Null Handling Functions
-- `stps_map_empty_to_null(text)` - Convert empty strings to NULL
-- `stps_map_null_to_empty(text)` - Convert NULL to empty string
-
-### I/O Operations
-- `stps_copy_io(source, dest)` - Copy file or directory
-- `stps_move_io(source, dest)` - Move file or directory
-- `stps_delete_io(path)` - Delete file or directory
-- `stps_io_rename(old_name, new_name)` - Rename file or directory
-
-### File System Table Functions
-- `stps_scan(path, [recursive], [pattern])` - Scan directory contents
-- `stps_path(base_path, ...)` - Build and list file paths
-- `stps_read_folders(path)` - Read folder structure
-
-### XML Functions
-- `stps_read_xml(filepath)` - Read XML file as JSON string
-- `stps_read_xml_json(filepath)` - Read XML file as DuckDB JSON
-
-### GOBD Functions
-- `stps_read_gobd(index_path, table_name, [delimiter])` - Read GOBD files
-
-### Smart Cast Functions
-
-Smart cast provides automatic type detection and casting for VARCHAR columns. It supports:
-- **Boolean**: true/false, yes/no, ja/nein, 1/0
-- **Integer**: Numbers with locale-aware thousands separators
-- **Double**: Decimal numbers in German (1.234,56) or US (1,234.56) format
-- **Date**: Multiple formats including ISO, German dot (15.01.2024), US slash (01/15/2024)
-- **Timestamp**: Date + time combinations
-- **UUID**: Standard UUID format
-
-#### Scalar Function
-
-```sql
--- Auto-detect type and cast
-SELECT stps_smart_cast('123');           -- Returns: 123 (detected as INTEGER)
-SELECT stps_smart_cast('1.234,56');      -- Returns: 1234.56 (German DOUBLE)
-SELECT stps_smart_cast('2024-01-15');    -- Returns: 2024-01-15 (DATE)
-SELECT stps_smart_cast('true');          -- Returns: true (BOOLEAN)
-
--- Cast to explicit type
-SELECT stps_smart_cast('1.234,56', 'DOUBLE');   -- Force DOUBLE parsing
-SELECT stps_smart_cast('123', 'INTEGER');       -- Force INTEGER parsing
-```
-
-#### Table Functions
-
-```sql
--- Analyze a table to see detected types for each column
-SELECT * FROM stps_smart_cast_analyze('my_table');
--- Returns: column_name, original_type, detected_type, total_rows, null_count,
---          cast_success_count, cast_failure_count
-
--- Cast all VARCHAR columns in a table to their detected types
-SELECT * FROM stps_smart_cast('my_table');
--- Returns the table with columns cast to detected types
-```
-
-#### Named Parameters
-
-Both table functions support optional named parameters:
-
-```sql
--- Set minimum success rate for type detection (default: 0.9 = 90%)
-SELECT * FROM stps_smart_cast('my_table', min_success_rate := 0.8);
-
--- Force German locale for number parsing
-SELECT * FROM stps_smart_cast('my_table', locale := 'de');
-
--- Force US locale for number parsing
-SELECT * FROM stps_smart_cast('my_table', locale := 'us');
-
--- Force date format: 'dmy' (European), 'mdy' (US), or 'ymd' (ISO)
-SELECT * FROM stps_smart_cast('my_table', date_format := 'mdy');
-
--- Combine parameters
-SELECT * FROM stps_smart_cast_analyze('my_table',
-    min_success_rate := 0.95,
-    locale := 'de',
-    date_format := 'dmy'
-);
-```
-
-#### Example Workflow
-
-```sql
--- 1. Create a table with string data
-CREATE TABLE raw_data AS SELECT
-    '123' as amount,
-    'true' as active,
-    '2024-01-15' as created_date,
-    '1.234,56' as price;
-
--- 2. Analyze to see what types are detected
-SELECT * FROM stps_smart_cast_analyze('raw_data');
--- Shows: amount->INTEGER, active->BOOLEAN, created_date->DATE, price->DOUBLE
-
--- 3. Cast the table to proper types
-CREATE TABLE typed_data AS SELECT * FROM stps_smart_cast('raw_data');
-
--- 4. Verify the types
-DESCRIBE typed_data;
--- amount: BIGINT, active: BOOLEAN, created_date: DATE, price: DOUBLE
-```
-
-## Building from Source
-
-If you want to build the extension yourself:
-
-### Prerequisites
-- CMake 3.15+
-- C++17 compatible compiler
-- Git
-
-### Build Steps
-
-```bash
-# Clone the repository
-git clone https://github.com/Arengard/stps-extension.git
-cd stps-extension
-
-# Initialize submodules
-git submodule update --init --recursive
-
-# Build the extension
-make release
-```
-
-### Windows Build
-```batch
-# Windows Command Prompt or PowerShell
-git submodule update --init --recursive
-make release
-```
-
-The built extension will be in `build/release/extension/stps/stps.duckdb_extension`
-
-## Automated Builds
-
-Every push to any branch automatically builds Windows binaries via GitHub Actions. Artifacts are retained for:
-- **90 days** for commit-specific builds
-- **30 days** for latest branch builds
-
-Tagged releases (e.g., `v1.0.0`) create permanent GitHub releases with attached binaries.
-
-## Development
-
-### Running Tests
-
-```bash
-# Run extension tests
-make test
-```
-
-### Project Structure
-
-```
-stps-extension/
-├── src/                          # Source files
-│   ├── stps_unified_extension.cpp  # Main extension entry
-│   ├── case_transform.cpp        # Text transformations
-│   ├── iban_validation.cpp       # IBAN validation
-│   ├── uuid_functions.cpp        # UUID operations
-│   ├── filesystem_functions.cpp  # File operations
-│   ├── smart_cast_utils.cpp      # Smart cast parsing utilities
-│   ├── smart_cast_scalar.cpp     # Smart cast scalar function
-│   └── smart_cast_function.cpp   # Smart cast table functions
-├── test/sql/                     # SQL test files
-├── CMakeLists.txt               # Build configuration
-└── .github/workflows/           # CI/CD workflows
-```
-
-## Compatibility
-
-- **DuckDB Version**: v1.4.3
-- **Platform**: Windows x64 (binaries provided)
-- **Build System**: Linux, macOS, Windows (source builds)
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Run tests: `make test`
-5. Submit a pull request
-
-## License
-
-See LICENSE file for details.
-
-## Support
-
-- **Issues**: [GitHub Issues](https://github.com/Arengard/stps-extension/issues)
-- **Documentation**: See test files in `test/sql/` for usage examples
-
-## Version History
-
-- **Latest**: Automated builds on every commit
-- Check [GitHub Releases](https://github.com/Arengard/stps-extension/releases) for tagged versions
+- **GitHub Repository**: https://github.com/Arengard/stps-extension
+- **Latest Builds**: https://github.com/Arengard/stps-extension/actions
+- **DuckDB**: https://duckdb.org/
