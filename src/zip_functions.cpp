@@ -5,11 +5,79 @@
 #include "../miniz/miniz.h"
 #include <cstring>
 #include <algorithm>
+#include <fstream>
+
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <unistd.h>
+#endif
 
 namespace duckdb {
 namespace stps {
 
-//===--------------------------------------------------------------------===//
+// Helper to get file extension (lowercase)
+static string GetFileExtension(const string &filename) {
+    size_t dot_pos = filename.rfind('.');
+    if (dot_pos == string::npos || dot_pos == filename.length() - 1) {
+        return "";
+    }
+    string ext = filename.substr(dot_pos + 1);
+    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+    return ext;
+}
+
+// Helper to check if file is a binary format
+static bool IsBinaryFormat(const string &filename) {
+    string ext = GetFileExtension(filename);
+    return ext == "parquet" || ext == "arrow" || ext == "feather" ||
+           ext == "orc" || ext == "avro" || ext == "xlsx" || ext == "xls" ||
+           ext == "db" || ext == "sqlite" || ext == "duckdb";
+}
+
+// Helper to check if content looks like binary
+static bool LooksLikeBinary(const string &content) {
+    if (content.empty()) return false;
+    size_t check_size = std::min(content.size(), (size_t)1000);
+    int non_printable = 0;
+    for (size_t i = 0; i < check_size; i++) {
+        unsigned char c = static_cast<unsigned char>(content[i]);
+        if (c == 0) return true;
+        if (c < 32 && c != '\n' && c != '\r' && c != '\t') non_printable++;
+    }
+    return (non_printable > (int)(check_size / 10));
+}
+
+// Helper to get temp directory
+static string GetTempDirectory() {
+#ifdef _WIN32
+    char temp_path[MAX_PATH];
+    DWORD len = GetTempPathA(MAX_PATH, temp_path);
+    if (len > 0 && len < MAX_PATH) return string(temp_path);
+    return "C:\\Temp\\";
+#else
+    const char* tmp = std::getenv("TMPDIR");
+    if (tmp) return string(tmp) + "/";
+    return "/tmp/";
+#endif
+}
+
+// Helper to extract file to temp location
+static string ExtractToTemp(const string &content, const string &original_filename) {
+    string temp_dir = GetTempDirectory();
+    string base_name = original_filename;
+    size_t slash_pos = base_name.rfind('/');
+    if (slash_pos != string::npos) base_name = base_name.substr(slash_pos + 1);
+    slash_pos = base_name.rfind('\\');
+    if (slash_pos != string::npos) base_name = base_name.substr(slash_pos + 1);
+
+    string temp_path = temp_dir + "stps_zip_" + base_name;
+    std::ofstream out(temp_path, std::ios::binary);
+    if (!out) throw IOException("Failed to create temp file: " + temp_path);
+    out.write(content.data(), content.size());
+    out.close();
+    return temp_path;
+}//===--------------------------------------------------------------------===//
 // stps_view_zip - List files inside a ZIP archive
 //===--------------------------------------------------------------------===//
 
@@ -308,7 +376,25 @@ static unique_ptr<FunctionData> ZipBind(ClientContext &context, TableFunctionBin
     mz_free(file_data);
     mz_zip_reader_end(&zip_archive);
     
-    // Parse to determine schema
+    // Check if this is a binary format that can't be parsed as CSV
+    if (IsBinaryFormat(result->inner_filename) || LooksLikeBinary(content)) {
+        // Extract to temp file and return path for user to use with read_parquet etc.
+        string temp_path = ExtractToTemp(content, result->inner_filename);
+        string ext = GetFileExtension(result->inner_filename);
+
+        // Return info about extracted file
+        names = {"extracted_path", "original_filename", "file_size", "file_type", "usage_hint"};
+        return_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::BIGINT,
+                       LogicalType::VARCHAR, LogicalType::VARCHAR};
+
+        // Store temp path in inner_filename for Init to use
+        result->inner_filename = temp_path;
+        result->auto_detect_file = false;  // Signal that this is binary mode
+
+        return std::move(result);
+    }
+
+    // Parse to determine schema for CSV/text files
     vector<string> column_names;
     vector<LogicalType> column_types;
     vector<vector<Value>> temp_rows;
@@ -332,6 +418,51 @@ static unique_ptr<GlobalTableFunctionState> ZipInit(ClientContext &context, Tabl
     auto &bind_data = input.bind_data->Cast<ZipBindData>();
     auto result = make_uniq<ZipGlobalState>();
     
+    // Check if this is binary mode (inner_filename contains temp path)
+    if (!bind_data.auto_detect_file && bind_data.inner_filename.find("stps_zip_") != string::npos) {
+        // Binary file mode - return extraction info
+        string temp_path = bind_data.inner_filename;
+        string ext = GetFileExtension(temp_path);
+
+        // Get file size
+        std::ifstream file(temp_path, std::ios::binary | std::ios::ate);
+        size_t file_size = file.is_open() ? file.tellg() : 0;
+
+        // Determine usage hint based on extension
+        string usage_hint;
+        if (ext == "parquet") {
+            usage_hint = "SELECT * FROM read_parquet('" + temp_path + "')";
+        } else if (ext == "xlsx" || ext == "xls") {
+            usage_hint = "Install and use st_read() for Excel files";
+        } else if (ext == "arrow" || ext == "feather") {
+            usage_hint = "SELECT * FROM read_parquet('" + temp_path + "') -- Arrow/Feather compatible";
+        } else {
+            usage_hint = "Binary file extracted to: " + temp_path;
+        }
+
+        // Extract original filename from temp path
+        string original_name = temp_path;
+        size_t prefix_pos = original_name.find("stps_zip_");
+        if (prefix_pos != string::npos) {
+            original_name = original_name.substr(prefix_pos + 9);  // Skip "stps_zip_"
+        }
+
+        result->column_names = {"extracted_path", "original_filename", "file_size", "file_type", "usage_hint"};
+        result->column_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::BIGINT,
+                               LogicalType::VARCHAR, LogicalType::VARCHAR};
+
+        vector<Value> row;
+        row.push_back(Value(temp_path));
+        row.push_back(Value(original_name));
+        row.push_back(Value::BIGINT(file_size));
+        row.push_back(Value(ext.empty() ? "binary" : ext));
+        row.push_back(Value(usage_hint));
+        result->rows.push_back(row);
+        result->parsed = true;
+
+        return std::move(result);
+    }
+
     mz_zip_archive zip_archive;
     memset(&zip_archive, 0, sizeof(zip_archive));
     
