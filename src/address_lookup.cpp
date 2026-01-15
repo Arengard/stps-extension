@@ -205,32 +205,19 @@ static std::string fetch_url(const std::string& url) {
 
     std::string temp_file = get_temp_filename();
 
-    // Build curl command with realistic browser headers to avoid bot detection
-    // Updated User-Agent to latest Chrome version
-    // Added Accept-Language for German locale
-    // Added DNT (Do Not Track) header
+    // Build curl command with proper User-Agent for Nominatim API
+    // Nominatim requires a descriptive User-Agent per their usage policy
+    // See: https://operations.osmfoundation.org/policies/nominatim/
     std::string cmd = "curl -s -L -m 15 "
-                      "-H \"User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36\" "
-                      "-H \"Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8\" "
-                      "-H \"Accept-Language: de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7\" "
-                      "-H \"Accept-Encoding: gzip, deflate, br\" "
-                      "-H \"DNT: 1\" "
-                      "-H \"Connection: keep-alive\" "
-                      "-H \"Upgrade-Insecure-Requests: 1\" "
-                      "--compressed "
+                      "-H \"User-Agent: DuckDB-STPS-Extension/1.0 (contact: github.com/Arengard/stps-extension)\" "
+                      "-H \"Accept: application/json\" "
                       "-o \"" + temp_file + "\" "
                       "\"" + url + "\" 2>/dev/null";
 
 #ifdef _WIN32
     cmd = "curl -s -L -m 15 "
-          "-H \"User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36\" "
-          "-H \"Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8\" "
-          "-H \"Accept-Language: de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7\" "
-          "-H \"Accept-Encoding: gzip, deflate, br\" "
-          "-H \"DNT: 1\" "
-          "-H \"Connection: keep-alive\" "
-          "-H \"Upgrade-Insecure-Requests: 1\" "
-          "--compressed "
+          "-H \"User-Agent: DuckDB-STPS-Extension/1.0 (contact: github.com/Arengard/stps-extension)\" "
+          "-H \"Accept: application/json\" "
           "-o \"" + temp_file + "\" "
           "\"" + url + "\" 2>nul";
 #endif
@@ -238,16 +225,16 @@ static std::string fetch_url(const std::string& url) {
     int result = system(cmd.c_str());
 
     if (result != 0) {
-        // Fallback to wget with similar headers
+        // Fallback to wget
 #ifdef _WIN32
         cmd = "wget -q -O \"" + temp_file + "\" "
-              "--user-agent=\"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36\" "
-              "--header=\"Accept-Language: de-DE,de;q=0.9\" "
+              "--user-agent=\"DuckDB-STPS-Extension/1.0 (contact: github.com/Arengard/stps-extension)\" "
+              "--header=\"Accept: application/json\" "
               "\"" + url + "\" 2>nul";
 #else
         cmd = "wget -q -O \"" + temp_file + "\" "
-              "--user-agent=\"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36\" "
-              "--header=\"Accept-Language: de-DE,de;q=0.9\" "
+              "--user-agent=\"DuckDB-STPS-Extension/1.0 (contact: github.com/Arengard/stps-extension)\" "
+              "--header=\"Accept: application/json\" "
               "\"" + url + "\" 2>/dev/null";
 #endif
         result = system(cmd.c_str());
@@ -265,313 +252,104 @@ static std::string fetch_url(const std::string& url) {
 }
 
 // ============================================================================
-// HTML processing
+// JSON parsing utilities (simple, no external dependencies)
 // ============================================================================
 
-static std::string decode_html_entities(const std::string& text) {
-    std::string result = text;
-
-    // Named entities
-    const std::vector<std::pair<std::string, std::string>> entities = {
-        {"&amp;", "&"}, {"&lt;", "<"}, {"&gt;", ">"},
-        {"&quot;", "\""}, {"&apos;", "'"},
-        {"&nbsp;", " "}, {"&ndash;", "-"}, {"&mdash;", "-"},
-        {"&auml;", "ä"}, {"&ouml;", "ö"}, {"&uuml;", "ü"},
-        {"&Auml;", "Ä"}, {"&Ouml;", "Ö"}, {"&Uuml;", "Ü"},
-        {"&szlig;", "ß"}
-    };
-
-    for (const auto& e : entities) {
-        size_t pos = 0;
-        while ((pos = result.find(e.first, pos)) != std::string::npos) {
-            result.replace(pos, e.first.length(), e.second);
-            pos += e.second.length();
-        }
+static std::string extract_json_string(const std::string& json, const std::string& key) {
+    // Find "key":"value" pattern
+    std::string search = "\"" + key + "\":";
+    size_t pos = json.find(search);
+    if (pos == std::string::npos) {
+        return "";
     }
 
-    // Numeric entities (&#123; or &#x7B;)
-    size_t pos = 0;
-    while ((pos = result.find("&#", pos)) != std::string::npos) {
-        size_t end = result.find(';', pos);
-        if (end == std::string::npos || end > pos + 10) {
-            pos++;
-            continue;
-        }
+    pos += search.length();
 
-        std::string entity = result.substr(pos + 2, end - pos - 2);
-        int code = 0;
-
-        if (!entity.empty() && (entity[0] == 'x' || entity[0] == 'X')) {
-            // Hex: &#xAB;
-            try {
-                code = std::stoi(entity.substr(1), nullptr, 16);
-            } catch (...) {
-                pos++;
-                continue;
-            }
-        } else {
-            // Decimal: &#123;
-            try {
-                code = std::stoi(entity);
-            } catch (...) {
-                pos++;
-                continue;
-            }
-        }
-
-        if (code > 0 && code < 128) {
-            result.replace(pos, end - pos + 1, std::string(1, static_cast<char>(code)));
-        } else {
-            pos = end + 1;
-        }
+    // Skip whitespace
+    while (pos < json.length() && std::isspace(json[pos])) {
+        pos++;
     }
 
-    return result;
-}
-
-static std::string strip_html_tags(const std::string& html) {
-    std::string result;
-    result.reserve(html.size());
-
-    bool in_tag = false;
-    bool in_script = false;
-    bool in_style = false;
-
-    for (size_t i = 0; i < html.size(); i++) {
-        char c = html[i];
-
-        if (c == '<') {
-            in_tag = true;
-
-            // Check for <script> or <style>
-            if (i + 7 < html.size()) {
-                std::string upcoming = to_lower(html.substr(i, 8));
-                if (upcoming.find("<script") == 0) in_script = true;
-                if (upcoming.find("<style") == 0) in_style = true;
-            }
-            if (i + 8 < html.size()) {
-                std::string upcoming = to_lower(html.substr(i, 9));
-                if (upcoming.find("</script") == 0) in_script = false;
-                if (upcoming.find("</style") == 0) in_style = false;
-            }
-            continue;
-        }
-
-        if (c == '>') {
-            in_tag = false;
-            result += ' ';
-            continue;
-        }
-
-        if (!in_tag && !in_script && !in_style) {
-            result += c;
-        }
+    // Check if value is a string (starts with ")
+    if (pos >= json.length() || json[pos] != '"') {
+        return "";
     }
 
-    result = decode_html_entities(result);
+    pos++; // Skip opening quote
+    size_t end = pos;
 
-    // Collapse whitespace
-    std::string collapsed;
-    collapsed.reserve(result.size());
-    bool last_was_space = false;
-    for (char c : result) {
-        if (std::isspace(static_cast<unsigned char>(c))) {
-            if (!last_was_space) {
-                collapsed += ' ';
-                last_was_space = true;
-            }
-        } else {
-            collapsed += c;
-            last_was_space = false;
+    // Find closing quote (handle escaped quotes)
+    while (end < json.length()) {
+        if (json[end] == '"' && (end == 0 || json[end - 1] != '\\')) {
+            break;
         }
+        end++;
     }
 
-    return collapsed;
-}
-
-static std::vector<std::string> split_lines(const std::string& text) {
-    std::vector<std::string> lines;
-    std::istringstream stream(text);
-    std::string line;
-
-    // Split by newlines and also by double spaces (common in stripped HTML)
-    while (std::getline(stream, line)) {
-        // Also split by common separators that become boundaries in stripped HTML
-        size_t pos = 0;
-        size_t prev = 0;
-        while ((pos = line.find("  ", prev)) != std::string::npos) {
-            std::string part = trim(line.substr(prev, pos - prev));
-            if (!part.empty()) {
-                lines.push_back(part);
-            }
-            prev = pos + 2;
-        }
-        std::string part = trim(line.substr(prev));
-        if (!part.empty()) {
-            lines.push_back(part);
-        }
+    if (end >= json.length()) {
+        return "";
     }
 
-    return lines;
+    return json.substr(pos, end - pos);
 }
 
 // ============================================================================
-// Handelsregister parsing - Forward declarations
+// OpenStreetMap Nominatim API parsing
 // ============================================================================
 
-static bool parse_plz_city(const std::string& line, std::string& plz, std::string& city);
-static bool looks_like_street_address(const std::string& line);
-
-// ============================================================================
-// Handelsregister parsing
-// ============================================================================
-
-static AddressResult parse_handelsregister_company_page(const std::string& html) {
+static AddressResult parse_nominatim_response(const std::string& json_response) {
     AddressResult result;
     result.found = false;
 
-    // Strip HTML and get plain text
-    std::string text = strip_html_tags(html);
-    std::vector<std::string> lines = split_lines(text);
+    // Check if response is empty or error
+    if (json_response.empty() || json_response.find('[') == std::string::npos) {
+        return result;
+    }
 
-    // Handelsregister has address in various formats, look for PLZ + City pattern
-    for (size_t i = 0; i < lines.size(); i++) {
-        std::string plz, city;
-        if (parse_plz_city(lines[i], plz, city)) {
-            result.plz = plz;
-            result.city = city;
+    // Find first result in array (we want the first match)
+    size_t first_obj = json_response.find('{');
+    if (first_obj == std::string::npos) {
+        return result;
+    }
 
-            // Street is typically the line BEFORE PLZ+City
-            if (i > 0) {
-                std::string prev_line = lines[i - 1];
-                if (looks_like_street_address(prev_line)) {
-                    result.full_address = prev_line;
-                } else if (i > 1 && looks_like_street_address(lines[i - 2])) {
-                    result.full_address = lines[i - 2];
-                }
-            }
+    // Extract address components from JSON
+    // Nominatim returns: {"address": {"road": "...", "house_number": "...", "postcode": "...", "city": "..."}}
 
-            // Also check if street+number has house number at end
-            if (result.full_address.empty() && i > 0) {
-                // Try previous line even if it doesn't match street patterns
-                std::string prev_line = lines[i - 1];
-                // Check if it has a number at the end (likely house number)
-                if (!prev_line.empty() && prev_line.length() > 2) {
-                    char last = prev_line.back();
-                    if (std::isdigit(last) || last == 'a' || last == 'b' || last == 'c') {
-                        result.full_address = prev_line;
-                    }
-                }
-            }
+    // First try to find "road" for street name
+    result.street_name = extract_json_string(json_response, "road");
 
-            result.found = true;
-            break;
+    // Try "house_number" for street number
+    result.street_number = extract_json_string(json_response, "house_number");
+
+    // Try "postcode" for PLZ
+    result.plz = extract_json_string(json_response, "postcode");
+
+    // Try multiple keys for city (Nominatim can return city, town, village, municipality)
+    result.city = extract_json_string(json_response, "city");
+    if (result.city.empty()) {
+        result.city = extract_json_string(json_response, "town");
+    }
+    if (result.city.empty()) {
+        result.city = extract_json_string(json_response, "village");
+    }
+    if (result.city.empty()) {
+        result.city = extract_json_string(json_response, "municipality");
+    }
+
+    // Build full address from components
+    if (!result.street_name.empty()) {
+        result.full_address = result.street_name;
+        if (!result.street_number.empty()) {
+            result.full_address += " " + result.street_number;
         }
     }
 
-    // Split street address into name and number
-    if (!result.full_address.empty()) {
-        auto parsed = parse_street_address(result.full_address);
-        result.street_name = parsed.street_name;
-        result.street_number = parsed.street_number;
+    // Mark as found if we have at least city or postcode
+    if (!result.city.empty() || !result.plz.empty()) {
+        result.found = true;
     }
 
     return result;
-}
-
-// ============================================================================
-// Address parsing utilities
-// ============================================================================
-
-static bool parse_plz_city(const std::string& line, std::string& plz, std::string& city) {
-    std::string work = line;
-
-    // Skip country prefix if present (D-, DE-, A-, AT-, CH-)
-    size_t start = 0;
-    if (work.size() > 2) {
-        std::string prefix = work.substr(0, 3);
-        if (prefix == "D- " || prefix == "D-" || work.substr(0, 2) == "D ") {
-            start = work.find_first_of("0123456789");
-        } else if (work.size() > 3 && (work.substr(0, 3) == "DE-" || work.substr(0, 3) == "DE ")) {
-            start = work.find_first_of("0123456789");
-        }
-    }
-
-    // Look for 5 consecutive digits
-    size_t digit_start = work.find_first_of("0123456789", start);
-    if (digit_start == std::string::npos || digit_start + 5 > work.size()) {
-        return false;
-    }
-
-    // Check if we have exactly 5 digits followed by non-digit
-    std::string potential_plz = work.substr(digit_start, 5);
-    bool all_digits = true;
-    for (char c : potential_plz) {
-        if (!std::isdigit(static_cast<unsigned char>(c))) {
-            all_digits = false;
-            break;
-        }
-    }
-
-    if (!all_digits) {
-        return false;
-    }
-
-    // Check that there's no 6th digit (PLZ is exactly 5 digits)
-    if (digit_start + 5 < work.size() &&
-        std::isdigit(static_cast<unsigned char>(work[digit_start + 5]))) {
-        return false;
-    }
-
-    // Validate PLZ range (01000-99999)
-    int plz_value = std::stoi(potential_plz);
-    if (plz_value < 1000 || plz_value > 99999) {
-        return false;
-    }
-
-    plz = potential_plz;
-
-    // City is everything after PLZ, trimmed
-    if (digit_start + 5 < work.size()) {
-        city = trim(work.substr(digit_start + 5));
-        // Remove trailing punctuation
-        while (!city.empty() && (city.back() == ',' || city.back() == '.')) {
-            city.pop_back();
-        }
-        city = trim(city);
-    }
-
-    return !plz.empty();
-}
-
-static bool looks_like_street_address(const std::string& line) {
-    std::string lower = to_lower(line);
-
-    // Common German street suffixes
-    static const std::vector<std::string> suffixes = {
-        "straße", "strasse", "str.", "str ",
-        "weg", "platz", "allee", "ring", "damm",
-        "ufer", "gasse", "steig", "pfad", "chaussee"
-    };
-
-    for (const auto& suffix : suffixes) {
-        if (lower.find(suffix) != std::string::npos) {
-            return true;
-        }
-    }
-
-    // Check for "Am/An/Auf/Im/In" prefixes common in German street names
-    static const std::vector<std::string> prefixes = {
-        "am ", "an der ", "auf der ", "im ", "in der ", "zur ", "zum "
-    };
-
-    for (const auto& prefix : prefixes) {
-        if (lower.find(prefix) == 0) {
-            return true;
-        }
-    }
-
-    return false;
 }
 
 // ============================================================================
@@ -591,75 +369,35 @@ AddressResult lookup_company_address(const std::string& company_name) {
         return result;
     }
 
-    // NOTE: This function attempts to fetch company addresses from Handelsregister.de
-    // It requires curl or wget to be installed and may not work reliably due to:
-    // - Website may block automated requests
-    // - curl/wget may not be installed
-    // - Website requires JavaScript which curl doesn't support
-    // Consider using an API service instead for production use.
+    // Step 1: Use OpenStreetMap Nominatim API for geocoding
+    // Nominatim is a free geocoding API with fair use policy:
+    // - Max 1 request per second
+    // - Must include User-Agent
+    // - Returns JSON with detailed address information
+    //
+    // API Documentation: https://nominatim.org/release-docs/develop/api/Search/
+    //
+    // Example response:
+    // [{"address": {"road": "Hauptstraße", "house_number": "1",
+    //               "postcode": "10115", "city": "Berlin", ...}}]
 
-    // Step 1: Search on Handelsregister.de
-    // URL format: https://www.handelsregister.de/rp_web/search.xhtml
-    // Uses POST request with search parameters
-    std::string search_url = "https://www.handelsregister.de/rp_web/normalesuche.xhtml?form=simple&query=" + url_encode(company_name);
+    std::string search_url = "https://nominatim.openstreetmap.org/search?format=json&addressdetails=1&limit=1&q=" + url_encode(company_name);
 
-    // Step 2: Fetch search results (with rate limiting)
-    std::string search_html = fetch_url(search_url);
-    if (search_html.empty()) {
+    // Step 2: Fetch geocoding results (with rate limiting - Nominatim requires 1 req/sec)
+    std::string json_response = fetch_url(search_url);
+
+    if (json_response.empty()) {
         // URL fetch failed - curl/wget not available or request blocked
         cache_address_result(company_name, result);
         return result;
     }
 
-    // Step 3: Parse the search results page directly for address info
-    // Handelsregister often shows basic info in search results
-    result = parse_handelsregister_company_page(search_html);
+    // Step 3: Parse JSON response from Nominatim
+    result = parse_nominatim_response(json_response);
 
-    if (result.found) {
-        cache_address_result(company_name, result);
-        return result;
-    }
-
-    // Step 4: Try to find detail page link
-    // Look for links to individual company pages
-    size_t pos = 0;
-    std::string marker = "href=\"";
-
-    while ((pos = search_html.find(marker, pos)) != std::string::npos) {
-        pos += marker.length();
-        size_t end = search_html.find("\"", pos);
-        if (end == std::string::npos) break;
-
-        std::string url = search_html.substr(pos, end - pos);
-
-        // Look for detail page URLs (typically contain "ergebnisse" or company identifiers)
-        if (url.find("ergebnisse") != std::string::npos ||
-            url.find("?id=") != std::string::npos ||
-            url.find("detailansicht") != std::string::npos) {
-
-            // Make URL absolute if relative
-            if (url[0] == '/') {
-                url = "https://www.handelsregister.de" + url;
-            } else if (url.find("http") != 0) {
-                url = "https://www.handelsregister.de/rp_web/" + url;
-            }
-
-            std::string detail_html = fetch_url(url);
-            if (!detail_html.empty()) {
-                result = parse_handelsregister_company_page(detail_html);
-                if (result.found) {
-                    cache_address_result(company_name, result);
-                    return result;
-                }
-            }
-            break; // Only try first detail link
-        }
-
-        pos = end;
-    }
-
-    // Step 5: Cache negative result to avoid repeated failed lookups
+    // Step 4: Cache result (positive or negative) to avoid repeated lookups
     cache_address_result(company_name, result);
+
     return result;
 }
 
