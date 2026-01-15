@@ -6,9 +6,73 @@
 #include <cstring>
 #include <algorithm>
 #include <sstream>
+#include <fstream>
 
 namespace duckdb {
 namespace stps {
+
+// Helper to get file extension (lowercase)
+static string GetFileExtension(const string &filename) {
+    size_t dot_pos = filename.rfind('.');
+    if (dot_pos == string::npos || dot_pos == filename.length() - 1) {
+        return "";
+    }
+    string ext = filename.substr(dot_pos + 1);
+    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+    return ext;
+}
+
+// Helper to check if file is a binary format
+static bool IsBinaryFormat(const string &filename) {
+    string ext = GetFileExtension(filename);
+    return ext == "parquet" || ext == "arrow" || ext == "feather" ||
+           ext == "orc" || ext == "avro" || ext == "xlsx" || ext == "xls" ||
+           ext == "db" || ext == "sqlite" || ext == "duckdb";
+}
+
+// Helper to check if content looks like binary
+static bool LooksLikeBinary(const string &content) {
+    if (content.empty()) return false;
+    size_t check_size = std::min(content.size(), (size_t)1000);
+    int non_printable = 0;
+    for (size_t i = 0; i < check_size; i++) {
+        unsigned char c = static_cast<unsigned char>(content[i]);
+        if (c == 0) return true;
+        if (c < 32 && c != '\n' && c != '\r' && c != '\t') non_printable++;
+    }
+    return (non_printable > (int)(check_size / 10));
+}
+
+// Helper to get temp directory
+static string GetTempDirectory() {
+#ifdef _WIN32
+    char temp_path[MAX_PATH];
+    DWORD len = GetTempPathA(MAX_PATH, temp_path);
+    if (len > 0 && len < MAX_PATH) return string(temp_path);
+    return "C:\\Temp\\";
+#else
+    const char* tmp = std::getenv("TMPDIR");
+    if (tmp) return string(tmp) + "/";
+    return "/tmp/";
+#endif
+}
+
+// Helper to extract file to temp location
+static string ExtractToTemp(const string &content, const string &original_filename) {
+    string temp_dir = GetTempDirectory();
+    string base_name = original_filename;
+    size_t slash_pos = base_name.rfind('/');
+    if (slash_pos != string::npos) base_name = base_name.substr(slash_pos + 1);
+    slash_pos = base_name.rfind('\\');
+    if (slash_pos != string::npos) base_name = base_name.substr(slash_pos + 1);
+
+    string temp_path = temp_dir + string("stps_7zip_") + base_name;
+    std::ofstream out(temp_path, std::ios::binary);
+    if (!out) throw IOException("Failed to create temp file: " + temp_path);
+    out.write(content.data(), content.size());
+    out.close();
+    return temp_path;
+}
 
 // Helper function to detect delimiter
 static char DetectDelimiter(const string &content) {
@@ -200,9 +264,10 @@ static void View7zipScan(ClientContext &context, TableFunctionInput &data_p, Dat
             continue;
         }
         
+        UInt64 logical_size = file_info->UnpackSize ? file_info->UnpackSize : file_info->PackedSize;
         string filename = file_info->Name ? file_info->Name : "";
         output.SetValue(0, count, Value(filename));
-        output.SetValue(1, count, Value::BIGINT(file_info->UnpackSize));
+        output.SetValue(1, count, Value::BIGINT(logical_size));
         output.SetValue(2, count, Value::BOOLEAN(file_info->IsDir));
         output.SetValue(3, count, Value::INTEGER(static_cast<int32_t>(state.current_file_index)));
         
