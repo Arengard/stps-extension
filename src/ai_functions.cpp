@@ -430,11 +430,14 @@ static void StpsAskAIAddressFunction(DataChunk &args, ExpressionState &state, Ve
         std::string company_name = company_name_str.GetString();
 
         // Craft a specific prompt for address extraction with JSON output
-        std::string prompt = "Find the address for this company/location and respond ONLY with a JSON object in this exact format (no other text):\n"
-                           "{\"city\":\"city name\",\"postal_code\":\"postal code\",\"street_name\":\"street name\",\"street_nr\":\"street number\"}\n"
-                           "If you cannot find the information, use empty strings. Ensure valid JSON format.";
+        std::string prompt = "Search for the business address of this company. "
+                           "Look for their official website, impressum, or business registration. "
+                           "Respond ONLY with a JSON object (no markdown, no explanation):\n"
+                           "{\"city\":\"city name\",\"postal_code\":\"postal/zip code\",\"street_name\":\"street name without number\",\"street_nr\":\"house/building number\"}\n"
+                           "Use the actual address you find. If you cannot find the address, respond with:\n"
+                           "{\"city\":\"NOT_FOUND\",\"postal_code\":\"NOT_FOUND\",\"street_name\":\"NOT_FOUND\",\"street_nr\":\"NOT_FOUND\"}";
 
-        std::string response = call_openai_api(company_name, prompt, model, 150);
+        std::string response = call_openai_api(company_name, prompt, model, 250);
 
         // Parse JSON response
         if (response.find("ERROR:") == 0) {
@@ -449,29 +452,39 @@ static void StpsAskAIAddressFunction(DataChunk &args, ExpressionState &state, Ve
         std::string street_name = extract_json_content(response, "street_name");
         std::string street_nr = extract_json_content(response, "street_nr");
 
+        // Handle NOT_FOUND responses as NULL
+        if (city == "NOT_FOUND") city = "";
+        if (postal_code == "NOT_FOUND") postal_code = "";
+        if (street_name == "NOT_FOUND") street_name = "";
+        if (street_nr == "NOT_FOUND") street_nr = "";
+
         // Set struct fields
         if (city.empty()) {
             FlatVector::SetNull(city_vec, i, true);
         } else {
             FlatVector::GetData<string_t>(city_vec)[i] = StringVector::AddString(city_vec, city);
+            FlatVector::SetNull(city_vec, i, false);
         }
 
         if (postal_code.empty()) {
             FlatVector::SetNull(postal_code_vec, i, true);
         } else {
             FlatVector::GetData<string_t>(postal_code_vec)[i] = StringVector::AddString(postal_code_vec, postal_code);
+            FlatVector::SetNull(postal_code_vec, i, false);
         }
 
         if (street_name.empty()) {
             FlatVector::SetNull(street_name_vec, i, true);
         } else {
             FlatVector::GetData<string_t>(street_name_vec)[i] = StringVector::AddString(street_name_vec, street_name);
+            FlatVector::SetNull(street_name_vec, i, false);
         }
 
         if (street_nr.empty()) {
             FlatVector::SetNull(street_nr_vec, i, true);
         } else {
             FlatVector::GetData<string_t>(street_nr_vec)[i] = StringVector::AddString(street_nr_vec, street_nr);
+            FlatVector::SetNull(street_nr_vec, i, false);
         }
     }
 }
