@@ -1,6 +1,6 @@
 # STPS DuckDB Extension
 
-A comprehensive DuckDB extension providing 45+ functions for data transformation, validation, file operations, and German business data processing.
+A comprehensive DuckDB extension providing 50+ functions for data transformation, validation, file operations, German business data processing, and **AI-powered data enhancement with ChatGPT**.
 
 ## 📦 Installation
 
@@ -235,6 +235,97 @@ FROM companies;
 - Internet connection
 - `curl` or `wget` installed
 - Respectful use (rate limited to avoid Google blocks)
+
+---
+
+### 🤖 AI Functions (ChatGPT Integration)
+
+#### `stps_ask_ai(context VARCHAR, prompt VARCHAR[, model VARCHAR][, max_tokens INTEGER]) → VARCHAR`
+
+Query OpenAI's ChatGPT directly from SQL for data enhancement, classification, summarization, and more.
+
+**Quick Start:**
+```sql
+-- 1. Set your OpenAI API key (get from platform.openai.com)
+SELECT stps_set_api_key('sk-your-api-key-here');
+
+-- 2. Query ChatGPT
+SELECT stps_ask_ai('Tax Network GmbH', 'What industry is this company in?');
+-- Returns: "Tax Network GmbH operates in the financial services and tax consulting industry..."
+
+-- 3. Use with your data
+SELECT
+    company_name,
+    stps_ask_ai(
+        company_name,
+        'Classify this company into one category: Technology, Finance, Manufacturing, Retail, or Other'
+    ) AS industry
+FROM companies;
+```
+
+**Parameters:**
+- `context` - Background data or information
+- `prompt` - Your question or instruction
+- `model` - Optional: 'gpt-3.5-turbo' (default), 'gpt-4', 'gpt-4-turbo'
+- `max_tokens` - Optional: Max response length (default: 1000)
+
+**Common Use Cases:**
+```sql
+-- Data Classification
+SELECT stps_ask_ai(product_name, 'Is this a food or drink item? Answer with one word.');
+
+-- Text Summarization
+SELECT stps_ask_ai(long_description, 'Summarize in one sentence (max 15 words).');
+
+-- Sentiment Analysis
+SELECT stps_ask_ai(review_text, 'Sentiment: POSITIVE, NEGATIVE, or NEUTRAL?', 'gpt-3.5-turbo', 10);
+
+-- Data Validation
+SELECT stps_ask_ai(email, 'Is this email format valid? YES or NO only.');
+
+-- Translation
+SELECT stps_ask_ai(text_de, 'Translate to English:', 'gpt-3.5-turbo', 500);
+
+-- Using GPT-4 for complex analysis
+SELECT stps_ask_ai(
+    'Revenue 2023: $5M, Revenue 2022: $3M, Margin: 25%',
+    'Analyze financial health (2 sentences).',
+    'gpt-4',
+    150
+);
+```
+
+#### `stps_set_api_key(api_key VARCHAR) → VARCHAR`
+
+Configure OpenAI API key for the session.
+
+**API Key Configuration Options:**
+```sql
+-- Option 1: Set for current session
+SELECT stps_set_api_key('sk-...');
+
+-- Option 2: Environment variable (recommended for production)
+-- In terminal: export OPENAI_API_KEY='sk-...'
+
+-- Option 3: Config file (recommended for persistent use)
+-- Create: ~/.stps/openai_api_key with your key
+```
+
+**📖 Full Documentation:** See [AI_FUNCTIONS_GUIDE.md](AI_FUNCTIONS_GUIDE.md) for:
+- Detailed examples (9+ use cases)
+- Cost optimization tips
+- Best practices & prompt engineering
+- Error handling & troubleshooting
+- Security recommendations
+- Token pricing & cost calculator
+
+**Requirements:**
+- OpenAI API key ([get one here](https://platform.openai.com))
+- Internet connection
+- `curl` installed
+- OpenAI account with credits
+
+**Cost Example:** Processing 1,000 rows with gpt-3.5-turbo ≈ $0.34
 
 ---
 
