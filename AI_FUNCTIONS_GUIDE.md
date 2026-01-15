@@ -49,9 +49,45 @@ SELECT stps_ask_ai('Tax Network GmbH', 'What industry is this company in?');
 
 ## Functions Overview
 
+### `stps_ask_ai_address(company_name[, model])`
+
+Get structured address data using AI - automatically formats response into organized address components.
+
+**Parameters:**
+- `company_name` (VARCHAR, required): Company name or location to look up
+- `model` (VARCHAR, optional): OpenAI model to use (default: `gpt-3.5-turbo`)
+
+**Returns:** STRUCT with fields:
+- `city` (VARCHAR): City name
+- `postal_code` (VARCHAR): Postal/ZIP code
+- `street_name` (VARCHAR): Street name
+- `street_nr` (VARCHAR): Street/house number
+
+**Example:**
+```sql
+-- Basic usage
+SELECT stps_ask_ai_address('Tax Network GmbH');
+-- Returns: {city: 'München', postal_code: '80331', street_name: 'Leopoldstraße', street_nr: '244'}
+
+-- Access individual fields
+SELECT
+    (stps_ask_ai_address('Tax Network GmbH')).city AS city,
+    (stps_ask_ai_address('Tax Network GmbH')).postal_code AS plz;
+
+-- Use with table data
+SELECT
+    company_name,
+    (stps_ask_ai_address(company_name)).city AS city,
+    (stps_ask_ai_address(company_name)).postal_code AS postal_code
+FROM companies;
+
+-- Use GPT-4 for better accuracy
+SELECT stps_ask_ai_address('Deutsche Bank AG', 'gpt-4');
+```
+
 ### `stps_ask_ai(context, prompt[, model][, max_tokens])`
 
-Query OpenAI's ChatGPT with context and a prompt.
+Query OpenAI's ChatGPT with context and a prompt - returns free-form text response.
 
 **Parameters:**
 - `context` (VARCHAR, required): Background information or data to provide context

@@ -331,6 +331,86 @@ static void StpsSetApiKeyFunction(DataChunk &args, ExpressionState &state, Vecto
     result.SetCardinality(1);
 }
 
+// ============================================================================
+// Address-specific AI function with structured output
+// ============================================================================
+
+static void StpsAskAIAddressFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+    auto count = args.size();
+    auto &company_name_vec = args.data[0];
+
+    // Optional model parameter
+    string model = "gpt-3.5-turbo";
+    if (args.ColumnCount() >= 2 && !FlatVector::IsNull(args.data[1], 0)) {
+        string_t model_str = FlatVector::GetData<string_t>(args.data[1])[0];
+        model = model_str.GetString();
+    }
+
+    // Get struct entries for output
+    auto &struct_entries = StructVector::GetEntries(result);
+    auto &city_vec = *struct_entries[0];
+    auto &postal_code_vec = *struct_entries[1];
+    auto &street_name_vec = *struct_entries[2];
+    auto &street_nr_vec = *struct_entries[3];
+
+    auto &result_validity = FlatVector::Validity(result);
+
+    for (idx_t i = 0; i < count; i++) {
+        if (FlatVector::IsNull(company_name_vec, i)) {
+            result_validity.SetInvalid(i);
+            continue;
+        }
+
+        string_t company_name_str = FlatVector::GetData<string_t>(company_name_vec)[i];
+        std::string company_name = company_name_str.GetString();
+
+        // Craft a specific prompt for address extraction with JSON output
+        std::string prompt = "Find the address for this company/location and respond ONLY with a JSON object in this exact format (no other text):\n"
+                           "{\"city\":\"city name\",\"postal_code\":\"postal code\",\"street_name\":\"street name\",\"street_nr\":\"street number\"}\n"
+                           "If you cannot find the information, use empty strings. Ensure valid JSON format.";
+
+        std::string response = call_openai_api(company_name, prompt, model, 150);
+
+        // Parse JSON response
+        if (response.find("ERROR:") == 0) {
+            // Error occurred, set all fields to NULL
+            result_validity.SetInvalid(i);
+            continue;
+        }
+
+        // Extract JSON fields
+        std::string city = extract_json_content(response, "city");
+        std::string postal_code = extract_json_content(response, "postal_code");
+        std::string street_name = extract_json_content(response, "street_name");
+        std::string street_nr = extract_json_content(response, "street_nr");
+
+        // Set struct fields
+        if (city.empty()) {
+            FlatVector::SetNull(city_vec, i, true);
+        } else {
+            FlatVector::GetData<string_t>(city_vec)[i] = StringVector::AddString(city_vec, city);
+        }
+
+        if (postal_code.empty()) {
+            FlatVector::SetNull(postal_code_vec, i, true);
+        } else {
+            FlatVector::GetData<string_t>(postal_code_vec)[i] = StringVector::AddString(postal_code_vec, postal_code);
+        }
+
+        if (street_name.empty()) {
+            FlatVector::SetNull(street_name_vec, i, true);
+        } else {
+            FlatVector::GetData<string_t>(street_name_vec)[i] = StringVector::AddString(street_name_vec, street_name);
+        }
+
+        if (street_nr.empty()) {
+            FlatVector::SetNull(street_nr_vec, i, true);
+        } else {
+            FlatVector::GetData<string_t>(street_nr_vec)[i] = StringVector::AddString(street_nr_vec, street_nr);
+        }
+    }
+}
+
 void RegisterAIFunctions(ExtensionLoader& loader) {
     // Register stps_ask_ai function
     ScalarFunctionSet ask_ai_set("stps_ask_ai");
@@ -357,6 +437,33 @@ void RegisterAIFunctions(ExtensionLoader& loader) {
     ));
 
     loader.RegisterFunction(ask_ai_set);
+
+    // Register stps_ask_ai_address function for structured address output
+    // Define STRUCT return type with address fields
+    child_list_t<LogicalType> address_struct_children;
+    address_struct_children.push_back(make_pair("city", LogicalType::VARCHAR));
+    address_struct_children.push_back(make_pair("postal_code", LogicalType::VARCHAR));
+    address_struct_children.push_back(make_pair("street_name", LogicalType::VARCHAR));
+    address_struct_children.push_back(make_pair("street_nr", LogicalType::VARCHAR));
+    auto address_return_type = LogicalType::STRUCT(std::move(address_struct_children));
+
+    ScalarFunctionSet ask_ai_address_set("stps_ask_ai_address");
+
+    // stps_ask_ai_address(company_name VARCHAR) -> STRUCT(...)
+    ask_ai_address_set.AddFunction(ScalarFunction(
+        {LogicalType::VARCHAR},
+        address_return_type,
+        StpsAskAIAddressFunction
+    ));
+
+    // stps_ask_ai_address(company_name VARCHAR, model VARCHAR) -> STRUCT(...)
+    ask_ai_address_set.AddFunction(ScalarFunction(
+        {LogicalType::VARCHAR, LogicalType::VARCHAR},
+        address_return_type,
+        StpsAskAIAddressFunction
+    ));
+
+    loader.RegisterFunction(ask_ai_address_set);
 
     // Register stps_set_api_key function
     ScalarFunctionSet set_api_key_set("stps_set_api_key");

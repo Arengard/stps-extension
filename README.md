@@ -240,6 +240,40 @@ FROM companies;
 
 ### 🤖 AI Functions (ChatGPT Integration)
 
+#### `stps_ask_ai_address(company_name VARCHAR[, model VARCHAR]) → STRUCT`
+
+Get structured address data using AI - returns organized address components.
+
+**Quick Example:**
+```sql
+-- Set API key first
+SELECT stps_set_api_key('sk-your-key-here');
+
+-- Get structured address
+SELECT stps_ask_ai_address('Tax Network GmbH');
+-- Returns: {city: 'München', postal_code: '80331', street_name: 'Musterstraße', street_nr: '123'}
+
+-- Access individual fields
+SELECT
+    company_name,
+    (stps_ask_ai_address(company_name)).city AS city,
+    (stps_ask_ai_address(company_name)).postal_code AS plz,
+    (stps_ask_ai_address(company_name)).street_name AS street,
+    (stps_ask_ai_address(company_name)).street_nr AS nr
+FROM companies;
+
+-- Use GPT-4 for better accuracy
+SELECT stps_ask_ai_address('Deutsche Bank AG', 'gpt-4');
+```
+
+**Returns STRUCT with:**
+- `city` - City name
+- `postal_code` - Postal/ZIP code
+- `street_name` - Street name
+- `street_nr` - Street number
+
+---
+
 #### `stps_ask_ai(context VARCHAR, prompt VARCHAR[, model VARCHAR][, max_tokens INTEGER]) → VARCHAR`
 
 Query OpenAI's ChatGPT directly from SQL for data enhancement, classification, summarization, and more.
