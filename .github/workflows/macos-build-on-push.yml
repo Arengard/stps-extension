@@ -18,6 +18,22 @@ jobs:
           fetch-depth: 0
           submodules: recursive
 
+      - name: Diagnostics (commit + source sanity)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          echo "GITHUB_SHA=${GITHUB_SHA}"
+          git rev-parse HEAD
+          git show -1 --oneline
+          echo "--- grep for Vector::SetCardinality usage ---"
+          grep -n "SetCardinality" -n src/ai_functions.cpp || true
+          echo "--- grep for CatalogTransaction usage in search_columns_function.cpp ---"
+          grep -n "CatalogTransaction" -n src/search_columns_function.cpp || true
+          echo "--- show relevant snippet (ai_functions.cpp) ---"
+          sed -n '300,360p' src/ai_functions.cpp || true
+          echo "--- show relevant snippet (search_columns_function.cpp) ---"
+          sed -n '80,140p' src/search_columns_function.cpp || true
+
       - name: Install build dependencies
         run: |
           brew install cmake ninja curl wget
