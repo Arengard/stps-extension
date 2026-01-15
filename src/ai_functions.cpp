@@ -286,7 +286,7 @@ static void StpsAskAIFunction(DataChunk &args, ExpressionState &state, Vector &r
     auto &prompt_vec = args.data[1];
 
     // Optional parameters with defaults
-    string model = "gpt-5.1";
+    string model = "gpt-4o-mini";
     int max_tokens = 1000;
 
     if (args.ColumnCount() >= 3 && !FlatVector::IsNull(args.data[2], 0)) {
@@ -341,7 +341,7 @@ static void StpsAskAIAddressFunction(DataChunk &args, ExpressionState &state, Ve
     auto &company_name_vec = args.data[0];
 
     // Optional model parameter
-    string model = "gpt-3.5-turbo";
+    string model = "gpt-4o-mini";
     if (args.ColumnCount() >= 2 && !FlatVector::IsNull(args.data[1], 0)) {
         string_t model_str = FlatVector::GetData<string_t>(args.data[1])[0];
         model = model_str.GetString();
