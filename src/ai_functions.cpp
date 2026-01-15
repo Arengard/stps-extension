@@ -157,7 +157,7 @@ static std::string extract_json_content(const std::string& json, const std::stri
     }
 
     pos++; // Skip opening quote
-    size_t end = pos;
+    end = pos;
 
     // Find closing quote (handle escaped quotes)
     while (end < cleaned.length()) {
