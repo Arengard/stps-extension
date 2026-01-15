@@ -22,13 +22,22 @@ namespace duckdb {
 namespace stps {
 
 // ============================================================================
-// Global API key storage
+// Global API key and model storage
 // ============================================================================
 
 static std::string openai_api_key;
+static std::string openai_model = "gpt-4o-mini";  // Default model
 
 void SetOpenAIApiKey(const std::string& key) {
     openai_api_key = key;
+}
+
+void SetOpenAIModel(const std::string& model) {
+    openai_model = model;
+}
+
+std::string GetOpenAIModel() {
+    return openai_model;
 }
 
 std::string GetOpenAIApiKey() {
@@ -96,9 +105,33 @@ static std::string escape_json_string(const std::string& str) {
 }
 
 static std::string extract_json_content(const std::string& json, const std::string& key) {
+    // First, strip markdown code blocks if present (```json ... ``` or ``` ... ```)
+    std::string cleaned = json;
+
+    // Remove ```json or ``` at start
+    size_t code_start = cleaned.find("```");
+    if (code_start != std::string::npos) {
+        size_t line_end = cleaned.find('\n', code_start);
+        if (line_end != std::string::npos) {
+            cleaned = cleaned.substr(line_end + 1);
+        }
+    }
+    // Remove trailing ```
+    size_t code_end = cleaned.rfind("```");
+    if (code_end != std::string::npos) {
+        cleaned = cleaned.substr(0, code_end);
+    }
+
+    // Trim whitespace
+    size_t start = cleaned.find_first_not_of(" \t\n\r");
+    size_t end = cleaned.find_last_not_of(" \t\n\r");
+    if (start != std::string::npos && end != std::string::npos) {
+        cleaned = cleaned.substr(start, end - start + 1);
+    }
+
     // Find "key":"value" or "key": "value" pattern
     std::string search = "\"" + key + "\"";
-    size_t pos = json.find(search);
+    size_t pos = cleaned.find(search);
     if (pos == std::string::npos) {
         return "";
     }
@@ -106,7 +139,7 @@ static std::string extract_json_content(const std::string& json, const std::stri
     pos += search.length();
 
     // Skip to colon
-    size_t colon = json.find(':', pos);
+    size_t colon = cleaned.find(':', pos);
     if (colon == std::string::npos) {
         return "";
     }
@@ -114,12 +147,12 @@ static std::string extract_json_content(const std::string& json, const std::stri
     pos = colon + 1;
 
     // Skip whitespace
-    while (pos < json.length() && std::isspace(json[pos])) {
+    while (pos < cleaned.length() && std::isspace(cleaned[pos])) {
         pos++;
     }
 
     // Check if value is a string (starts with ")
-    if (pos >= json.length() || json[pos] != '"') {
+    if (pos >= cleaned.length() || cleaned[pos] != '"') {
         return "";
     }
 
@@ -127,18 +160,18 @@ static std::string extract_json_content(const std::string& json, const std::stri
     size_t end = pos;
 
     // Find closing quote (handle escaped quotes)
-    while (end < json.length()) {
-        if (json[end] == '"' && (end == 0 || json[end - 1] != '\\')) {
+    while (end < cleaned.length()) {
+        if (cleaned[end] == '"' && (end == 0 || cleaned[end - 1] != '\\')) {
             break;
         }
         end++;
     }
 
-    if (end >= json.length()) {
+    if (end >= cleaned.length()) {
         return "";
     }
 
-    std::string result = json.substr(pos, end - pos);
+    std::string result = cleaned.substr(pos, end - pos);
 
     // Unescape basic sequences
     size_t esc_pos = 0;
@@ -285,8 +318,8 @@ static void StpsAskAIFunction(DataChunk &args, ExpressionState &state, Vector &r
     auto &context_vec = args.data[0];
     auto &prompt_vec = args.data[1];
 
-    // Optional parameters with defaults
-    string model = "gpt-4o-mini";
+    // Use configured model as default, allow override via parameter
+    string model = GetOpenAIModel();
     int max_tokens = 1000;
 
     if (args.ColumnCount() >= 3 && !FlatVector::IsNull(args.data[2], 0)) {
@@ -330,9 +363,29 @@ static void StpsSetApiKeyFunction(DataChunk &args, ExpressionState &state, Vecto
         FlatVector::GetData<string_t>(result)[0] = StringVector::AddString(result, "ERROR: API key cannot be NULL");
         FlatVector::SetNull(result, 0, false);
     }
+}
 
-    // Note: Vector has no SetCardinality in this DuckDB version.
-    // The executor determines cardinality from the input DataChunk.
+static void StpsSetModelFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+    auto &model_vec = args.data[0];
+
+    if (!FlatVector::IsNull(model_vec, 0)) {
+        string_t model_str = FlatVector::GetData<string_t>(model_vec)[0];
+        std::string model = model_str.GetString();
+        SetOpenAIModel(model);
+
+        std::string msg = "Model set to: " + model;
+        FlatVector::GetData<string_t>(result)[0] = StringVector::AddString(result, msg);
+        FlatVector::SetNull(result, 0, false);
+    } else {
+        FlatVector::GetData<string_t>(result)[0] = StringVector::AddString(result, "ERROR: Model cannot be NULL");
+        FlatVector::SetNull(result, 0, false);
+    }
+}
+
+static void StpsGetModelFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+    std::string model = GetOpenAIModel();
+    FlatVector::GetData<string_t>(result)[0] = StringVector::AddString(result, model);
+    FlatVector::SetNull(result, 0, false);
 }
 
 // ============================================================================
@@ -343,8 +396,8 @@ static void StpsAskAIAddressFunction(DataChunk &args, ExpressionState &state, Ve
     auto count = args.size();
     auto &company_name_vec = args.data[0];
 
-    // Optional model parameter
-    string model = "gpt-4o-mini";
+    // Use configured model as default, allow override via parameter
+    string model = GetOpenAIModel();
     if (args.ColumnCount() >= 2 && !FlatVector::IsNull(args.data[1], 0)) {
         string_t model_str = FlatVector::GetData<string_t>(args.data[1])[0];
         model = model_str.GetString();
@@ -476,8 +529,25 @@ void RegisterAIFunctions(ExtensionLoader& loader) {
         LogicalType::VARCHAR,
         StpsSetApiKeyFunction
     ));
-
     loader.RegisterFunction(set_api_key_set);
+
+    // Register stps_set_model function
+    ScalarFunctionSet set_model_set("stps_set_model");
+    set_model_set.AddFunction(ScalarFunction(
+        {LogicalType::VARCHAR},
+        LogicalType::VARCHAR,
+        StpsSetModelFunction
+    ));
+    loader.RegisterFunction(set_model_set);
+
+    // Register stps_get_model function
+    ScalarFunctionSet get_model_set("stps_get_model");
+    get_model_set.AddFunction(ScalarFunction(
+        {},
+        LogicalType::VARCHAR,
+        StpsGetModelFunction
+    ));
+    loader.RegisterFunction(get_model_set);
 }
 
 } // namespace stps
