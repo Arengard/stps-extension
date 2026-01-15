@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cctype>
 #include <iomanip>
+#include <mutex>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -22,28 +23,35 @@ namespace duckdb {
 namespace stps {
 
 // ============================================================================
-// Global API key and model storage
+// Global API key and model storage (thread-safe)
 // ============================================================================
 
+static std::mutex ai_config_mutex;
 static std::string openai_api_key;
 static std::string openai_model = "gpt-4o-mini";  // Default model
 
 void SetOpenAIApiKey(const std::string& key) {
+    std::lock_guard<std::mutex> lock(ai_config_mutex);
     openai_api_key = key;
 }
 
 void SetOpenAIModel(const std::string& model) {
+    std::lock_guard<std::mutex> lock(ai_config_mutex);
     openai_model = model;
 }
 
 std::string GetOpenAIModel() {
+    std::lock_guard<std::mutex> lock(ai_config_mutex);
     return openai_model;
 }
 
 std::string GetOpenAIApiKey() {
     // Check if key was set via stps_set_api_key()
-    if (!openai_api_key.empty()) {
-        return openai_api_key;
+    {
+        std::lock_guard<std::mutex> lock(ai_config_mutex);
+        if (!openai_api_key.empty()) {
+            return openai_api_key;
+        }
     }
 
     // Check environment variable OPENAI_API_KEY

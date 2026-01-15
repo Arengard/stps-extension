@@ -35,6 +35,7 @@ set(EXTENSION_SOURCES
     src/shared/filesystem_utils.cpp
     src/shared/pattern_matcher.cpp
     src/shared/content_searcher.cpp
+    src/shared/archive_utils.cpp
     # German bank account check digit validation
     src/kontocheck/check_methods.cpp
     src/account_validation.cpp

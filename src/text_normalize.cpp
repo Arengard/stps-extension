@@ -248,7 +248,7 @@ std::string clean_string(const std::string& input) {
 }
 
 // DuckDB scalar function wrappers
-static void PgmRemoveAccentsFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+static void StpsRemoveAccentsFunction(DataChunk &args, ExpressionState &state, Vector &result) {
     BinaryExecutor::Execute<string_t, bool, string_t>(
         args.data[0], args.data[1], result, args.size(),
         [&](string_t input, bool keep_umlauts) {
@@ -258,7 +258,7 @@ static void PgmRemoveAccentsFunction(DataChunk &args, ExpressionState &state, Ve
         });
 }
 
-static void PgmRemoveAccentsSimpleFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+static void StpsRemoveAccentsSimpleFunction(DataChunk &args, ExpressionState &state, Vector &result) {
     UnaryExecutor::Execute<string_t, string_t>(
         args.data[0], result, args.size(),
         [&](string_t input) {
@@ -268,7 +268,7 @@ static void PgmRemoveAccentsSimpleFunction(DataChunk &args, ExpressionState &sta
         });
 }
 
-static void PgmRestoreUmlautsFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+static void StpsRestoreUmlautsFunction(DataChunk &args, ExpressionState &state, Vector &result) {
     UnaryExecutor::Execute<string_t, string_t>(
         args.data[0], result, args.size(),
         [&](string_t input) {
@@ -278,7 +278,7 @@ static void PgmRestoreUmlautsFunction(DataChunk &args, ExpressionState &state, V
         });
 }
 
-static void PgmCleanStringFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+static void StpsCleanStringFunction(DataChunk &args, ExpressionState &state, Vector &result) {
     UnaryExecutor::Execute<string_t, string_t>(
         args.data[0], result, args.size(),
         [&](string_t input) {
@@ -288,7 +288,7 @@ static void PgmCleanStringFunction(DataChunk &args, ExpressionState &state, Vect
         });
 }
 
-static void PgmNormalizeFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+static void StpsNormalizeFunction(DataChunk &args, ExpressionState &state, Vector &result) {
     UnaryExecutor::Execute<string_t, string_t>(
         args.data[0], result, args.size(),
         [&](string_t input) {
@@ -302,27 +302,27 @@ void RegisterTextNormalizeFunctions(ExtensionLoader &loader) {
     // stps_remove_accents with keep_umlauts parameter
     ScalarFunctionSet remove_accents_set("stps_remove_accents");
     remove_accents_set.AddFunction(ScalarFunction({LogicalType::VARCHAR}, LogicalType::VARCHAR,
-                                                 PgmRemoveAccentsSimpleFunction));
+                                                 StpsRemoveAccentsSimpleFunction));
     remove_accents_set.AddFunction(ScalarFunction({LogicalType::VARCHAR, LogicalType::BOOLEAN},
-                                                     LogicalType::VARCHAR, PgmRemoveAccentsFunction));
+                                                     LogicalType::VARCHAR, StpsRemoveAccentsFunction));
     loader.RegisterFunction(remove_accents_set);
 
     // stps_restore_umlauts
     ScalarFunctionSet restore_umlauts_set("stps_restore_umlauts");
     restore_umlauts_set.AddFunction(ScalarFunction({LogicalType::VARCHAR}, LogicalType::VARCHAR,
-                                          PgmRestoreUmlautsFunction));
+                                          StpsRestoreUmlautsFunction));
     loader.RegisterFunction(restore_umlauts_set);
 
     // stps_clean_string
     ScalarFunctionSet clean_string_set("stps_clean_string");
     clean_string_set.AddFunction(ScalarFunction({LogicalType::VARCHAR}, LogicalType::VARCHAR,
-                                       PgmCleanStringFunction));
+                                       StpsCleanStringFunction));
     loader.RegisterFunction(clean_string_set);
 
     // stps_normalize
     ScalarFunctionSet normalize_set("stps_normalize");
     normalize_set.AddFunction(ScalarFunction({LogicalType::VARCHAR}, LogicalType::VARCHAR,
-                                    PgmNormalizeFunction));
+                                    StpsNormalizeFunction));
     loader.RegisterFunction(normalize_set);
 }
 

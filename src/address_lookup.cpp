@@ -1,5 +1,6 @@
 #include "address_lookup.hpp"
 #include "street_split.hpp"
+#include "utils.hpp"
 #include "duckdb/function/scalar_function.hpp"
 #include "duckdb/common/types/data_chunk.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
@@ -97,24 +98,6 @@ static void cache_address_result(const std::string& company_name, const AddressR
         }
         address_cache.erase(oldest);
     }
-}
-
-// ============================================================================
-// String utilities
-// ============================================================================
-
-static std::string trim(const std::string& str) {
-    size_t start = str.find_first_not_of(" \t\n\r");
-    if (start == std::string::npos) return "";
-    size_t end = str.find_last_not_of(" \t\n\r");
-    return str.substr(start, end - start + 1);
-}
-
-static std::string to_lower(const std::string& str) {
-    std::string result = str;
-    std::transform(result.begin(), result.end(), result.begin(),
-                   [](unsigned char c) { return std::tolower(c); });
-    return result;
 }
 
 // ============================================================================

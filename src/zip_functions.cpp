@@ -1,83 +1,16 @@
 #include "zip_functions.hpp"
+#include "shared/archive_utils.hpp"
 #include "duckdb/function/table_function.hpp"
 #include "duckdb/parser/parsed_data/create_table_function_info.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "../miniz/miniz.h"
 #include <cstring>
-#include <algorithm>
 #include <fstream>
-
-#ifdef _WIN32
-#include <windows.h>
-#else
-#include <unistd.h>
-#endif
 
 namespace duckdb {
 namespace stps {
 
-// Helper to get file extension (lowercase)
-static string GetFileExtension(const string &filename) {
-    size_t dot_pos = filename.rfind('.');
-    if (dot_pos == string::npos || dot_pos == filename.length() - 1) {
-        return "";
-    }
-    string ext = filename.substr(dot_pos + 1);
-    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-    return ext;
-}
-
-// Helper to check if file is a binary format
-static bool IsBinaryFormat(const string &filename) {
-    string ext = GetFileExtension(filename);
-    return ext == "parquet" || ext == "arrow" || ext == "feather" ||
-           ext == "orc" || ext == "avro" || ext == "xlsx" || ext == "xls" ||
-           ext == "db" || ext == "sqlite" || ext == "duckdb";
-}
-
-// Helper to check if content looks like binary
-static bool LooksLikeBinary(const string &content) {
-    if (content.empty()) return false;
-    size_t check_size = std::min(content.size(), (size_t)1000);
-    int non_printable = 0;
-    for (size_t i = 0; i < check_size; i++) {
-        unsigned char c = static_cast<unsigned char>(content[i]);
-        if (c == 0) return true;
-        if (c < 32 && c != '\n' && c != '\r' && c != '\t') non_printable++;
-    }
-    return (non_printable > (int)(check_size / 10));
-}
-
-// Helper to get temp directory
-static string GetTempDirectory() {
-#ifdef _WIN32
-    char temp_path[MAX_PATH];
-    DWORD len = GetTempPathA(MAX_PATH, temp_path);
-    if (len > 0 && len < MAX_PATH) return string(temp_path);
-    return "C:\\Temp\\";
-#else
-    const char* tmp = std::getenv("TMPDIR");
-    if (tmp) return string(tmp) + "/";
-    return "/tmp/";
-#endif
-}
-
-// Helper to extract file to temp location
-static string ExtractToTemp(const string &content, const string &original_filename) {
-    string temp_dir = GetTempDirectory();
-    string base_name = original_filename;
-    size_t slash_pos = base_name.rfind('/');
-    if (slash_pos != string::npos) base_name = base_name.substr(slash_pos + 1);
-    slash_pos = base_name.rfind('\\');
-    if (slash_pos != string::npos) base_name = base_name.substr(slash_pos + 1);
-
-    string temp_path = temp_dir + "stps_zip_" + base_name;
-    std::ofstream out(temp_path, std::ios::binary);
-    if (!out) throw IOException("Failed to create temp file: " + temp_path);
-    out.write(content.data(), content.size());
-    out.close();
-    return temp_path;
-}//===--------------------------------------------------------------------===//
+//===--------------------------------------------------------------------===//
 // stps_view_zip - List files inside a ZIP archive
 //===--------------------------------------------------------------------===//
 
@@ -108,7 +41,7 @@ static unique_ptr<FunctionData> ViewZipBind(ClientContext &context, TableFunctio
     return_types = {LogicalType::VARCHAR, LogicalType::BIGINT, LogicalType::BIGINT, 
                     LogicalType::BOOLEAN, LogicalType::INTEGER};
     
-    return std::move(result);
+    return result;
 }
 
 // Init function for stps_view_zip
@@ -127,7 +60,7 @@ static unique_ptr<GlobalTableFunctionState> ViewZipInit(ClientContext &context, 
         result->initialized = true;
     }
     
-    return std::move(result);
+    return result;
 }
 
 // Scan function for stps_view_zip
@@ -193,110 +126,6 @@ struct ZipGlobalState : public GlobalTableFunctionState {
     bool parsed = false;
     string error_message;
 };
-
-// Helper function to detect delimiter
-static char DetectDelimiter(const string &content) {
-    // Check for common delimiters
-    size_t semicolon_count = std::count(content.begin(), content.end(), ';');
-    size_t comma_count = std::count(content.begin(), content.end(), ',');
-    size_t tab_count = std::count(content.begin(), content.end(), '\t');
-    size_t pipe_count = std::count(content.begin(), content.end(), '|');
-    
-    if (semicolon_count >= comma_count && semicolon_count >= tab_count && semicolon_count >= pipe_count) {
-        return ';';
-    } else if (tab_count >= comma_count && tab_count >= pipe_count) {
-        return '\t';
-    } else if (pipe_count >= comma_count) {
-        return '|';
-    }
-    return ',';
-}
-
-// Helper function to split a line by delimiter
-static vector<string> SplitLine(const string &line, char delimiter) {
-    vector<string> result;
-    string current;
-    bool in_quotes = false;
-    
-    for (size_t i = 0; i < line.size(); i++) {
-        char c = line[i];
-        if (c == '"') {
-            in_quotes = !in_quotes;
-        } else if (c == delimiter && !in_quotes) {
-            result.push_back(current);
-            current.clear();
-        } else {
-            current += c;
-        }
-    }
-    result.push_back(current);
-    
-    return result;
-}
-
-// Parse CSV content
-static void ParseCSVContent(const string &content, vector<string> &column_names, 
-                            vector<LogicalType> &column_types, vector<vector<Value>> &rows) {
-    if (content.empty()) {
-        return;
-    }
-    
-    char delimiter = DetectDelimiter(content);
-    
-    // Split into lines
-    vector<string> lines;
-    size_t start = 0;
-    for (size_t i = 0; i < content.size(); i++) {
-        if (content[i] == '\n') {
-            string line = content.substr(start, i - start);
-            // Remove carriage return if present
-            if (!line.empty() && line.back() == '\r') {
-                line.pop_back();
-            }
-            if (!line.empty()) {
-                lines.push_back(line);
-            }
-            start = i + 1;
-        }
-    }
-    // Add last line if no trailing newline
-    if (start < content.size()) {
-        string line = content.substr(start);
-        if (!line.empty() && line.back() == '\r') {
-            line.pop_back();
-        }
-        if (!line.empty()) {
-            lines.push_back(line);
-        }
-    }
-    
-    if (lines.empty()) {
-        return;
-    }
-    
-    // Parse header
-    column_names = SplitLine(lines[0], delimiter);
-    
-    // Initialize all columns as VARCHAR for simplicity
-    for (size_t i = 0; i < column_names.size(); i++) {
-        column_types.push_back(LogicalType::VARCHAR);
-    }
-    
-    // Parse data rows
-    for (size_t i = 1; i < lines.size(); i++) {
-        vector<string> values = SplitLine(lines[i], delimiter);
-        vector<Value> row;
-        
-        for (size_t j = 0; j < column_names.size(); j++) {
-            if (j < values.size()) {
-                row.push_back(Value(values[j]));
-            } else {
-                row.push_back(Value());
-            }
-        }
-        rows.push_back(row);
-    }
-}
 
 // Bind function for stps_zip
 static unique_ptr<FunctionData> ZipBind(ClientContext &context, TableFunctionBindInput &input,
@@ -379,7 +208,7 @@ static unique_ptr<FunctionData> ZipBind(ClientContext &context, TableFunctionBin
     // Check if this is a binary format that can't be parsed as CSV
     if (IsBinaryFormat(result->inner_filename) || LooksLikeBinary(content)) {
         // Extract to temp file and return path for user to use with read_parquet etc.
-        string temp_path = ExtractToTemp(content, result->inner_filename);
+        string temp_path = ExtractToTemp(content, result->inner_filename, "stps_zip_");
         string ext = GetFileExtension(result->inner_filename);
 
         // Return info about extracted file
@@ -391,7 +220,7 @@ static unique_ptr<FunctionData> ZipBind(ClientContext &context, TableFunctionBin
         result->inner_filename = temp_path;
         result->auto_detect_file = false;  // Signal that this is binary mode
 
-        return std::move(result);
+        return result;
     }
 
     // Parse to determine schema for CSV/text files
@@ -410,7 +239,7 @@ static unique_ptr<FunctionData> ZipBind(ClientContext &context, TableFunctionBin
         return_types = column_types;
     }
     
-    return std::move(result);
+    return result;
 }
 
 // Init function for stps_zip
@@ -466,7 +295,7 @@ static unique_ptr<GlobalTableFunctionState> ZipInit(ClientContext &context, Tabl
         result->rows.push_back(row);
         result->parsed = true;
 
-        return std::move(result);
+        return result;
     }
 
     mz_zip_archive zip_archive;
@@ -474,14 +303,14 @@ static unique_ptr<GlobalTableFunctionState> ZipInit(ClientContext &context, Tabl
     
     if (!mz_zip_reader_init_file(&zip_archive, bind_data.zip_path.c_str(), 0)) {
         result->error_message = "Failed to open ZIP file: " + bind_data.zip_path;
-        return std::move(result);
+        return result;
     }
     
     int file_index = mz_zip_reader_locate_file(&zip_archive, bind_data.inner_filename.c_str(), nullptr, 0);
     if (file_index < 0) {
         mz_zip_reader_end(&zip_archive);
         result->error_message = "File not found in ZIP archive: " + bind_data.inner_filename;
-        return std::move(result);
+        return result;
     }
     
     // Extract file content
@@ -491,7 +320,7 @@ static unique_ptr<GlobalTableFunctionState> ZipInit(ClientContext &context, Tabl
     if (!file_data) {
         mz_zip_reader_end(&zip_archive);
         result->error_message = "Failed to extract file from ZIP archive";
-        return std::move(result);
+        return result;
     }
     
     string content(static_cast<char*>(file_data), file_size);
@@ -502,7 +331,7 @@ static unique_ptr<GlobalTableFunctionState> ZipInit(ClientContext &context, Tabl
     ParseCSVContent(content, result->column_names, result->column_types, result->rows);
     result->parsed = true;
     
-    return std::move(result);
+    return result;
 }
 
 // Scan function for stps_zip
