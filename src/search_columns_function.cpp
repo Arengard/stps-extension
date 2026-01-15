@@ -3,6 +3,7 @@
 #include "duckdb/parser/parsed_data/create_table_function_info.hpp"
 #include "duckdb/catalog/catalog.hpp"
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
+#include "duckdb/catalog/catalog_transaction.hpp"
 #include <algorithm>
 #include <cctype>
 
@@ -105,7 +106,7 @@ static unique_ptr<FunctionData> SearchColumnsBind(ClientContext &context, TableF
     // Get table columns from catalog
     auto &catalog = Catalog::GetCatalog(context, INVALID_CATALOG);
     auto &schema = catalog.GetSchema(context, DEFAULT_SCHEMA);
-    auto transaction = CatalogTransaction::Get(context);
+    auto transaction = CatalogTransaction::GetSystemCatalogTransaction(context);
 
     try {
         auto table_entry = schema.GetEntry(transaction, CatalogType::TABLE_ENTRY, result->table_name);
