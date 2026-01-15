@@ -416,6 +416,13 @@ static std::vector<std::string> split_lines(const std::string& text) {
 }
 
 // ============================================================================
+// Handelsregister parsing - Forward declarations
+// ============================================================================
+
+static bool parse_plz_city(const std::string& line, std::string& plz, std::string& city);
+static bool looks_like_street_address(const std::string& line);
+
+// ============================================================================
 // Handelsregister parsing
 // ============================================================================
 
