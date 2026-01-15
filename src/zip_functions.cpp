@@ -424,9 +424,15 @@ static unique_ptr<GlobalTableFunctionState> ZipInit(ClientContext &context, Tabl
         string temp_path = bind_data.inner_filename;
         string ext = GetFileExtension(temp_path);
 
-        // Get file size
+        // Get file size safely (avoid ambiguous ternary with pos_type)
+        size_t file_size = 0;
         std::ifstream file(temp_path, std::ios::binary | std::ios::ate);
-        size_t file_size = file.is_open() ? file.tellg() : 0;
+        if (file.is_open()) {
+            std::streampos pos = file.tellg();
+            if (pos != std::streampos(-1)) {
+                file_size = static_cast<size_t>(pos);
+            }
+        }
 
         // Determine usage hint based on extension
         string usage_hint;
