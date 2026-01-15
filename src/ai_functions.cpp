@@ -325,11 +325,14 @@ static void StpsSetApiKeyFunction(DataChunk &args, ExpressionState &state, Vecto
         SetOpenAIApiKey(key);
 
         FlatVector::GetData<string_t>(result)[0] = StringVector::AddString(result, "API key configured successfully");
+        FlatVector::SetNull(result, 0, false);
     } else {
         FlatVector::GetData<string_t>(result)[0] = StringVector::AddString(result, "ERROR: API key cannot be NULL");
+        FlatVector::SetNull(result, 0, false);
     }
 
-    result.SetCardinality(1);
+    // Note: Vector has no SetCardinality in this DuckDB version.
+    // The executor determines cardinality from the input DataChunk.
 }
 
 // ============================================================================
