@@ -25,7 +25,7 @@ set(EXTENSION_SOURCES
     src/street_split.cpp
     src/plz_validation.cpp
     src/address_lookup.cpp
-    # src/search_columns_function.cpp  # Uncommitted work-in-progress
+    src/search_columns_function.cpp
     # src/fill_functions.cpp  # Temporarily disabled - DuckDB API changed
     src/smart_cast_utils.cpp
     src/smart_cast_scalar.cpp

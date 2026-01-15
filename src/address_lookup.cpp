@@ -591,6 +591,13 @@ AddressResult lookup_company_address(const std::string& company_name) {
         return result;
     }
 
+    // NOTE: This function attempts to fetch company addresses from Handelsregister.de
+    // It requires curl or wget to be installed and may not work reliably due to:
+    // - Website may block automated requests
+    // - curl/wget may not be installed
+    // - Website requires JavaScript which curl doesn't support
+    // Consider using an API service instead for production use.
+
     // Step 1: Search on Handelsregister.de
     // URL format: https://www.handelsregister.de/rp_web/search.xhtml
     // Uses POST request with search parameters
@@ -599,6 +606,7 @@ AddressResult lookup_company_address(const std::string& company_name) {
     // Step 2: Fetch search results (with rate limiting)
     std::string search_html = fetch_url(search_url);
     if (search_html.empty()) {
+        // URL fetch failed - curl/wget not available or request blocked
         cache_address_result(company_name, result);
         return result;
     }

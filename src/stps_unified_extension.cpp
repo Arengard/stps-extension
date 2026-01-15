@@ -19,7 +19,7 @@
 #include "street_split.hpp"
 #include "plz_validation.hpp"
 #include "address_lookup.hpp"
-// #include "search_columns_function.hpp"  // Uncommitted work-in-progress
+#include "search_columns_function.hpp"
 #include "account_validation.hpp"
 #include "smart_cast_scalar.hpp"
 #include "smart_cast_function.hpp"
@@ -79,7 +79,7 @@ public:
         stps::Register7zipFunctions(loader);
 
         // Register search columns function
-        // stps::RegisterSearchColumnsFunction(loader);  // Uncommitted work-in-progress
+        stps::RegisterSearchColumnsFunction(loader);
 
         // Register fill window functions
         // stps::RegisterFillFunctions(loader);  // Temporarily disabled
