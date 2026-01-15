@@ -361,39 +361,65 @@ static void StpsGetBbanFunction(DataChunk &args, ExpressionState &state, Vector 
 }
 
 void RegisterIbanValidationFunctions(ExtensionLoader &loader) {
-    // stps_is_valid_iban(iban) - Returns true if IBAN is valid
+    // stps_is_valid_iban(iban) - Validate IBAN using MOD-97 algorithm
+    auto is_valid_iban_func = ScalarFunction({LogicalType::VARCHAR}, LogicalType::BOOLEAN, StpsIsValidIbanFunction);
+    is_valid_iban_func.description = "Validate IBAN (International Bank Account Number) using MOD-97 algorithm.\n"
+                                     "Supports all 75+ IBAN country codes with proper length validation.\n"
+                                     "Usage: SELECT stps_is_valid_iban('DE89370400440532013000');\n"
+                                     "Returns: BOOLEAN (true if valid, false otherwise)";
     ScalarFunctionSet is_valid_iban_set("stps_is_valid_iban");
-    is_valid_iban_set.AddFunction(ScalarFunction({LogicalType::VARCHAR},
-                                                  LogicalType::BOOLEAN,
-                                                  StpsIsValidIbanFunction));
+    is_valid_iban_set.AddFunction(is_valid_iban_func);
     loader.RegisterFunction(is_valid_iban_set);
 
     // stps_format_iban(iban) - Format IBAN with spaces every 4 characters
+    auto format_iban_func = ScalarFunction({LogicalType::VARCHAR}, LogicalType::VARCHAR, StpsFormatIbanFunction);
+    format_iban_func.description = "Format IBAN with spaces every 4 characters for better readability.\n"
+                                   "Usage: SELECT stps_format_iban('DE89370400440532013000');\n"
+                                   "Returns: VARCHAR (formatted IBAN, e.g., 'DE89 3704 0044 0532 0130 00')";
     ScalarFunctionSet format_iban_set("stps_format_iban");
-    format_iban_set.AddFunction(ScalarFunction({LogicalType::VARCHAR}, LogicalType::VARCHAR, StpsFormatIbanFunction));
+    format_iban_set.AddFunction(format_iban_func);
     loader.RegisterFunction(format_iban_set);
 
     // stps_get_iban_country_code(iban) - Extract country code from IBAN
+    auto get_country_code_func = ScalarFunction({LogicalType::VARCHAR}, LogicalType::VARCHAR, StpsGetIbanCountryCodeFunction);
+    get_country_code_func.description = "Extract the 2-letter ISO country code from an IBAN.\n"
+                                        "Usage: SELECT stps_get_iban_country_code('DE89370400440532013000');\n"
+                                        "Returns: VARCHAR (country code, e.g., 'DE')";
     ScalarFunctionSet get_country_code_set("stps_get_iban_country_code");
-    get_country_code_set.AddFunction(ScalarFunction({LogicalType::VARCHAR}, LogicalType::VARCHAR, StpsGetIbanCountryCodeFunction));
+    get_country_code_set.AddFunction(get_country_code_func);
     loader.RegisterFunction(get_country_code_set);
 
     // stps_get_iban_check_digits(iban) - Extract check digits from IBAN
+    auto get_check_digits_func = ScalarFunction({LogicalType::VARCHAR}, LogicalType::VARCHAR, StpsGetIbanCheckDigitsFunction);
+    get_check_digits_func.description = "Extract the 2-digit check digits from an IBAN (positions 3-4).\n"
+                                        "Usage: SELECT stps_get_iban_check_digits('DE89370400440532013000');\n"
+                                        "Returns: VARCHAR (check digits, e.g., '89')";
     ScalarFunctionSet get_check_digits_set("stps_get_iban_check_digits");
-    get_check_digits_set.AddFunction(ScalarFunction({LogicalType::VARCHAR}, LogicalType::VARCHAR, StpsGetIbanCheckDigitsFunction));
+    get_check_digits_set.AddFunction(get_check_digits_func);
     loader.RegisterFunction(get_check_digits_set);
 
     // stps_get_bban(iban) - Extract BBAN (Basic Bank Account Number) from IBAN
+    auto get_bban_func = ScalarFunction({LogicalType::VARCHAR}, LogicalType::VARCHAR, StpsGetBbanFunction);
+    get_bban_func.description = "Extract the BBAN (Basic Bank Account Number) from an IBAN.\n"
+                                "BBAN is the country-specific part after country code and check digits.\n"
+                                "Usage: SELECT stps_get_bban('DE89370400440532013000');\n"
+                                "Returns: VARCHAR (BBAN, e.g., '370400440532013000')";
     ScalarFunctionSet get_bban_set("stps_get_bban");
-    get_bban_set.AddFunction(ScalarFunction({LogicalType::VARCHAR}, LogicalType::VARCHAR, StpsGetBbanFunction));
+    get_bban_set.AddFunction(get_bban_func);
     loader.RegisterFunction(get_bban_set);
 
     // stps_is_valid_german_iban(iban, method_id) - Validate German IBAN with kontocheck
-    ScalarFunctionSet is_valid_german_iban_set("stps_is_valid_german_iban");
-    is_valid_german_iban_set.AddFunction(ScalarFunction(
+    auto is_valid_german_iban_func = ScalarFunction(
         {LogicalType::VARCHAR, LogicalType::INTEGER},
         LogicalType::BOOLEAN,
-        StpsIsValidGermanIbanFunction));
+        StpsIsValidGermanIbanFunction);
+    is_valid_german_iban_func.description = "Validate German IBAN with specific kontocheck method (advanced).\n"
+                                            "For general IBAN validation, use stps_is_valid_iban() instead.\n"
+                                            "Usage: SELECT stps_is_valid_german_iban('DE89370400440532013000', 9);\n"
+                                            "Parameters: iban (VARCHAR), method_id (INTEGER 0-198)\n"
+                                            "Returns: BOOLEAN";
+    ScalarFunctionSet is_valid_german_iban_set("stps_is_valid_german_iban");
+    is_valid_german_iban_set.AddFunction(is_valid_german_iban_func);
     loader.RegisterFunction(is_valid_german_iban_set);
 }
 

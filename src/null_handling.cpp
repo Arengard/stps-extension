@@ -68,14 +68,22 @@ static void PgmMapNullToEmptyFunction(DataChunk &args, ExpressionState &state, V
 void RegisterNullHandlingFunctions(ExtensionLoader &loader) {
     // stps_map_empty_to_null
     ScalarFunctionSet map_empty_to_null_set("stps_map_empty_to_null");
-    map_empty_to_null_set.AddFunction(ScalarFunction({LogicalType::VARCHAR}, LogicalType::VARCHAR,
-                                                      PgmMapEmptyToNullFunction));
+    auto map_empty_to_null_func = ScalarFunction({LogicalType::VARCHAR}, LogicalType::VARCHAR,
+                                                      PgmMapEmptyToNullFunction);
+    map_empty_to_null_func.description = "Converts empty strings ('') to NULL values.\n"
+                                         "Usage: SELECT stps_map_empty_to_null(column_name);\n"
+                                         "Returns: VARCHAR (original value or NULL if empty string)";
+    map_empty_to_null_set.AddFunction(map_empty_to_null_func);
     loader.RegisterFunction(map_empty_to_null_set);
 
     // stps_map_null_to_empty
     ScalarFunctionSet map_null_to_empty_set("stps_map_null_to_empty");
-    map_null_to_empty_set.AddFunction(ScalarFunction({LogicalType::VARCHAR}, LogicalType::VARCHAR,
-                                                      PgmMapNullToEmptyFunction));
+    auto map_null_to_empty_func = ScalarFunction({LogicalType::VARCHAR}, LogicalType::VARCHAR,
+                                                      PgmMapNullToEmptyFunction);
+    map_null_to_empty_func.description = "Converts NULL values to empty strings ('').\n"
+                                         "Usage: SELECT stps_map_null_to_empty(column_name);\n"
+                                         "Returns: VARCHAR (original value or '' if NULL)";
+    map_null_to_empty_set.AddFunction(map_null_to_empty_func);
     loader.RegisterFunction(map_null_to_empty_set);
 }
 

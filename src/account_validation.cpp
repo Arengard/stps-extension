@@ -158,18 +158,26 @@ void RegisterAccountValidationFunctions(ExtensionLoader &loader) {
     ScalarFunctionSet validate_account_set("stps_validate_account_number");
 
     // With BLZ parameter
-    validate_account_set.AddFunction(ScalarFunction(
+    auto validate_account_with_blz = ScalarFunction(
         {LogicalType::VARCHAR, LogicalType::INTEGER, LogicalType::VARCHAR},
         LogicalType::BOOLEAN,
         ValidateAccountNumberFunction
-    ));
+    );
+    validate_account_with_blz.description = "Validates a German bank account number using the specified validation method.\n"
+                                            "Usage: SELECT stps_validate_account_number('1234567890', 0, '12345678');\n"
+                                            "Returns: BOOLEAN (true if account number is valid, false otherwise)";
+    validate_account_set.AddFunction(validate_account_with_blz);
 
     // Without BLZ parameter (default empty string)
-    validate_account_set.AddFunction(ScalarFunction(
+    auto validate_account_without_blz = ScalarFunction(
         {LogicalType::VARCHAR, LogicalType::INTEGER},
         LogicalType::BOOLEAN,
         ValidateAccountNumberFunction
-    ));
+    );
+    validate_account_without_blz.description = "Validates a German bank account number using the specified validation method (without BLZ).\n"
+                                               "Usage: SELECT stps_validate_account_number('1234567890', 0);\n"
+                                               "Returns: BOOLEAN (true if account number is valid, false otherwise)";
+    validate_account_set.AddFunction(validate_account_without_blz);
 
     loader.RegisterFunction(validate_account_set);
 
@@ -177,18 +185,26 @@ void RegisterAccountValidationFunctions(ExtensionLoader &loader) {
     ScalarFunctionSet validate_result_set("stps_validate_account_result");
 
     // With BLZ parameter
-    validate_result_set.AddFunction(ScalarFunction(
+    auto validate_result_with_blz = ScalarFunction(
         {LogicalType::VARCHAR, LogicalType::INTEGER, LogicalType::VARCHAR},
         LogicalType::VARCHAR,
         ValidateAccountResultFunction
-    ));
+    );
+    validate_result_with_blz.description = "Validates a German bank account number and returns detailed result status.\n"
+                                           "Usage: SELECT stps_validate_account_result('1234567890', 0, '12345678');\n"
+                                           "Returns: VARCHAR (one of: 'OK', 'FALSE', 'INVALID_KTO', 'NOT_IMPLEMENTED', 'INVALID_METHOD')";
+    validate_result_set.AddFunction(validate_result_with_blz);
 
     // Without BLZ parameter
-    validate_result_set.AddFunction(ScalarFunction(
+    auto validate_result_without_blz = ScalarFunction(
         {LogicalType::VARCHAR, LogicalType::INTEGER},
         LogicalType::VARCHAR,
         ValidateAccountResultFunction
-    ));
+    );
+    validate_result_without_blz.description = "Validates a German bank account number and returns detailed result status (without BLZ).\n"
+                                              "Usage: SELECT stps_validate_account_result('1234567890', 0);\n"
+                                              "Returns: VARCHAR (one of: 'OK', 'FALSE', 'INVALID_KTO', 'NOT_IMPLEMENTED', 'INVALID_METHOD')";
+    validate_result_set.AddFunction(validate_result_without_blz);
 
     loader.RegisterFunction(validate_result_set);
 }

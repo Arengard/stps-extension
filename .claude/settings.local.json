@@ -1,0 +1,35 @@
+{
+  "permissions": {
+    "allow": [
+      "Skill(superpowers:brainstorming)",
+      "Bash(make test_smart_cast:*)",
+      "Bash(cmd //c \"quick-rebuild.bat\")",
+      "Bash(cmd //c \"C:\\\\stps-extension\\\\quick-rebuild.bat\")",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push)",
+      "Bash(git pull:*)",
+      "Skill(superpowers:writing-plans)",
+      "Skill(superpowers:subagent-driven-development)",
+      "Bash(gcc:*)",
+      "Bash(where:*)",
+      "Bash(make:*)",
+      "Bash(dir \"C:\\\\stps-extension\\\\build\")",
+      "Bash(cmd /c \"dir C:\\\\stps-extension\\\\build\")",
+      "Bash(cmd /c \"call \"\"C:\\\\Program Files\\\\Microsoft Visual Studio\\\\2022\\\\Community\\\\VC\\\\Auxiliary\\\\Build\\\\vcvarsall.bat\"\" x64 && cl /c /nologo /W3 /WX- /I\"\"C:\\\\stps-extension\\\\src\\\\include\"\" \"\"C:\\\\stps-extension\\\\src\\\\lzma\\\\7z.c\"\" /Fo:nul\")",
+      "Bash(cmd /c \"\"\"C:\\\\Program Files\\\\Microsoft Visual Studio\\\\2022\\\\Community\\\\VC\\\\Auxiliary\\\\Build\\\\vcvarsall.bat\"\" x64 && cl /c /nologo /W3 /WX- /I\"\"C:\\\\stps-extension\\\\src\\\\include\"\" \"\"C:\\\\stps-extension\\\\src\\\\lzma\\\\7z.c\"\" /Fo:nul\")",
+      "Bash(cmd /c \"C:\\\\stps-extension\\\\quick-rebuild.bat\")",
+      "Bash(git -C \"C:\\\\stps-extension\" status)",
+      "Bash(git -C \"C:\\\\stps-extension\" diff src/lzma/7z.c)",
+      "Bash(git -C \"C:\\\\stps-extension\" log --oneline -5)",
+      "Bash(git -C \"C:\\\\stps-extension\" add src/lzma/7z.c)",
+      "Bash(git -C \"C:\\\\stps-extension\" commit -m \"$\\(cat <<''EOF''\nfeat\\(7z\\): update Sz7z_Free to handle folder structures\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(cmake --version:*)",
+      "Bash(/c/Users/Ramon.Ljevo/scoop/shims/7z a test/data/test.7z test/data/test_data.csv)",
+      "Bash(/c/Users/Ramon.Ljevo/scoop/shims/7z l \"C:/stps-extension/test/data/test.7z\")",
+      "Bash(quick-rebuild.bat)",
+      "Bash(cmd.exe:*)",
+      "Bash(cmake --build . --target stps_loadable_extension)"
+    ]
+  }
+}

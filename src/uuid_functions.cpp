@@ -173,34 +173,65 @@ static void StpsGuidToPathFunctionUUID(DataChunk &args, ExpressionState &state, 
 void RegisterUuidFunctions(ExtensionLoader &loader) {
     // stps_uuid() - Generate random UUID v4
     ScalarFunctionSet uuid_set("stps_uuid");
-    uuid_set.AddFunction(ScalarFunction({}, LogicalType::UUID, PgmUuidFunction));
+    auto uuid_func = ScalarFunction({}, LogicalType::UUID, PgmUuidFunction);
+    uuid_func.description = "Generates a random UUID version 4 (RFC 4122) for each row.\n"
+                           "Usage: SELECT stps_uuid();\n"
+                           "Returns: UUID (128-bit universally unique identifier)";
+    uuid_set.AddFunction(uuid_func);
     loader.RegisterFunction(uuid_set);
 
     // stps_uuid_from_string(text) - Generate deterministic UUID v5 from string
     ScalarFunctionSet uuid_from_string_set("stps_uuid_from_string");
-    uuid_from_string_set.AddFunction(ScalarFunction({LogicalType::VARCHAR}, LogicalType::UUID,
-                                                     PgmUuidFromStringFunction));
+    auto uuid_from_string_func = ScalarFunction({LogicalType::VARCHAR}, LogicalType::UUID,
+                                                 PgmUuidFromStringFunction);
+    uuid_from_string_func.description = "Generates a deterministic UUID version 5 from an input string using hash-based generation.\n"
+                                       "Usage: SELECT stps_uuid_from_string('example-text');\n"
+                                       "Returns: UUID (deterministic, same input always produces same UUID)";
+    uuid_from_string_set.AddFunction(uuid_from_string_func);
     loader.RegisterFunction(uuid_from_string_set);
 
     // stps_get_guid(...columns) - Generate deterministic UUID from multiple columns
     // Register variadic version
     ScalarFunctionSet get_guid_set("stps_get_guid");
-    get_guid_set.AddFunction(ScalarFunction({LogicalType::VARCHAR}, LogicalType::UUID,
-                                            PgmGetGuidFunction));
-    get_guid_set.AddFunction(ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR},
-                                            LogicalType::UUID, PgmGetGuidFunction));
-    get_guid_set.AddFunction(ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR},
-                                            LogicalType::UUID, PgmGetGuidFunction));
+    auto get_guid_func1 = ScalarFunction({LogicalType::VARCHAR}, LogicalType::UUID,
+                                         PgmGetGuidFunction);
+    get_guid_func1.description = "Generates a deterministic UUID by concatenating and hashing one or more column values.\n"
+                                "Usage: SELECT stps_get_guid(col1, col2, col3);\n"
+                                "Returns: UUID (deterministic, same input values always produce same UUID)";
+    get_guid_set.AddFunction(get_guid_func1);
+
+    auto get_guid_func2 = ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR},
+                                         LogicalType::UUID, PgmGetGuidFunction);
+    get_guid_func2.description = "Generates a deterministic UUID by concatenating and hashing one or more column values.\n"
+                                "Usage: SELECT stps_get_guid(col1, col2, col3);\n"
+                                "Returns: UUID (deterministic, same input values always produce same UUID)";
+    get_guid_set.AddFunction(get_guid_func2);
+
+    auto get_guid_func3 = ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR},
+                                         LogicalType::UUID, PgmGetGuidFunction);
+    get_guid_func3.description = "Generates a deterministic UUID by concatenating and hashing one or more column values.\n"
+                                "Usage: SELECT stps_get_guid(col1, col2, col3);\n"
+                                "Returns: UUID (deterministic, same input values always produce same UUID)";
+    get_guid_set.AddFunction(get_guid_func3);
     loader.RegisterFunction(get_guid_set);
 
     // stps_guid_to_path(guid) - Convert GUID to 4-level folder path
     // This one should stay VARCHAR as it returns a path string
     ScalarFunctionSet guid_to_path_set("stps_guid_to_path");
-    guid_to_path_set.AddFunction(ScalarFunction({LogicalType::UUID}, LogicalType::VARCHAR,
-                                                 StpsGuidToPathFunctionUUID));
+    auto guid_to_path_uuid_func = ScalarFunction({LogicalType::UUID}, LogicalType::VARCHAR,
+                                                  StpsGuidToPathFunctionUUID);
+    guid_to_path_uuid_func.description = "Converts a UUID/GUID to a 4-level folder path with decimal folder names (0-255).\n"
+                                        "Usage: SELECT stps_guid_to_path('550e8400-e29b-41d4-a716-446655440000');\n"
+                                        "Returns: VARCHAR (path string like '85/14/132/0')";
+    guid_to_path_set.AddFunction(guid_to_path_uuid_func);
+
     // Also accept VARCHAR input for compatibility
-    guid_to_path_set.AddFunction(ScalarFunction({LogicalType::VARCHAR}, LogicalType::VARCHAR,
-                                                 StpsGuidToPathFunctionVarchar));
+    auto guid_to_path_varchar_func = ScalarFunction({LogicalType::VARCHAR}, LogicalType::VARCHAR,
+                                                     StpsGuidToPathFunctionVarchar);
+    guid_to_path_varchar_func.description = "Converts a UUID/GUID to a 4-level folder path with decimal folder names (0-255).\n"
+                                           "Usage: SELECT stps_guid_to_path('550e8400-e29b-41d4-a716-446655440000');\n"
+                                           "Returns: VARCHAR (path string like '85/14/132/0')";
+    guid_to_path_set.AddFunction(guid_to_path_varchar_func);
     loader.RegisterFunction(guid_to_path_set);
 }
 

@@ -462,6 +462,10 @@ void RegisterSmartCastTableFunctions(ExtensionLoader &loader) {
     analyze_func.named_parameters["min_success_rate"] = LogicalType::DOUBLE;
     analyze_func.named_parameters["locale"] = LogicalType::VARCHAR;
     analyze_func.named_parameters["date_format"] = LogicalType::VARCHAR;
+    analyze_func.description = "Analyzes columns to detect optimal data types based on content.\n"
+                              "Usage: SELECT * FROM stps_smart_cast_analyze('table_name', min_success_rate=0.95);\n"
+                              "Parameters: table_name, min_success_rate (DOUBLE), locale (VARCHAR), date_format (VARCHAR)\n"
+                              "Returns: TABLE(column_name VARCHAR, original_type VARCHAR, suggested_type VARCHAR, success_rate DOUBLE)";
     loader.RegisterFunction(analyze_func);
 
     // stps_smart_cast
@@ -470,6 +474,10 @@ void RegisterSmartCastTableFunctions(ExtensionLoader &loader) {
     cast_func.named_parameters["min_success_rate"] = LogicalType::DOUBLE;
     cast_func.named_parameters["locale"] = LogicalType::VARCHAR;
     cast_func.named_parameters["date_format"] = LogicalType::VARCHAR;
+    cast_func.description = "Automatically casts table columns to optimal data types.\n"
+                           "Usage: SELECT * FROM stps_smart_cast('table_name', min_success_rate=0.95);\n"
+                           "Parameters: table_name, min_success_rate (DOUBLE), locale (VARCHAR), date_format (VARCHAR)\n"
+                           "Returns: TABLE with columns cast to detected optimal types";
     loader.RegisterFunction(cast_func);
 }
 

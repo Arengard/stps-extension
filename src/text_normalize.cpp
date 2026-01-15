@@ -301,28 +301,51 @@ static void PgmNormalizeFunction(DataChunk &args, ExpressionState &state, Vector
 void RegisterTextNormalizeFunctions(ExtensionLoader &loader) {
     // stps_remove_accents with keep_umlauts parameter
     ScalarFunctionSet remove_accents_set("stps_remove_accents");
-    remove_accents_set.AddFunction(ScalarFunction({LogicalType::VARCHAR}, LogicalType::VARCHAR,
-                                                   PgmRemoveAccentsSimpleFunction));
-    remove_accents_set.AddFunction(ScalarFunction({LogicalType::VARCHAR, LogicalType::BOOLEAN},
-                                                   LogicalType::VARCHAR, PgmRemoveAccentsFunction));
+
+    auto remove_accents_simple = ScalarFunction({LogicalType::VARCHAR}, LogicalType::VARCHAR,
+                                                 PgmRemoveAccentsSimpleFunction);
+    remove_accents_simple.description = "Removes accents from text, converting accented characters to their ASCII equivalents (including German umlauts).\n"
+                                        "Usage: SELECT stps_remove_accents('Café Müller');\n"
+                                        "Returns: VARCHAR (text with accents removed, e.g., 'Cafe Mueller')";
+    remove_accents_set.AddFunction(remove_accents_simple);
+
+    auto remove_accents_with_param = ScalarFunction({LogicalType::VARCHAR, LogicalType::BOOLEAN},
+                                                     LogicalType::VARCHAR, PgmRemoveAccentsFunction);
+    remove_accents_with_param.description = "Removes accents from text with optional preservation of German umlauts.\n"
+                                            "Usage: SELECT stps_remove_accents('Café Müller', true);\n"
+                                            "Returns: VARCHAR (text with accents removed, umlauts preserved if second parameter is true)";
+    remove_accents_set.AddFunction(remove_accents_with_param);
+
     loader.RegisterFunction(remove_accents_set);
 
     // stps_restore_umlauts
     ScalarFunctionSet restore_umlauts_set("stps_restore_umlauts");
-    restore_umlauts_set.AddFunction(ScalarFunction({LogicalType::VARCHAR}, LogicalType::VARCHAR,
-                                                    PgmRestoreUmlautsFunction));
+    auto restore_umlauts = ScalarFunction({LogicalType::VARCHAR}, LogicalType::VARCHAR,
+                                          PgmRestoreUmlautsFunction);
+    restore_umlauts.description = "Converts ASCII representations of German umlauts back to their proper Unicode forms (ae->ä, oe->ö, ue->ü, ss->ß).\n"
+                                  "Usage: SELECT stps_restore_umlauts('Mueller');\n"
+                                  "Returns: VARCHAR (text with umlauts restored, e.g., 'Müller')";
+    restore_umlauts_set.AddFunction(restore_umlauts);
     loader.RegisterFunction(restore_umlauts_set);
 
     // stps_clean_string
     ScalarFunctionSet clean_string_set("stps_clean_string");
-    clean_string_set.AddFunction(ScalarFunction({LogicalType::VARCHAR}, LogicalType::VARCHAR,
-                                                 PgmCleanStringFunction));
+    auto clean_string = ScalarFunction({LogicalType::VARCHAR}, LogicalType::VARCHAR,
+                                       PgmCleanStringFunction);
+    clean_string.description = "Cleans text by removing non-printable characters, zero-width spaces, soft hyphens, and control characters. Converts special whitespace to regular spaces and collapses multiple spaces.\n"
+                               "Usage: SELECT stps_clean_string('Text  with\\u00A0\\u200Bextra\\tspaces');\n"
+                               "Returns: VARCHAR (cleaned text with normalized whitespace and removed invisible characters)";
+    clean_string_set.AddFunction(clean_string);
     loader.RegisterFunction(clean_string_set);
 
     // stps_normalize
     ScalarFunctionSet normalize_set("stps_normalize");
-    normalize_set.AddFunction(ScalarFunction({LogicalType::VARCHAR}, LogicalType::VARCHAR,
-                                             PgmNormalizeFunction));
+    auto normalize = ScalarFunction({LogicalType::VARCHAR}, LogicalType::VARCHAR,
+                                    PgmNormalizeFunction);
+    normalize.description = "Normalizes text by collapsing multiple whitespace characters into single spaces and trimming leading/trailing whitespace.\n"
+                           "Usage: SELECT stps_normalize('  Text   with   spaces  ');\n"
+                           "Returns: VARCHAR (normalized text with single spaces and no leading/trailing whitespace)";
+    normalize_set.AddFunction(normalize);
     loader.RegisterFunction(normalize_set);
 }
 

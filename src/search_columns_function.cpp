@@ -3,7 +3,6 @@
 #include "duckdb/parser/parsed_data/create_table_function_info.hpp"
 #include "duckdb/catalog/catalog.hpp"
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
-#include "duckdb/main/extension_util.hpp"
 #include <algorithm>
 #include <cctype>
 
@@ -122,7 +121,12 @@ void RegisterSearchColumnsFunction(ExtensionLoader& loader) {
     // Optional third parameter for case sensitivity
     search_columns_func.arguments.push_back(LogicalType::BOOLEAN);
 
-    ExtensionUtil::RegisterFunction(*loader.db_instance, search_columns_func);
+    search_columns_func.description = "Search for columns in a table by pattern matching.\n"
+                                      "Usage: SELECT * FROM stps_search_columns('table_name', 'pattern', case_sensitive);\n"
+                                      "Parameters: table_name (VARCHAR), pattern (VARCHAR), case_sensitive (BOOLEAN, optional)\n"
+                                      "Returns: TABLE(column_name VARCHAR, column_index INTEGER)";
+
+    loader.RegisterFunction(search_columns_func);
 }
 
 } // namespace stps

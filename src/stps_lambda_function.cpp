@@ -235,6 +235,11 @@ void RegisterLambdaFunction(ExtensionLoader &loader) {
     lambda_func.named_parameters["varchar_only"] = LogicalType::BOOLEAN;
     lambda_func.named_parameters["column_pattern"] = LogicalType::VARCHAR;
 
+    lambda_func.description = "Applies a SQL expression to each row of a table, with optional column filtering.\n"
+                             "Usage: SELECT * FROM stps_lambda('table_name', 'expression', varchar_only=true);\n"
+                             "Parameters: table_name (VARCHAR), expression (VARCHAR), varchar_only (BOOLEAN), column_pattern (VARCHAR)\n"
+                             "Returns: TABLE with expression applied to each row";
+
     loader.RegisterFunction(lambda_func);
 }
 

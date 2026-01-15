@@ -257,6 +257,10 @@ void RegisterFilesystemFunctions(ExtensionLoader &loader) {
     path_func.named_parameters["pattern"] = LogicalType::VARCHAR;
     path_func.named_parameters["max_depth"] = LogicalType::INTEGER;
     path_func.named_parameters["include_hidden"] = LogicalType::BOOLEAN;
+    path_func.description = "Lists files and directories in a path with optional filtering.\n"
+                           "Usage: SELECT * FROM stps_path('/path/to/dir', recursive=true, pattern='*.csv');\n"
+                           "Parameters: path, recursive (BOOLEAN), file_type (VARCHAR), pattern (VARCHAR), max_depth (INTEGER), include_hidden (BOOLEAN)\n"
+                           "Returns: TABLE(name VARCHAR, path VARCHAR, is_directory BOOLEAN, size BIGINT, modified TIMESTAMP)";
 
     loader.RegisterFunction(path_func);
 
@@ -272,6 +276,10 @@ void RegisterFilesystemFunctions(ExtensionLoader &loader) {
     scan_func.named_parameters["min_date"] = LogicalType::BIGINT;
     scan_func.named_parameters["max_date"] = LogicalType::BIGINT;
     scan_func.named_parameters["content_search"] = LogicalType::VARCHAR;
+    scan_func.description = "Advanced file scanning with size and date filters plus content search.\n"
+                           "Usage: SELECT * FROM stps_scan('/path', min_size=1000, content_search='keyword');\n"
+                           "Parameters: path, recursive, file_type, pattern, max_depth, include_hidden, min_size, max_size, min_date, max_date, content_search\n"
+                           "Returns: TABLE(name VARCHAR, path VARCHAR, is_directory BOOLEAN, size BIGINT, modified TIMESTAMP)";
 
     loader.RegisterFunction(scan_func);
 }
