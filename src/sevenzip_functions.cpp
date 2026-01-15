@@ -546,22 +546,13 @@ static void SevenZipScan(ClientContext &context, TableFunctionInput &data_p, Dat
 void Register7zipFunctions(ExtensionLoader &loader) {
     // Register stps_view_7zip table function
     TableFunction view_7zip_func("stps_view_7zip", {LogicalType::VARCHAR}, View7zipScan, View7zipBind, View7zipInit);
-    view_7zip_func.description = "Lists contents of a 7zip archive without extracting.\n"
-                                 "Usage: SELECT * FROM stps_view_7zip('/path/to/archive.7z');\n"
-                                 "Returns: TABLE(name VARCHAR, size BIGINT, compressed_size BIGINT, modified TIMESTAMP)";
     loader.RegisterFunction(view_7zip_func);
     
     // Register stps_7zip table function (with optional second argument)
     TableFunction sevenzip_func1("stps_7zip", {LogicalType::VARCHAR}, SevenZipScan, SevenZipBind, SevenZipInit);
-    sevenzip_func1.description = "Extracts and reads files from a 7zip archive.\n"
-                                "Usage: SELECT * FROM stps_7zip('/path/to/archive.7z');\n"
-                                "Returns: TABLE with archive contents";
     loader.RegisterFunction(sevenzip_func1);
     
     TableFunction sevenzip_func2("stps_7zip", {LogicalType::VARCHAR, LogicalType::VARCHAR}, SevenZipScan, SevenZipBind, SevenZipInit);
-    sevenzip_func2.description = "Extracts and reads a specific file from a 7zip archive.\n"
-                                "Usage: SELECT * FROM stps_7zip('/path/to/archive.7z', 'file_pattern');\n"
-                                "Returns: TABLE with archive contents matching pattern";
     loader.RegisterFunction(sevenzip_func2);
 }
 

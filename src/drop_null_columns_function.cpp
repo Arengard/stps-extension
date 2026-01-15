@@ -172,10 +172,6 @@ static void DropNullColumnsScan(ClientContext &context, TableFunctionInput &data
 void RegisterDropNullColumnsFunction(ExtensionLoader &loader) {
     TableFunction func("stps_drop_null_columns", {LogicalType::VARCHAR}, DropNullColumnsScan,
                        DropNullColumnsBind, DropNullColumnsInit);
-    func.description = "Returns a table with all columns that contain only NULL values removed.\n"
-                      "Usage: SELECT * FROM stps_drop_null_columns('source_table');\n"
-                      "Parameters: table_name (VARCHAR)\n"
-                      "Returns: TABLE with non-empty columns only";
     loader.RegisterFunction(func);
 }
 

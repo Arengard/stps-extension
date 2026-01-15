@@ -170,12 +170,6 @@ void RegisterSearchColumnsFunction(ExtensionLoader& loader) {
     // Optional third parameter for case sensitivity
     search_columns_func.arguments.push_back(LogicalType::BOOLEAN);
 
-    search_columns_func.description = "Search for columns in a table by pattern matching (supports SQL LIKE patterns).\n"
-                                      "Usage: SELECT * FROM stps_search_columns('table_name', 'pattern', case_sensitive);\n"
-                                      "Pattern: Use % for any characters, _ for single character, or plain text for substring match\n"
-                                      "Examples: '%xls%' matches 'xlsx_col', 'my_xls'; 'col_' matches 'col1', 'colA'\n"
-                                      "Parameters: table_name (VARCHAR), pattern (VARCHAR), case_sensitive (BOOLEAN, optional)\n"
-                                      "Returns: TABLE(column_name VARCHAR, column_index INTEGER)";
 
     loader.RegisterFunction(search_columns_func);
 }

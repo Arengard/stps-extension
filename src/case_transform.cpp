@@ -157,60 +157,34 @@ static void PgmToTitleCaseFunction(DataChunk &args, ExpressionState &state, Vect
 
 void RegisterCaseTransformFunctions(ExtensionLoader &loader) {
     // Register all case transformation functions
-    auto snake_case_func = ScalarFunction({LogicalType::VARCHAR}, LogicalType::VARCHAR, PgmToSnakeCaseFunction);
-    snake_case_func.description = "Converts a string to snake_case format (lowercase words separated by underscores).\n"
-                                  "Usage: SELECT stps_to_snake_case('HelloWorld');\n"
-                                  "Returns: VARCHAR (e.g., 'hello_world')";
+    // Note: Descriptions are documented in STPS_FUNCTIONS.md
+
     ScalarFunctionSet snake_case_set("stps_to_snake_case");
-    snake_case_set.AddFunction(snake_case_func);
+    snake_case_set.AddFunction(ScalarFunction({LogicalType::VARCHAR}, LogicalType::VARCHAR, PgmToSnakeCaseFunction));
     loader.RegisterFunction(snake_case_set);
 
-    auto camel_case_func = ScalarFunction({LogicalType::VARCHAR}, LogicalType::VARCHAR, PgmToCamelCaseFunction);
-    camel_case_func.description = "Converts a string to camelCase format (first word lowercase, subsequent words capitalized, no separators).\n"
-                                  "Usage: SELECT stps_to_camel_case('hello_world');\n"
-                                  "Returns: VARCHAR (e.g., 'helloWorld')";
     ScalarFunctionSet camel_case_set("stps_to_camel_case");
-    camel_case_set.AddFunction(camel_case_func);
+    camel_case_set.AddFunction(ScalarFunction({LogicalType::VARCHAR}, LogicalType::VARCHAR, PgmToCamelCaseFunction));
     loader.RegisterFunction(camel_case_set);
 
-    auto pascal_case_func = ScalarFunction({LogicalType::VARCHAR}, LogicalType::VARCHAR, PgmToPascalCaseFunction);
-    pascal_case_func.description = "Converts a string to PascalCase format (all words capitalized, no separators).\n"
-                                   "Usage: SELECT stps_to_pascal_case('hello_world');\n"
-                                   "Returns: VARCHAR (e.g., 'HelloWorld')";
     ScalarFunctionSet pascal_case_set("stps_to_pascal_case");
-    pascal_case_set.AddFunction(pascal_case_func);
+    pascal_case_set.AddFunction(ScalarFunction({LogicalType::VARCHAR}, LogicalType::VARCHAR, PgmToPascalCaseFunction));
     loader.RegisterFunction(pascal_case_set);
 
-    auto kebab_case_func = ScalarFunction({LogicalType::VARCHAR}, LogicalType::VARCHAR, PgmToKebabCaseFunction);
-    kebab_case_func.description = "Converts a string to kebab-case format (lowercase words separated by hyphens).\n"
-                                  "Usage: SELECT stps_to_kebab_case('HelloWorld');\n"
-                                  "Returns: VARCHAR (e.g., 'hello-world')";
     ScalarFunctionSet kebab_case_set("stps_to_kebab_case");
-    kebab_case_set.AddFunction(kebab_case_func);
+    kebab_case_set.AddFunction(ScalarFunction({LogicalType::VARCHAR}, LogicalType::VARCHAR, PgmToKebabCaseFunction));
     loader.RegisterFunction(kebab_case_set);
 
-    auto const_case_func = ScalarFunction({LogicalType::VARCHAR}, LogicalType::VARCHAR, PgmToConstCaseFunction);
-    const_case_func.description = "Converts a string to CONST_CASE format (uppercase words separated by underscores).\n"
-                                  "Usage: SELECT stps_to_const_case('helloWorld');\n"
-                                  "Returns: VARCHAR (e.g., 'HELLO_WORLD')";
     ScalarFunctionSet const_case_set("stps_to_const_case");
-    const_case_set.AddFunction(const_case_func);
+    const_case_set.AddFunction(ScalarFunction({LogicalType::VARCHAR}, LogicalType::VARCHAR, PgmToConstCaseFunction));
     loader.RegisterFunction(const_case_set);
 
-    auto sentence_case_func = ScalarFunction({LogicalType::VARCHAR}, LogicalType::VARCHAR, PgmToSentenceCaseFunction);
-    sentence_case_func.description = "Converts a string to Sentence case format (first letter capitalized, rest lowercase, words separated by spaces).\n"
-                                     "Usage: SELECT stps_to_sentence_case('HELLO_WORLD');\n"
-                                     "Returns: VARCHAR (e.g., 'Hello world')";
     ScalarFunctionSet sentence_case_set("stps_to_sentence_case");
-    sentence_case_set.AddFunction(sentence_case_func);
+    sentence_case_set.AddFunction(ScalarFunction({LogicalType::VARCHAR}, LogicalType::VARCHAR, PgmToSentenceCaseFunction));
     loader.RegisterFunction(sentence_case_set);
 
-    auto title_case_func = ScalarFunction({LogicalType::VARCHAR}, LogicalType::VARCHAR, PgmToTitleCaseFunction);
-    title_case_func.description = "Converts a string to Title Case format (all words capitalized, separated by spaces).\n"
-                                  "Usage: SELECT stps_to_title_case('hello_world');\n"
-                                  "Returns: VARCHAR (e.g., 'Hello World')";
     ScalarFunctionSet title_case_set("stps_to_title_case");
-    title_case_set.AddFunction(title_case_func);
+    title_case_set.AddFunction(ScalarFunction({LogicalType::VARCHAR}, LogicalType::VARCHAR, PgmToTitleCaseFunction));
     loader.RegisterFunction(title_case_set);
 }
 

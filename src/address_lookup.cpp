@@ -485,15 +485,11 @@ void RegisterAddressLookupFunctions(ExtensionLoader& loader) {
     auto return_type = LogicalType::STRUCT(std::move(struct_children));
 
     ScalarFunctionSet get_address_set("stps_get_address");
-    auto get_address_func = ScalarFunction(
+    get_address_set.AddFunction(ScalarFunction(
         {LogicalType::VARCHAR},
         return_type,
         StpsGetAddressFunction
-    );
-    get_address_func.description = "Parses a German address string into structured components.\n"
-                                   "Usage: SELECT stps_get_address('Musterstraße 123, 12345 Berlin');\n"
-                                   "Returns: STRUCT(city VARCHAR, plz VARCHAR, address VARCHAR, street_name VARCHAR, street_number VARCHAR)";
-    get_address_set.AddFunction(get_address_func);
+    ));
 
     loader.RegisterFunction(get_address_set);
 }

@@ -259,42 +259,26 @@ static void StpsRenameIoFunction(DataChunk &args, ExpressionState &state, Vector
 void RegisterIoOperationFunctions(ExtensionLoader &loader) {
     // stps_copy_io(source_path, destination_path)
     ScalarFunctionSet copy_io_set("stps_copy_io");
-    auto copy_io_func = ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR},
-                                           LogicalType::VARCHAR, StpsCopyIoFunction);
-    copy_io_func.description = "Copies a file from source to destination path.\n"
-                               "Usage: SELECT stps_copy_io('/path/to/source.txt', '/path/to/dest.txt');\n"
-                               "Returns: VARCHAR (success message or error description)";
-    copy_io_set.AddFunction(copy_io_func);
+    copy_io_set.AddFunction(ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR},
+                                           LogicalType::VARCHAR, StpsCopyIoFunction));
     loader.RegisterFunction(copy_io_set);
 
     // stps_move_io(source_path, destination_path)
     ScalarFunctionSet move_io_set("stps_move_io");
-    auto move_io_func = ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR},
-                                           LogicalType::VARCHAR, StpsMoveIoFunction);
-    move_io_func.description = "Moves a file from source to destination path.\n"
-                               "Usage: SELECT stps_move_io('/path/to/source.txt', '/path/to/dest.txt');\n"
-                               "Returns: VARCHAR (success message or error description)";
-    move_io_set.AddFunction(move_io_func);
+    move_io_set.AddFunction(ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR},
+                                           LogicalType::VARCHAR, StpsMoveIoFunction));
     loader.RegisterFunction(move_io_set);
 
     // stps_delete_io(path)
     ScalarFunctionSet delete_io_set("stps_delete_io");
-    auto delete_io_func = ScalarFunction({LogicalType::VARCHAR},
-                                             LogicalType::VARCHAR, StpsDeleteIoFunction);
-    delete_io_func.description = "Deletes a file at the specified path.\n"
-                                 "Usage: SELECT stps_delete_io('/path/to/file.txt');\n"
-                                 "Returns: VARCHAR (success message or error description)";
-    delete_io_set.AddFunction(delete_io_func);
+    delete_io_set.AddFunction(ScalarFunction({LogicalType::VARCHAR},
+                                             LogicalType::VARCHAR, StpsDeleteIoFunction));
     loader.RegisterFunction(delete_io_set);
 
     // stps_io_rename(old_name, new_name)
     ScalarFunctionSet rename_io_set("stps_io_rename");
-    auto rename_io_func = ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR},
-                                             LogicalType::VARCHAR, StpsRenameIoFunction);
-    rename_io_func.description = "Renames a file from old name to new name.\n"
-                                 "Usage: SELECT stps_io_rename('/path/old_name.txt', '/path/new_name.txt');\n"
-                                 "Returns: VARCHAR (success message or error description)";
-    rename_io_set.AddFunction(rename_io_func);
+    rename_io_set.AddFunction(ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR},
+                                             LogicalType::VARCHAR, StpsRenameIoFunction));
     loader.RegisterFunction(rename_io_set);
 }
 

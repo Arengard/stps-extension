@@ -492,10 +492,6 @@ void RegisterGobdReaderFunctions(ExtensionLoader &loader) {
 
     read_gobd.cardinality = GobdReaderCardinality;
     read_gobd.named_parameters["delimiter"] = LogicalType::VARCHAR;
-    read_gobd.description = "Reads a GoBD (German tax) compliant data export table.\n"
-                           "Usage: SELECT * FROM stps_read_gobd('/path/to/index.xml', 'table_name', delimiter=';');\n"
-                           "Parameters: index_path (VARCHAR), table_name (VARCHAR), delimiter (VARCHAR, default ';')\n"
-                           "Returns: TABLE with data from the GoBD export";
 
     CreateTableFunctionInfo read_gobd_info(read_gobd);
     loader.RegisterFunction(read_gobd_info);
@@ -504,9 +500,6 @@ void RegisterGobdReaderFunctions(ExtensionLoader &loader) {
     TableFunction list_tables("gobd_list_tables",
                              {LogicalType::VARCHAR},
                              GobdListTablesFunction, GobdListTablesBind, GobdListTablesInit);
-    list_tables.description = "Lists all tables available in a GoBD export.\n"
-                             "Usage: SELECT * FROM gobd_list_tables('/path/to/index.xml');\n"
-                             "Returns: TABLE(table_name VARCHAR, description VARCHAR, row_count BIGINT)";
 
     CreateTableFunctionInfo list_tables_info(list_tables);
     loader.RegisterFunction(list_tables_info);
@@ -515,9 +508,6 @@ void RegisterGobdReaderFunctions(ExtensionLoader &loader) {
     TableFunction table_schema("gobd_table_schema",
                               {LogicalType::VARCHAR, LogicalType::VARCHAR},
                               GobdSchemaFunction, GobdSchemaBind, GobdSchemaInit);
-    table_schema.description = "Shows the schema (columns and types) of a GoBD export table.\n"
-                              "Usage: SELECT * FROM gobd_table_schema('/path/to/index.xml', 'table_name');\n"
-                              "Returns: TABLE(column_name VARCHAR, column_type VARCHAR, description VARCHAR)";
 
     CreateTableFunctionInfo schema_info(table_schema);
     loader.RegisterFunction(schema_info);

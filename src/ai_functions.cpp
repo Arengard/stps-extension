@@ -417,38 +417,25 @@ void RegisterAIFunctions(ExtensionLoader& loader) {
     ScalarFunctionSet ask_ai_set("stps_ask_ai");
 
     // stps_ask_ai(context VARCHAR, prompt VARCHAR) -> VARCHAR
-    auto ask_ai_2_func = ScalarFunction(
+    ask_ai_set.AddFunction(ScalarFunction(
         {LogicalType::VARCHAR, LogicalType::VARCHAR},
         LogicalType::VARCHAR,
         StpsAskAIFunction
-    );
-    ask_ai_2_func.description = "Ask ChatGPT a question with context using OpenAI API.\n"
-                                "Usage: SELECT stps_ask_ai('Tax Network GmbH', 'get me the address');\n"
-                                "Returns: VARCHAR (AI response)\n"
-                                "Default model: gpt-4o-mini";
-    ask_ai_set.AddFunction(ask_ai_2_func);
+    ));
 
     // stps_ask_ai(context VARCHAR, prompt VARCHAR, model VARCHAR) -> VARCHAR
-    auto ask_ai_3_func = ScalarFunction(
+    ask_ai_set.AddFunction(ScalarFunction(
         {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR},
         LogicalType::VARCHAR,
         StpsAskAIFunction
-    );
-    ask_ai_3_func.description = "Ask ChatGPT with custom model (gpt-4, gpt-4o, gpt-4o-mini).\n"
-                                "Usage: SELECT stps_ask_ai('context', 'prompt', 'gpt-4');\n"
-                                "Returns: VARCHAR";
-    ask_ai_set.AddFunction(ask_ai_3_func);
+    ));
 
     // stps_ask_ai(context VARCHAR, prompt VARCHAR, model VARCHAR, max_tokens INTEGER) -> VARCHAR
-    auto ask_ai_4_func = ScalarFunction(
+    ask_ai_set.AddFunction(ScalarFunction(
         {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::INTEGER},
         LogicalType::VARCHAR,
         StpsAskAIFunction
-    );
-    ask_ai_4_func.description = "Ask ChatGPT with custom model and max tokens.\n"
-                                "Usage: SELECT stps_ask_ai('context', 'prompt', 'gpt-4', 500);\n"
-                                "Returns: VARCHAR";
-    ask_ai_set.AddFunction(ask_ai_4_func);
+    ));
 
     loader.RegisterFunction(ask_ai_set);
 
@@ -464,43 +451,28 @@ void RegisterAIFunctions(ExtensionLoader& loader) {
     ScalarFunctionSet ask_ai_address_set("stps_ask_ai_address");
 
     // stps_ask_ai_address(company_name VARCHAR) -> STRUCT(...)
-    auto ask_ai_addr_1_func = ScalarFunction(
+    ask_ai_address_set.AddFunction(ScalarFunction(
         {LogicalType::VARCHAR},
         address_return_type,
         StpsAskAIAddressFunction
-    );
-    ask_ai_addr_1_func.description = "Get structured address data from ChatGPT for a company name.\n"
-                                     "Usage: SELECT stps_ask_ai_address('Tax Network GmbH');\n"
-                                     "Returns: STRUCT(city, postal_code, street_name, street_nr)\n"
-                                     "Example: {city: 'München', postal_code: '80331', ...}";
-    ask_ai_address_set.AddFunction(ask_ai_addr_1_func);
+    ));
 
     // stps_ask_ai_address(company_name VARCHAR, model VARCHAR) -> STRUCT(...)
-    auto ask_ai_addr_2_func = ScalarFunction(
+    ask_ai_address_set.AddFunction(ScalarFunction(
         {LogicalType::VARCHAR, LogicalType::VARCHAR},
         address_return_type,
         StpsAskAIAddressFunction
-    );
-    ask_ai_addr_2_func.description = "Get structured address with custom model.\n"
-                                     "Usage: SELECT stps_ask_ai_address('Company', 'gpt-4');\n"
-                                     "Returns: STRUCT(city, postal_code, street_name, street_nr)";
-    ask_ai_address_set.AddFunction(ask_ai_addr_2_func);
+    ));
 
     loader.RegisterFunction(ask_ai_address_set);
 
     // Register stps_set_api_key function
-    auto set_api_key_func = ScalarFunction(
+    ScalarFunctionSet set_api_key_set("stps_set_api_key");
+    set_api_key_set.AddFunction(ScalarFunction(
         {LogicalType::VARCHAR},
         LogicalType::VARCHAR,
         StpsSetApiKeyFunction
-    );
-    set_api_key_func.description = "Set OpenAI API key for current session.\n"
-                                   "Usage: SELECT stps_set_api_key('sk-...');\n"
-                                   "Alternative: Set OPENAI_API_KEY environment variable\n"
-                                   "Or create file: ~/.stps/openai_api_key\n"
-                                   "Returns: VARCHAR confirmation message";
-    ScalarFunctionSet set_api_key_set("stps_set_api_key");
-    set_api_key_set.AddFunction(set_api_key_func);
+    ));
 
     loader.RegisterFunction(set_api_key_set);
 }

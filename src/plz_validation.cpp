@@ -176,28 +176,18 @@ void RegisterPlzValidationFunctions(ExtensionLoader &loader) {
     ScalarFunctionSet plz_set("stps_is_valid_plz");
 
     // Simple version: stps_is_valid_plz(plz VARCHAR) -> BOOLEAN
-    auto simple_func = ScalarFunction(
+    plz_set.AddFunction(ScalarFunction(
         {LogicalType::VARCHAR},
         LogicalType::BOOLEAN,
         StpsIsValidPlzSimpleFunction
-    );
-    simple_func.description = "Validates German postal code (PLZ) format (5 digits, range 01000-99999).\n"
-                              "Usage: SELECT stps_is_valid_plz('10115');\n"
-                              "Returns: BOOLEAN (true if format is valid, false otherwise)";
-    plz_set.AddFunction(simple_func);
+    ));
 
     // With strict parameter: stps_is_valid_plz(plz VARCHAR, strict BOOLEAN) -> BOOLEAN
-    auto strict_func = ScalarFunction(
+    plz_set.AddFunction(ScalarFunction(
         {LogicalType::VARCHAR, LogicalType::BOOLEAN},
         LogicalType::BOOLEAN,
         StpsIsValidPlzStrictFunction
-    );
-    strict_func.description = "Validates German postal code (PLZ) format with optional strict mode.\n"
-                              "When strict=false: checks format only (5 digits, range 01000-99999).\n"
-                              "When strict=true: verifies PLZ exists in official German postal code list.\n"
-                              "Usage: SELECT stps_is_valid_plz('10115', true);\n"
-                              "Returns: BOOLEAN (true if valid according to mode, false otherwise)";
-    plz_set.AddFunction(strict_func);
+    ));
 
     loader.RegisterFunction(plz_set);
 }
