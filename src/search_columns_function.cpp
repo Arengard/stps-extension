@@ -105,10 +105,11 @@ static unique_ptr<FunctionData> SearchColumnsBind(ClientContext &context, TableF
     // Get table columns from catalog
     auto &catalog = Catalog::GetCatalog(context, INVALID_CATALOG);
     auto &schema = catalog.GetSchema(context, DEFAULT_SCHEMA);
+    auto transaction = CatalogTransaction::Get(context);
 
     try {
-        auto table_entry = schema.GetEntry(context, CatalogType::TABLE_ENTRY, result->table_name);
-        if (table_entry->type == CatalogType::TABLE_ENTRY) {
+        auto table_entry = schema.GetEntry(transaction, CatalogType::TABLE_ENTRY, result->table_name);
+        if (table_entry && table_entry->type == CatalogType::TABLE_ENTRY) {
             auto &table = table_entry->Cast<TableCatalogEntry>();
             auto &columns = table.GetColumns();
 
@@ -118,6 +119,8 @@ static unique_ptr<FunctionData> SearchColumnsBind(ClientContext &context, TableF
                     result->matching_columns.push_back(col.Name());
                 }
             }
+        } else {
+            throw BinderException("Table '%s' not found", result->table_name); // unify error handling
         }
     } catch (std::exception &e) {
         // Table not found or error accessing it
