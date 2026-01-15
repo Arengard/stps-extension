@@ -400,13 +400,22 @@ static void ZipScan(ClientContext &context, TableFunctionInput &data_p, DataChun
 void RegisterZipFunctions(ExtensionLoader &loader) {
     // Register stps_view_zip table function
     TableFunction view_zip_func("stps_view_zip", {LogicalType::VARCHAR}, ViewZipScan, ViewZipBind, ViewZipInit);
+    view_zip_func.description = "Lists contents of a ZIP archive without extracting.\n"
+                                "Usage: SELECT * FROM stps_view_zip('/path/to/archive.zip');\n"
+                                "Returns: TABLE(filename VARCHAR, uncompressed_size BIGINT, compressed_size BIGINT, is_directory BOOLEAN, index INTEGER)";
     loader.RegisterFunction(view_zip_func);
     
     // Register stps_zip table function (with optional second argument)
     TableFunction zip_func1("stps_zip", {LogicalType::VARCHAR}, ZipScan, ZipBind, ZipInit);
+    zip_func1.description = "Extracts and reads CSV/text files from a ZIP archive.\n"
+                           "Usage: SELECT * FROM stps_zip('/path/to/archive.zip');\n"
+                           "Returns: TABLE with contents of the first CSV file in the archive";
     loader.RegisterFunction(zip_func1);
     
     TableFunction zip_func2("stps_zip", {LogicalType::VARCHAR, LogicalType::VARCHAR}, ZipScan, ZipBind, ZipInit);
+    zip_func2.description = "Extracts and reads a specific file from a ZIP archive by pattern.\n"
+                           "Usage: SELECT * FROM stps_zip('/path/to/archive.zip', 'filename_pattern');\n"
+                           "Returns: TABLE with contents of the matched file";
     loader.RegisterFunction(zip_func2);
 }
 
