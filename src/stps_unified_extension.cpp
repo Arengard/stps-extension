@@ -82,7 +82,7 @@ public:
         // Register search columns function
         stps::RegisterSearchColumnsFunction(loader);
 
-        // Register AI functions (ChatGPT integration)
+        // Register AI functions (Anthropic Claude integration)
         stps::RegisterAIFunctions(loader);
 
         // Register fill window functions
