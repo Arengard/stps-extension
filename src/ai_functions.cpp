@@ -244,6 +244,14 @@ static std::string call_openai_api(const std::string& context, const std::string
         return "ERROR: OpenAI API key not configured. Use stps_set_api_key() or set OPENAI_API_KEY environment variable.";
     }
 
+    // Determine which token parameter to use based on model
+    // Newer models (o1, o3, gpt-5.x) require max_completion_tokens instead of max_tokens
+    bool use_max_completion_tokens = (model.find("o1") == 0 || model.find("o3") == 0 ||
+                                       model.find("gpt-5") == 0 || model.find("gpt-4.5") == 0 ||
+                                       model.find("gpt-4o-2024-12") == 0);
+
+    std::string token_param = use_max_completion_tokens ? "max_completion_tokens" : "max_tokens";
+
     // Build JSON request payload
     std::string json_payload = "{"
         "\"model\":\"" + model + "\","
@@ -251,7 +259,7 @@ static std::string call_openai_api(const std::string& context, const std::string
             "{\"role\":\"system\",\"content\":\"You are a helpful assistant.\"},"
             "{\"role\":\"user\",\"content\":\"Context: " + escape_json_string(context) + "\\n\\nQuestion: " + escape_json_string(prompt) + "\"}"
         "],"
-        "\"max_tokens\":" + std::to_string(max_tokens) + ","
+        "\"" + token_param + "\":" + std::to_string(max_tokens) + ","
         "\"temperature\":0.7"
     "}";
 
@@ -430,19 +438,23 @@ static void StpsAskAIAddressFunction(DataChunk &args, ExpressionState &state, Ve
         std::string company_name = company_name_str.GetString();
 
         // Craft a specific prompt for address extraction with JSON output
-        std::string prompt = "Find the registered business address (Impressum/legal address) for this company.\n"
+        std::string prompt = "USE WEB SEARCH to find the registered business address (Impressum/legal address) for this company.\n"
                            "\n"
                            "CRITICAL INSTRUCTIONS:\n"
-                           "- ONLY return information you can verify from reliable sources\n"
+                           "- YOU MUST USE WEB SEARCH - do not rely on training data alone\n"
+                           "- Search for the company's official website and Impressum page\n"
+                           "- ONLY return information you can verify from current web sources\n"
                            "- DO NOT make up, guess, or hallucinate any address information\n"
-                           "- If you are uncertain about ANY field, use an empty string \"\"\n"
+                           "- If you cannot find verified information, use empty strings\n"
                            "- This is for a database system - accuracy is essential\n"
                            "- Search for the official registered business address, not customer service addresses\n"
+                           "\n"
+                           "Search query suggestion: '" + company_name + " Impressum Adresse' or '" + company_name + " business address'\n"
                            "\n"
                            "Respond ONLY with a JSON object in this exact format (no other text or markdown):\n"
                            "{\"city\":\"\",\"postal_code\":\"\",\"street_name\":\"\",\"street_nr\":\"\"}\n"
                            "\n"
-                           "Fill in ONLY fields you can verify. Use empty strings for unknown fields.";
+                           "Fill in ONLY fields you can verify from web search. Use empty strings for unknown fields.";
 
         std::string response = call_openai_api(company_name, prompt, model, 250);
 
