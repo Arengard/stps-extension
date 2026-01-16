@@ -1,6 +1,6 @@
 # STPS DuckDB Extension
 
-A comprehensive DuckDB extension providing 50+ functions for data transformation, validation, file operations, German business data processing, and **AI-powered data enhancement with ChatGPT**.
+A comprehensive DuckDB extension providing 50+ functions for data transformation, validation, file operations, German business data processing, and **AI-powered data enhancement with Anthropic Claude**.
 
 ## 📦 Installation
 
@@ -238,7 +238,7 @@ FROM companies;
 
 ---
 
-### 🤖 AI Functions (ChatGPT Integration)
+### 🤖 AI Functions (Anthropic Claude Integration)
 
 #### `stps_ask_ai_address(company_name VARCHAR[, model VARCHAR]) → STRUCT`
 
@@ -262,8 +262,8 @@ SELECT
     (stps_ask_ai_address(company_name)).street_nr AS nr
 FROM companies;
 
--- Use GPT-4 for better accuracy
-SELECT stps_ask_ai_address('Deutsche Bank AG', 'gpt-4');
+-- Use Claude Opus for better accuracy
+SELECT stps_ask_ai_address('Deutsche Bank AG', 'claude-opus-4-5-20251101');
 ```
 
 **Returns STRUCT with:**
@@ -276,14 +276,14 @@ SELECT stps_ask_ai_address('Deutsche Bank AG', 'gpt-4');
 
 #### `stps_ask_ai(context VARCHAR, prompt VARCHAR[, model VARCHAR][, max_tokens INTEGER]) → VARCHAR`
 
-Query OpenAI's ChatGPT directly from SQL for data enhancement, classification, summarization, and more.
+Query Anthropic's Claude directly from SQL for data enhancement, classification, summarization, and more.
 
 **Quick Start:**
 ```sql
--- 1. Set your OpenAI API key (get from platform.openai.com)
-SELECT stps_set_api_key('sk-your-api-key-here');
+-- 1. Set your Anthropic API key (get from console.anthropic.com)
+SELECT stps_set_api_key('sk-ant-your-api-key-here');
 
--- 2. Query ChatGPT
+-- 2. Query Claude
 SELECT stps_ask_ai('Tax Network GmbH', 'What industry is this company in?');
 -- Returns: "Tax Network GmbH operates in the financial services and tax consulting industry..."
 
@@ -300,7 +300,7 @@ FROM companies;
 **Parameters:**
 - `context` - Background data or information
 - `prompt` - Your question or instruction
-- `model` - Optional: 'gpt-3.5-turbo' (default), 'gpt-4', 'gpt-4-turbo'
+- `model` - Optional: 'claude-3-5-sonnet-20241022' (default), 'claude-3-5-haiku-20241022', 'claude-opus-4-5-20251101'
 - `max_tokens` - Optional: Max response length (default: 1000)
 
 **Common Use Cases:**
@@ -312,37 +312,37 @@ SELECT stps_ask_ai(product_name, 'Is this a food or drink item? Answer with one 
 SELECT stps_ask_ai(long_description, 'Summarize in one sentence (max 15 words).');
 
 -- Sentiment Analysis
-SELECT stps_ask_ai(review_text, 'Sentiment: POSITIVE, NEGATIVE, or NEUTRAL?', 'gpt-3.5-turbo', 10);
+SELECT stps_ask_ai(review_text, 'Sentiment: POSITIVE, NEGATIVE, or NEUTRAL?', 'claude-3-5-haiku-20241022', 10);
 
 -- Data Validation
 SELECT stps_ask_ai(email, 'Is this email format valid? YES or NO only.');
 
 -- Translation
-SELECT stps_ask_ai(text_de, 'Translate to English:', 'gpt-3.5-turbo', 500);
+SELECT stps_ask_ai(text_de, 'Translate to English:', 'claude-3-5-sonnet-20241022', 500);
 
--- Using GPT-4 for complex analysis
+-- Using Claude Opus for complex analysis
 SELECT stps_ask_ai(
     'Revenue 2023: $5M, Revenue 2022: $3M, Margin: 25%',
     'Analyze financial health (2 sentences).',
-    'gpt-4',
+    'claude-opus-4-5-20251101',
     150
 );
 ```
 
 #### `stps_set_api_key(api_key VARCHAR) → VARCHAR`
 
-Configure OpenAI API key for the session.
+Configure Anthropic API key for the session.
 
 **API Key Configuration Options:**
 ```sql
 -- Option 1: Set for current session
-SELECT stps_set_api_key('sk-...');
+SELECT stps_set_api_key('sk-ant-...');
 
 -- Option 2: Environment variable (recommended for production)
--- In terminal: export OPENAI_API_KEY='sk-...'
+-- In terminal: export ANTHROPIC_API_KEY='sk-ant-...'
 
 -- Option 3: Config file (recommended for persistent use)
--- Create: ~/.stps/openai_api_key with your key
+-- Create: ~/.stps/anthropic_api_key with your key
 ```
 
 **📖 Full Documentation:** See [AI_FUNCTIONS_GUIDE.md](AI_FUNCTIONS_GUIDE.md) for:
@@ -354,12 +354,12 @@ SELECT stps_set_api_key('sk-...');
 - Token pricing & cost calculator
 
 **Requirements:**
-- OpenAI API key ([get one here](https://platform.openai.com))
+- Anthropic API key ([get one here](https://console.anthropic.com))
 - Internet connection
 - `curl` installed
-- OpenAI account with credits
+- Anthropic account with credits
 
-**Cost Example:** Processing 1,000 rows with gpt-3.5-turbo ≈ $0.34
+**Cost Example:** Processing 1,000 rows with claude-3-5-sonnet-20241022 ≈ $0.34
 
 ---
 

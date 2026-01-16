@@ -1,10 +1,11 @@
-# AI Functions Guide - ChatGPT Integration
+# AI Functions Guide - Anthropic Claude Integration
 
-The STPS extension now includes powerful AI functions powered by OpenAI's ChatGPT API. These functions allow you to query ChatGPT directly from SQL, making it easy to enhance your data with AI-generated insights, summaries, classifications, and more.
+The STPS extension now includes powerful AI functions powered by Anthropic's Claude API. These functions allow you to query Claude directly from SQL, making it easy to enhance your data with AI-generated insights, summaries, classifications, and more.
 
 ## Table of Contents
 
 - [Quick Start](#quick-start)
+- [Available Models](#available-models)
 - [Functions Overview](#functions-overview)
 - [Configuration](#configuration)
 - [Usage Examples](#usage-examples)
@@ -14,30 +15,30 @@ The STPS extension now includes powerful AI functions powered by OpenAI's ChatGP
 
 ## Quick Start
 
-### 1. Get an OpenAI API Key
+### 1. Get an Anthropic API Key
 
-1. Sign up at [https://platform.openai.com/](https://platform.openai.com/)
+1. Sign up at [https://console.anthropic.com/](https://console.anthropic.com/)
 2. Navigate to API Keys section
 3. Create a new API key
-4. Copy the key (starts with `sk-...`)
+4. Copy the key (starts with `sk-ant-...`)
 
 ### 2. Configure the API Key
 
 **Option A: Using SQL** (recommended for session-based use)
 ```sql
-SELECT stps_set_api_key('sk-your-api-key-here');
+SELECT stps_set_api_key('sk-ant-your-api-key-here');
 ```
 
 **Option B: Using Environment Variable** (recommended for production)
 ```bash
-export OPENAI_API_KEY='sk-your-api-key-here'
+export ANTHROPIC_API_KEY='sk-ant-your-api-key-here'
 ```
 
 **Option C: Using Config File** (recommended for persistent use)
 ```bash
 mkdir -p ~/.stps
-echo 'sk-your-api-key-here' > ~/.stps/openai_api_key
-chmod 600 ~/.stps/openai_api_key
+echo 'sk-ant-your-api-key-here' > ~/.stps/anthropic_api_key
+chmod 600 ~/.stps/anthropic_api_key
 ```
 
 ### 3. Start Querying
@@ -47,15 +48,32 @@ SELECT stps_ask_ai('Tax Network GmbH', 'What industry is this company in?');
 -- Returns: "Tax Network GmbH is in the financial services and tax consulting industry..."
 ```
 
+## Available Models
+
+The extension supports the following Anthropic Claude models:
+
+| Model | Use Case | Speed | Cost | Context Window |
+|-------|----------|-------|------|----------------|
+| `claude-3-5-sonnet-20241022` | **Default** - Best balance of speed, cost, and capability | Fast | Medium | 200K tokens |
+| `claude-3-5-haiku-20241022` | Simple tasks - Fast and cost-effective | Fastest | Lowest | 200K tokens |
+| `claude-opus-4-5-20251101` | Complex reasoning - Most capable | Slower | Highest | 200K tokens |
+
+**Model Selection Guidelines:**
+- Use **Haiku** for: Simple classification, sentiment analysis, data validation
+- Use **Sonnet** (default) for: Most tasks, address lookups, summarization, translation
+- Use **Opus** for: Complex financial analysis, detailed reasoning, critical accuracy needs
+
 ## Functions Overview
 
 ### `stps_ask_ai_address(company_name[, model])`
 
 Get structured address data using AI - automatically formats response into organized address components.
 
+> **Note:** This function uses Claude's training data, not real-time web search. For critical address verification, consider using supplementary address validation services.
+
 **Parameters:**
 - `company_name` (VARCHAR, required): Company name or location to look up
-- `model` (VARCHAR, optional): OpenAI model to use (default: `gpt-3.5-turbo`)
+- `model` (VARCHAR, optional): Claude model to use (default: `claude-3-5-sonnet-20241022`)
 
 **Returns:** STRUCT with fields:
 - `city` (VARCHAR): City name
@@ -81,34 +99,30 @@ SELECT
     (stps_ask_ai_address(company_name)).postal_code AS postal_code
 FROM companies;
 
--- Use GPT-4 for better accuracy
-SELECT stps_ask_ai_address('Deutsche Bank AG', 'gpt-4');
+-- Use Claude Opus for better accuracy
+SELECT stps_ask_ai_address('Deutsche Bank AG', 'claude-opus-4-5-20251101');
 ```
 
 ### `stps_ask_ai(context, prompt[, model][, max_tokens])`
 
-Query OpenAI's ChatGPT with context and a prompt - returns free-form text response.
+Query Anthropic's Claude with context and a prompt - returns free-form text response.
 
 **Parameters:**
 - `context` (VARCHAR, required): Background information or data to provide context
-- `prompt` (VARCHAR, required): The question or instruction for ChatGPT
-- `model` (VARCHAR, optional): OpenAI model to use (default: `gpt-3.5-turbo`)
+- `prompt` (VARCHAR, required): The question or instruction for Claude
+- `model` (VARCHAR, optional): Claude model to use (default: `claude-3-5-sonnet-20241022`)
 - `max_tokens` (INTEGER, optional): Maximum response length (default: 1000)
 
 **Returns:** VARCHAR - The AI-generated response
 
-**Available Models:**
-- `gpt-3.5-turbo` - Fast, cost-effective (recommended for most use cases)
-- `gpt-4` - More capable but slower and more expensive
-- `gpt-4-turbo` - Latest GPT-4 with improved performance
-- `gpt-4o` - Optimized GPT-4 variant
+**Available Models:** See [Available Models](#available-models) section above for details.
 
 ### `stps_set_api_key(api_key)`
 
-Configure the OpenAI API key for the current session.
+Configure the Anthropic API key for the current session.
 
 **Parameters:**
-- `api_key` (VARCHAR, required): Your OpenAI API key
+- `api_key` (VARCHAR, required): Your Anthropic API key
 
 **Returns:** VARCHAR - Confirmation message
 
@@ -119,8 +133,8 @@ Configure the OpenAI API key for the current session.
 The extension looks for API keys in this order:
 
 1. **Session key** set via `stps_set_api_key()` (highest priority)
-2. **Environment variable** `OPENAI_API_KEY`
-3. **Config file** at `~/.stps/openai_api_key`
+2. **Environment variable** `ANTHROPIC_API_KEY`
+3. **Config file** at `~/.stps/anthropic_api_key`
 
 ### Security Best Practices
 
@@ -129,21 +143,21 @@ The extension looks for API keys in this order:
 **For development:**
 ```sql
 -- Set once per session
-SELECT stps_set_api_key('sk-...');
+SELECT stps_set_api_key('sk-ant-...');
 ```
 
 **For production:**
 ```bash
 # In your deployment script or .bashrc
-export OPENAI_API_KEY='sk-...'
+export ANTHROPIC_API_KEY='sk-ant-...'
 ```
 
 **For persistent local use:**
 ```bash
 # One-time setup
 mkdir -p ~/.stps
-echo 'sk-...' > ~/.stps/openai_api_key
-chmod 600 ~/.stps/openai_api_key  # Restrict permissions
+echo 'sk-ant-...' > ~/.stps/anthropic_api_key
+chmod 600 ~/.stps/anthropic_api_key  # Restrict permissions
 ```
 
 ## Usage Examples
@@ -194,7 +208,7 @@ SELECT
     stps_ask_ai(
         description,
         'Summarize this product description in one sentence (max 15 words).',
-        'gpt-3.5-turbo',
+        'claude-3-5-sonnet-20241022',
         50  -- Shorter response
     ) AS summary
 FROM products
@@ -225,7 +239,7 @@ SELECT
     stps_ask_ai(
         feedback_text,
         'Analyze the sentiment of this feedback. Respond with: POSITIVE, NEGATIVE, or NEUTRAL.',
-        'gpt-3.5-turbo',
+        'claude-3-5-sonnet-20241022',
         10
     ) AS sentiment
 FROM customer_feedback
@@ -242,17 +256,17 @@ SELECT
     stps_ask_ai(
         description_de,
         'Translate this German text to English. Provide only the translation.',
-        'gpt-3.5-turbo',
+        'claude-3-5-sonnet-20241022',
         500
     ) AS description_en
 FROM products
 WHERE description_en IS NULL;
 ```
 
-### Example 7: Using GPT-4 for Complex Reasoning
+### Example 7: Using Claude Opus for Complex Reasoning
 
 ```sql
--- Use GPT-4 for complex financial analysis
+-- Use Claude Opus for complex financial analysis
 SELECT
     company_name,
     revenue_2023,
@@ -262,7 +276,7 @@ SELECT
         'Company: ' || company_name || ', Revenue 2023: ' || revenue_2023::VARCHAR ||
         ', Revenue 2022: ' || revenue_2022::VARCHAR || ', Profit Margin: ' || profit_margin::VARCHAR,
         'Analyze this company''s financial health and growth trajectory. Provide a brief assessment (2-3 sentences).',
-        'gpt-4',  -- Use more capable model
+        'claude-opus-4-5-20251101',  -- Use more capable model
         200
     ) AS financial_analysis
 FROM financial_data
@@ -333,14 +347,14 @@ FROM million_row_table;
 
 **✅ Good: Use appropriate model**
 ```sql
--- Use gpt-3.5-turbo for simple tasks
-SELECT stps_ask_ai(name, 'Categorize: food or drink?', 'gpt-3.5-turbo', 10);
+-- Use claude-3-5-sonnet-20241022 for simple tasks
+SELECT stps_ask_ai(name, 'Categorize: food or drink?', 'claude-3-5-sonnet-20241022', 10);
 ```
 
-**❌ Bad: Use GPT-4 unnecessarily**
+**❌ Bad: Use Claude Opus unnecessarily**
 ```sql
 -- Overkill and expensive for simple classification
-SELECT stps_ask_ai(name, 'Categorize: food or drink?', 'gpt-4', 1000);
+SELECT stps_ask_ai(name, 'Categorize: food or drink?', 'claude-opus-4-5-20251101', 1000);
 ```
 
 ### 3. Prompt Engineering
@@ -394,13 +408,13 @@ SELECT stps_ask_ai(
 
 | Model | Input (per 1K tokens) | Output (per 1K tokens) |
 |-------|----------------------|------------------------|
-| gpt-3.5-turbo | $0.0005 | $0.0015 |
-| gpt-4 | $0.03 | $0.06 |
-| gpt-4-turbo | $0.01 | $0.03 |
+| claude-3-5-sonnet-20241022 | $0.0005 | $0.0015 |
+| claude-opus-4-5-20251101 | $0.03 | $0.06 |
+| claude-opus-4-5-20251101-turbo | $0.01 | $0.03 |
 
 ### Cost Example
 
-Processing 1,000 rows with gpt-3.5-turbo:
+Processing 1,000 rows with claude-3-5-sonnet-20241022:
 - Average context: 100 tokens
 - Average prompt: 20 tokens
 - Average response: 50 tokens
@@ -409,12 +423,12 @@ Processing 1,000 rows with gpt-3.5-turbo:
 
 ### Cost Optimization Tips
 
-1. **Use gpt-3.5-turbo** for most tasks (20-60x cheaper than GPT-4)
+1. **Use claude-3-5-sonnet-20241022** for most tasks (20-60x cheaper than Claude Opus)
 2. **Limit `max_tokens`** to only what you need
 3. **Process in batches** and cache results
 4. **Keep context concise** - extract only relevant data
 5. **Use WHERE clauses** to filter before processing
-6. **Monitor usage** on [OpenAI dashboard](https://platform.openai.com/usage)
+6. **Monitor usage** on [Anthropic Console](https://console.anthropic.com/)
 
 ## Troubleshooting
 
@@ -429,7 +443,7 @@ SELECT stps_ask_ai('test', 'hello');  -- Will show error
 SELECT stps_set_api_key('sk-your-key-here');
 
 -- Or use environment variable
--- In terminal: export OPENAI_API_KEY='sk-your-key-here'
+-- In terminal: export ANTHROPIC_API_KEY='sk-ant-your-key-here'
 ```
 
 ### Error: "Failed to execute curl command"
@@ -447,7 +461,7 @@ brew install curl
 # Curl is included in Windows 10+ by default
 ```
 
-### Error: "OpenAI API returned error: Rate limit exceeded"
+### Error: "Anthropic API returned error: Rate limit exceeded"
 
 **Solution:**
 ```sql
@@ -462,7 +476,7 @@ SELECT * FROM (
 );
 ```
 
-### Error: "Could not parse response from OpenAI API"
+### Error: "Could not parse response from Anthropic API"
 
 **Causes:**
 - API endpoint changed
@@ -471,7 +485,7 @@ SELECT * FROM (
 
 **Solution:**
 ```sql
--- Check OpenAI status: https://status.openai.com/
+-- Check Anthropic status: https://status.anthropic.com/
 -- Verify API key is valid
 -- Try again with simpler prompt
 ```
@@ -482,45 +496,45 @@ Common errors and solutions:
 
 | Error Message | Solution |
 |--------------|----------|
-| `insufficient_quota` | Add credits to OpenAI account |
+| `insufficient_quota` | Add credits to Anthropic account |
 | `invalid_api_key` | Check API key is correct |
-| `model_not_found` | Use valid model name (gpt-3.5-turbo, gpt-4) |
+| `model_not_found` | Use valid model name (claude-3-5-sonnet-20241022, claude-opus-4-5-20251101) |
 | `context_length_exceeded` | Reduce context size or max_tokens |
 
 ## Requirements
 
 - **curl** or **wget** must be installed
-- **OpenAI API key** (get from [platform.openai.com](https://platform.openai.com))
+- **Anthropic API key** (get from [console.anthropic.com](https://console.anthropic.com))
 - **Internet connection**
-- **OpenAI account with credits**
+- **Anthropic account with credits**
 
 ## Security Notes
 
 🔒 **API Key Security:**
 - Never hardcode API keys in SQL queries that are saved
 - Use environment variables or config files for persistent keys
-- Restrict file permissions on `~/.stps/openai_api_key` (chmod 600)
+- Restrict file permissions on `~/.stps/anthropic_api_key` (chmod 600)
 - Rotate keys periodically
-- Monitor usage on OpenAI dashboard
+- Monitor usage on Anthropic Console
 
 🔒 **Data Privacy:**
-- Data sent to OpenAI is subject to their [privacy policy](https://openai.com/policies/privacy-policy)
+- Data sent to Anthropic is subject to their [privacy policy](https://www.anthropic.com/legal/privacy)
 - Do not send sensitive personal data (PII) without proper consent
 - Consider data residency requirements for your jurisdiction
-- Review OpenAI's [data usage policies](https://openai.com/policies/usage-policies)
+- Review Anthropic's [data usage policies](https://www.anthropic.com/legal/commercial-terms)
 
 ## Additional Resources
 
-- [OpenAI API Documentation](https://platform.openai.com/docs/api-reference)
-- [OpenAI Pricing](https://openai.com/pricing)
-- [Best Practices for Prompt Engineering](https://platform.openai.com/docs/guides/prompt-engineering)
-- [OpenAI Usage Policies](https://openai.com/policies/usage-policies)
+- [Anthropic API Documentation](https://docs.anthropic.com/en/api)
+- [Anthropic Pricing](https://www.anthropic.com/pricing)
+- [Best Practices for Prompt Engineering](https://docs.anthropic.com/en/docs/prompt-engineering)
+- [Anthropic Usage Policies](https://www.anthropic.com/legal/aup)
 
 ## Support
 
 For issues specific to the STPS extension:
 - GitHub: [https://github.com/Arengard/stps-extension/issues](https://github.com/Arengard/stps-extension/issues)
 
-For OpenAI API issues:
-- OpenAI Help: [https://help.openai.com/](https://help.openai.com/)
-- Status Page: [https://status.openai.com/](https://status.openai.com/)
+For Anthropic API issues:
+- Anthropic Support: [https://support.anthropic.com/](https://support.anthropic.com/)
+- Status Page: [https://status.anthropic.com/](https://status.anthropic.com/)
