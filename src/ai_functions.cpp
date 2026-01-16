@@ -10,6 +10,7 @@
 #include <cctype>
 #include <iomanip>
 #include <mutex>
+#include "curl_utils.hpp"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -244,80 +245,51 @@ static std::string call_anthropic_api(const std::string& context, const std::str
         return "ERROR: Anthropic API key not configured. Use stps_set_api_key() or set ANTHROPIC_API_KEY environment variable.";
     }
 
-    // Determine which token parameter to use based on model
-    // Newer models (o1, o3, gpt-5.x) require max_completion_tokens instead of max_tokens
-    bool use_max_completion_tokens = (model.find("o1") == 0 || model.find("o3") == 0 ||
-                                       model.find("gpt-5") == 0 || model.find("gpt-4.5") == 0 ||
-                                       model.find("gpt-4o-2024-12") == 0);
+    // Build JSON request payload for Anthropic Messages API
+    std::string system_message = "You are a helpful assistant.";
+    std::string user_message = "Context: " + escape_json_string(context) +
+                              "\\n\\nQuestion: " + escape_json_string(prompt);
 
-    std::string token_param = use_max_completion_tokens ? "max_completion_tokens" : "max_tokens";
-
-    // Build JSON request payload
     std::string json_payload = "{"
         "\"model\":\"" + model + "\","
+        "\"max_tokens\":" + std::to_string(max_tokens) + ","
+        "\"system\":\"" + system_message + "\","
         "\"messages\":["
-            "{\"role\":\"system\",\"content\":\"You are a helpful assistant.\"},"
-            "{\"role\":\"user\",\"content\":\"Context: " + escape_json_string(context) + "\\n\\nQuestion: " + escape_json_string(prompt) + "\"}"
+            "{\"role\":\"user\",\"content\":\"" + user_message + "\"}"
         "],"
-        "\"" + token_param + "\":" + std::to_string(max_tokens) + ","
         "\"temperature\":0.7"
     "}";
 
-    // Write payload to temp file
-    std::string payload_file = get_temp_filename() + ".json";
-    std::ofstream out(payload_file);
-    if (!out) {
-        return "ERROR: Failed to create temporary file for API request.";
-    }
-    out << json_payload;
-    out.close();
+    // Build headers
+    CurlHeaders headers;
+    headers.append("Content-Type: application/json");
+    headers.append("x-api-key: " + api_key);
+    headers.append("anthropic-version: 2023-06-01");
 
-    // Write response to temp file
-    std::string response_file = get_temp_filename() + ".json";
+    // Make API call
+    long http_code = 0;
+    std::string response = curl_post_json(
+        "https://api.anthropic.com/v1/messages",
+        json_payload,
+        headers,
+        &http_code
+    );
 
-    // Build curl command
-    std::string cmd = "curl -s -X POST \"https://api.openai.com/v1/chat/completions\" "
-                      "-H \"Content-Type: application/json\" "
-                      "-H \"Authorization: Bearer " + api_key + "\" "
-                      "-d @\"" + payload_file + "\" "
-                      "-o \"" + response_file + "\" "
-                      "2>/dev/null";
-
-#ifdef _WIN32
-    cmd = "curl -s -X POST \"https://api.openai.com/v1/chat/completions\" "
-          "-H \"Content-Type: application/json\" "
-          "-H \"Authorization: Bearer " + api_key + "\" "
-          "-d @\"" + payload_file + "\" "
-          "-o \"" + response_file + "\" "
-          "2>nul";
-#endif
-
-    int result = system(cmd.c_str());
-
-    // Clean up payload file
-    std::remove(payload_file.c_str());
-
-    if (result != 0) {
-        std::remove(response_file.c_str());
-        return "ERROR: Failed to execute curl command. Make sure curl is installed.";
+    // Check for errors
+    if (response.find("ERROR:") == 0) {
+        return response;
     }
 
-    // Read response
-    std::string response = read_file_content(response_file);
-    std::remove(response_file.c_str());
-
-    if (response.empty()) {
-        return "ERROR: Empty response from Anthropic API.";
-    }
-
-    // Check for API errors
-    std::string error_msg = extract_json_content(response, "message");
-    if (!error_msg.empty() && response.find("\"error\"") != std::string::npos) {
+    // Check for API error in response
+    std::string error_type = extract_json_content(response, "type");
+    if (error_type == "error") {
+        std::string error_msg = extract_json_content(response, "message");
         return "ERROR: Anthropic API returned error: " + error_msg;
     }
 
-    // Extract the assistant's message content
-    std::string content = extract_json_content(response, "content");
+    // Extract the assistant's message content from response
+    // Anthropic format: { "content": [{ "text": "..." }] }
+    std::string content = extract_json_content(response, "text");
     if (content.empty()) {
         return "ERROR: Could not parse response from Anthropic API. Response: " + response.substr(0, 200);
     }
