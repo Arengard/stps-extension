@@ -119,9 +119,9 @@ struct ZipBindData : public TableFunctionData {
 struct ZipGlobalState : public GlobalTableFunctionState {
     unique_ptr<char[]> file_content;
     size_t file_size = 0;
-    vector<string> column_names;
-    vector<LogicalType> column_types;
-    vector<vector<Value>> rows;
+    std::vector<string> column_names;
+    std::vector<LogicalType> column_types;
+    std::vector<std::vector<Value>> rows;
     idx_t current_row = 0;
     bool parsed = false;
     string error_message;
@@ -224,9 +224,9 @@ static unique_ptr<FunctionData> ZipBind(ClientContext &context, TableFunctionBin
     }
 
     // Parse to determine schema for CSV/text files
-    vector<string> column_names;
-    vector<LogicalType> column_types;
-    vector<vector<Value>> temp_rows;
+    std::vector<string> column_names;
+    std::vector<LogicalType> column_types;
+    std::vector<std::vector<Value>> temp_rows;
     
     ParseCSVContent(content, column_names, column_types, temp_rows);
     
