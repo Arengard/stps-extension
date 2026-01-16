@@ -30,7 +30,9 @@
       "Bash(quick-rebuild.bat)",
       "Bash(cmd.exe:*)",
       "Bash(cmake --build . --target stps_loadable_extension)",
-      "Bash(git rebase:*)"
+      "Bash(git rebase:*)",
+      "Bash(git push:*)",
+      "Bash(git stash:*)"
     ]
   }
 }

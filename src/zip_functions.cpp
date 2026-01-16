@@ -235,8 +235,14 @@ static unique_ptr<FunctionData> ZipBind(ClientContext &context, TableFunctionBin
         names = {"content"};
         return_types = {LogicalType::VARCHAR};
     } else {
-        names = column_names;
-        return_types = column_types;
+        names.clear();
+        return_types.clear();
+        for (const auto &name : column_names) {
+            names.push_back(name);
+        }
+        for (const auto &type : column_types) {
+            return_types.push_back(type);
+        }
     }
     
     return result;
