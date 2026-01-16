@@ -27,40 +27,40 @@ namespace stps {
 // ============================================================================
 
 static std::mutex ai_config_mutex;
-static std::string openai_api_key;
-static std::string openai_model = "gpt-4o-mini";  // Default model
+static std::string anthropic_api_key;
+static std::string anthropic_model = "claude-3-5-sonnet-20241022";  // Default model
 
-void SetOpenAIApiKey(const std::string& key) {
+void SetAnthropicApiKey(const std::string& key) {
     std::lock_guard<std::mutex> lock(ai_config_mutex);
-    openai_api_key = key;
+    anthropic_api_key = key;
 }
 
-void SetOpenAIModel(const std::string& model) {
+void SetAnthropicModel(const std::string& model) {
     std::lock_guard<std::mutex> lock(ai_config_mutex);
-    openai_model = model;
+    anthropic_model = model;
 }
 
-std::string GetOpenAIModel() {
+std::string GetAnthropicModel() {
     std::lock_guard<std::mutex> lock(ai_config_mutex);
-    return openai_model;
+    return anthropic_model;
 }
 
-std::string GetOpenAIApiKey() {
+std::string GetAnthropicApiKey() {
     // Check if key was set via stps_set_api_key()
     {
         std::lock_guard<std::mutex> lock(ai_config_mutex);
-        if (!openai_api_key.empty()) {
-            return openai_api_key;
+        if (!anthropic_api_key.empty()) {
+            return anthropic_api_key;
         }
     }
 
-    // Check environment variable OPENAI_API_KEY
-    const char* env_key = std::getenv("OPENAI_API_KEY");
+    // Check environment variable ANTHROPIC_API_KEY
+    const char* env_key = std::getenv("ANTHROPIC_API_KEY");
     if (env_key != nullptr) {
         return std::string(env_key);
     }
 
-    // Check ~/.stps/openai_api_key file
+    // Check ~/.stps/anthropic_api_key file
     const char* home = std::getenv("HOME");
     if (!home) {
 #ifdef _WIN32
@@ -69,7 +69,7 @@ std::string GetOpenAIApiKey() {
     }
 
     if (home) {
-        std::string key_file = std::string(home) + "/.stps/openai_api_key";
+        std::string key_file = std::string(home) + "/.stps/anthropic_api_key";
         std::ifstream file(key_file);
         if (file.is_open()) {
             std::string key;
@@ -233,15 +233,15 @@ static std::string read_file_content(const std::string& path) {
 }
 
 // ============================================================================
-// OpenAI API call
+// Anthropic API call
 // ============================================================================
 
-static std::string call_openai_api(const std::string& context, const std::string& prompt,
-                                   const std::string& model, int max_tokens) {
-    std::string api_key = GetOpenAIApiKey();
+static std::string call_anthropic_api(const std::string& context, const std::string& prompt,
+                                      const std::string& model, int max_tokens) {
+    std::string api_key = GetAnthropicApiKey();
 
     if (api_key.empty()) {
-        return "ERROR: OpenAI API key not configured. Use stps_set_api_key() or set OPENAI_API_KEY environment variable.";
+        return "ERROR: Anthropic API key not configured. Use stps_set_api_key() or set ANTHROPIC_API_KEY environment variable.";
     }
 
     // Determine which token parameter to use based on model
@@ -307,19 +307,19 @@ static std::string call_openai_api(const std::string& context, const std::string
     std::remove(response_file.c_str());
 
     if (response.empty()) {
-        return "ERROR: Empty response from OpenAI API.";
+        return "ERROR: Empty response from Anthropic API.";
     }
 
     // Check for API errors
     std::string error_msg = extract_json_content(response, "message");
     if (!error_msg.empty() && response.find("\"error\"") != std::string::npos) {
-        return "ERROR: OpenAI API returned error: " + error_msg;
+        return "ERROR: Anthropic API returned error: " + error_msg;
     }
 
     // Extract the assistant's message content
     std::string content = extract_json_content(response, "content");
     if (content.empty()) {
-        return "ERROR: Could not parse response from OpenAI API. Response: " + response.substr(0, 200);
+        return "ERROR: Could not parse response from Anthropic API. Response: " + response.substr(0, 200);
     }
 
     return content;
@@ -335,7 +335,7 @@ static void StpsAskAIFunction(DataChunk &args, ExpressionState &state, Vector &r
     auto &prompt_vec = args.data[1];
 
     // Use configured model as default, allow override via parameter
-    string model = GetOpenAIModel();
+    string model = GetAnthropicModel();
     int max_tokens = 1000;
 
     if (args.ColumnCount() >= 3 && !FlatVector::IsNull(args.data[2], 0)) {
@@ -359,7 +359,7 @@ static void StpsAskAIFunction(DataChunk &args, ExpressionState &state, Vector &r
         std::string context = context_str.GetString();
         std::string prompt = prompt_str.GetString();
 
-        std::string response = call_openai_api(context, prompt, model, max_tokens);
+        std::string response = call_anthropic_api(context, prompt, model, max_tokens);
 
         FlatVector::GetData<string_t>(result)[i] = StringVector::AddString(result, response);
     }
@@ -371,7 +371,7 @@ static void StpsSetApiKeyFunction(DataChunk &args, ExpressionState &state, Vecto
     if (!FlatVector::IsNull(key_vec, 0)) {
         string_t key_str = FlatVector::GetData<string_t>(key_vec)[0];
         std::string key = key_str.GetString();
-        SetOpenAIApiKey(key);
+        SetAnthropicApiKey(key);
 
         FlatVector::GetData<string_t>(result)[0] = StringVector::AddString(result, "API key configured successfully");
         FlatVector::SetNull(result, 0, false);
@@ -387,7 +387,7 @@ static void StpsSetModelFunction(DataChunk &args, ExpressionState &state, Vector
     if (!FlatVector::IsNull(model_vec, 0)) {
         string_t model_str = FlatVector::GetData<string_t>(model_vec)[0];
         std::string model = model_str.GetString();
-        SetOpenAIModel(model);
+        SetAnthropicModel(model);
 
         std::string msg = "Model set to: " + model;
         FlatVector::GetData<string_t>(result)[0] = StringVector::AddString(result, msg);
@@ -399,7 +399,7 @@ static void StpsSetModelFunction(DataChunk &args, ExpressionState &state, Vector
 }
 
 static void StpsGetModelFunction(DataChunk &args, ExpressionState &state, Vector &result) {
-    std::string model = GetOpenAIModel();
+    std::string model = GetAnthropicModel();
     FlatVector::GetData<string_t>(result)[0] = StringVector::AddString(result, model);
     FlatVector::SetNull(result, 0, false);
 }
@@ -413,7 +413,7 @@ static void StpsAskAIAddressFunction(DataChunk &args, ExpressionState &state, Ve
     auto &company_name_vec = args.data[0];
 
     // Use configured model as default, allow override via parameter
-    string model = GetOpenAIModel();
+    string model = GetAnthropicModel();
     if (args.ColumnCount() >= 2 && !FlatVector::IsNull(args.data[1], 0)) {
         string_t model_str = FlatVector::GetData<string_t>(args.data[1])[0];
         model = model_str.GetString();
@@ -456,7 +456,7 @@ static void StpsAskAIAddressFunction(DataChunk &args, ExpressionState &state, Ve
                            "\n"
                            "Fill in ONLY fields you can verify from web search. Use empty strings for unknown fields.";
 
-        std::string response = call_openai_api(company_name, prompt, model, 250);
+        std::string response = call_anthropic_api(company_name, prompt, model, 250);
 
         // Parse JSON response
         if (response.find("ERROR:") == 0) {

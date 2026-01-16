@@ -5,12 +5,16 @@
 namespace duckdb {
 namespace stps {
 
-// Register AI-related functions (OpenAI ChatGPT integration)
+// Register AI-related functions (Anthropic Claude integration)
 void RegisterAIFunctions(ExtensionLoader& loader);
 
 // API key management
-void SetOpenAIApiKey(const std::string& key);
-std::string GetOpenAIApiKey();
+void SetAnthropicApiKey(const std::string& key);
+std::string GetAnthropicApiKey();
+
+// Model management
+void SetAnthropicModel(const std::string& model);
+std::string GetAnthropicModel();
 
 } // namespace stps
 } // namespace duckdb
