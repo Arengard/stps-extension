@@ -430,12 +430,19 @@ static void StpsAskAIAddressFunction(DataChunk &args, ExpressionState &state, Ve
         std::string company_name = company_name_str.GetString();
 
         // Craft a specific prompt for address extraction with JSON output
-        std::string prompt = "Search for the business address of this company. "
-                           "Look for their official website, impressum, or business registration. "
-                           "Respond ONLY with a JSON object (no markdown, no explanation):\n"
-                           "{\"city\":\"city name\",\"postal_code\":\"postal/zip code\",\"street_name\":\"street name without number\",\"street_nr\":\"house/building number\"}\n"
-                           "Use the actual address you find. If you cannot find the address, respond with:\n"
-                           "{\"city\":\"NOT_FOUND\",\"postal_code\":\"NOT_FOUND\",\"street_name\":\"NOT_FOUND\",\"street_nr\":\"NOT_FOUND\"}";
+        std::string prompt = "Find the registered business address (Impressum/legal address) for this company.\n"
+                           "\n"
+                           "CRITICAL INSTRUCTIONS:\n"
+                           "- ONLY return information you can verify from reliable sources\n"
+                           "- DO NOT make up, guess, or hallucinate any address information\n"
+                           "- If you are uncertain about ANY field, use an empty string \"\"\n"
+                           "- This is for a database system - accuracy is essential\n"
+                           "- Search for the official registered business address, not customer service addresses\n"
+                           "\n"
+                           "Respond ONLY with a JSON object in this exact format (no other text or markdown):\n"
+                           "{\"city\":\"\",\"postal_code\":\"\",\"street_name\":\"\",\"street_nr\":\"\"}\n"
+                           "\n"
+                           "Fill in ONLY fields you can verify. Use empty strings for unknown fields.";
 
         std::string response = call_openai_api(company_name, prompt, model, 250);
 
@@ -451,12 +458,6 @@ static void StpsAskAIAddressFunction(DataChunk &args, ExpressionState &state, Ve
         std::string postal_code = extract_json_content(response, "postal_code");
         std::string street_name = extract_json_content(response, "street_name");
         std::string street_nr = extract_json_content(response, "street_nr");
-
-        // Handle NOT_FOUND responses as NULL
-        if (city == "NOT_FOUND") city = "";
-        if (postal_code == "NOT_FOUND") postal_code = "";
-        if (street_name == "NOT_FOUND") street_name = "";
-        if (street_nr == "NOT_FOUND") street_nr = "";
 
         // Set struct fields
         if (city.empty()) {

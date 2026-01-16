@@ -29,7 +29,8 @@
       "Bash(/c/Users/Ramon.Ljevo/scoop/shims/7z l \"C:/stps-extension/test/data/test.7z\")",
       "Bash(quick-rebuild.bat)",
       "Bash(cmd.exe:*)",
-      "Bash(cmake --build . --target stps_loadable_extension)"
+      "Bash(cmake --build . --target stps_loadable_extension)",
+      "Bash(git rebase:*)"
     ]
   }
 }
