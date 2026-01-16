@@ -577,6 +577,11 @@ static SRes ParseStreamsInfoFromBuf(CSz7zArchive *archive, const Byte **bufPtr, 
 {
     const Byte *p = *bufPtr;
     Byte type;
+    UInt64 *folderUnpackSizes = NULL;
+    UInt32 numFolders = 0;
+    UInt64 *subStreamSizes = NULL;
+    UInt32 numSubStreams = 0;
+    UInt32 totalSubStreams = 0;
 
     RINOK(ReadByteFromBuf(&p, bufEnd, &type));
 
@@ -616,15 +621,188 @@ static SRes ParseStreamsInfoFromBuf(CSz7zArchive *archive, const Byte **bufPtr, 
             break;
 
         case k7zIdUnpackInfo:
-        case k7zIdSubStreamsInfo:
-            /* Skip these sections for now - we'll use file UnpackSize */
             {
-                int depth = 1;
-                while (depth > 0 && p < bufEnd)
+                /* Parse UnpackInfo to get folder unpack sizes */
+                RINOK(ReadByteFromBuf(&p, bufEnd, &type));
+
+                if (type == k7zIdFolder)
+                {
+                    UInt64 numFoldersVal;
+                    RINOK(ReadNumberFromBuf(&p, bufEnd, &numFoldersVal));
+                    numFolders = (UInt32)numFoldersVal;
+
+                    /* External indicator */
+                    Byte external;
+                    RINOK(ReadByteFromBuf(&p, bufEnd, &external));
+
+                    if (external != 0)
+                    {
+                        /* External data - skip for now */
+                        UInt64 dataIndex;
+                        RINOK(ReadNumberFromBuf(&p, bufEnd, &dataIndex));
+                    }
+                    else
+                    {
+                        /* Parse folder info for each folder */
+                        for (UInt32 fi = 0; fi < numFolders; fi++)
+                        {
+                            UInt64 numCoders;
+                            RINOK(ReadNumberFromBuf(&p, bufEnd, &numCoders));
+
+                            for (UInt64 ci = 0; ci < numCoders; ci++)
+                            {
+                                Byte coderInfo;
+                                RINOK(ReadByteFromBuf(&p, bufEnd, &coderInfo));
+
+                                UInt32 idSize = (coderInfo & 0x0F);
+                                Bool isComplex = (coderInfo & 0x10) != 0;
+                                Bool hasAttributes = (coderInfo & 0x20) != 0;
+
+                                /* Skip codec ID */
+                                p += idSize;
+                                if (p > bufEnd) return SZ_ERROR_READ;
+
+                                if (isComplex)
+                                {
+                                    UInt64 numInStreams, numOutStreams;
+                                    RINOK(ReadNumberFromBuf(&p, bufEnd, &numInStreams));
+                                    RINOK(ReadNumberFromBuf(&p, bufEnd, &numOutStreams));
+                                }
+
+                                if (hasAttributes)
+                                {
+                                    UInt64 propsSize;
+                                    RINOK(ReadNumberFromBuf(&p, bufEnd, &propsSize));
+                                    p += propsSize;
+                                    if (p > bufEnd) return SZ_ERROR_READ;
+                                }
+                            }
+                        }
+                    }
+
+                    RINOK(ReadByteFromBuf(&p, bufEnd, &type));
+                }
+
+                /* Read CodersUnpackSize */
+                if (type == k7zIdCodersUnpackSize)
+                {
+                    folderUnpackSizes = (UInt64 *)archive->alloc->Alloc(
+                        archive->alloc, sizeof(UInt64) * (numFolders > 0 ? numFolders : 1));
+                    if (!folderUnpackSizes)
+                        return SZ_ERROR_MEM;
+
+                    for (UInt32 fi = 0; fi < numFolders; fi++)
+                    {
+                        RINOK(ReadNumberFromBuf(&p, bufEnd, &folderUnpackSizes[fi]));
+                    }
+                    RINOK(ReadByteFromBuf(&p, bufEnd, &type));
+                }
+
+                /* Skip remaining data until end */
+                while (type != k7zIdEnd && p < bufEnd)
                 {
                     RINOK(ReadByteFromBuf(&p, bufEnd, &type));
-                    if (type == k7zIdEnd)
-                        depth--;
+                }
+            }
+            break;
+
+        case k7zIdSubStreamsInfo:
+            {
+                /* Parse SubStreamsInfo to get per-file sizes */
+                RINOK(ReadByteFromBuf(&p, bufEnd, &type));
+
+                /* NumUnPackStream - number of files per folder */
+                UInt32 *numUnpackStreamsInFolders = NULL;
+                if (type == k7zIdNumUnpackStream)
+                {
+                    numUnpackStreamsInFolders = (UInt32 *)archive->alloc->Alloc(
+                        archive->alloc, sizeof(UInt32) * (numFolders > 0 ? numFolders : 1));
+                    if (!numUnpackStreamsInFolders)
+                    {
+                        if (folderUnpackSizes) archive->alloc->Free(archive->alloc, folderUnpackSizes);
+                        return SZ_ERROR_MEM;
+                    }
+
+                    totalSubStreams = 0;
+                    for (UInt32 fi = 0; fi < numFolders; fi++)
+                    {
+                        UInt64 numStreams;
+                        RINOK(ReadNumberFromBuf(&p, bufEnd, &numStreams));
+                        numUnpackStreamsInFolders[fi] = (UInt32)numStreams;
+                        totalSubStreams += (UInt32)numStreams;
+                    }
+                    RINOK(ReadByteFromBuf(&p, bufEnd, &type));
+                }
+                else
+                {
+                    /* Default: 1 file per folder */
+                    totalSubStreams = numFolders;
+                }
+
+                /* Size - per-file sizes */
+                if (type == k7zIdSize && totalSubStreams > 0)
+                {
+                    subStreamSizes = (UInt64 *)archive->alloc->Alloc(
+                        archive->alloc, sizeof(UInt64) * totalSubStreams);
+                    if (!subStreamSizes)
+                    {
+                        if (folderUnpackSizes) archive->alloc->Free(archive->alloc, folderUnpackSizes);
+                        if (numUnpackStreamsInFolders) archive->alloc->Free(archive->alloc, numUnpackStreamsInFolders);
+                        return SZ_ERROR_MEM;
+                    }
+
+                    UInt32 sizeIndex = 0;
+                    for (UInt32 fi = 0; fi < numFolders; fi++)
+                    {
+                        UInt32 numStreamsInFolder = numUnpackStreamsInFolders ?
+                            numUnpackStreamsInFolders[fi] : 1;
+
+                        UInt64 sumSizes = 0;
+                        /* Read n-1 sizes, last one is implied */
+                        for (UInt32 si = 0; si + 1 < numStreamsInFolder; si++)
+                        {
+                            RINOK(ReadNumberFromBuf(&p, bufEnd, &subStreamSizes[sizeIndex]));
+                            sumSizes += subStreamSizes[sizeIndex];
+                            sizeIndex++;
+                        }
+                        /* Last file in folder gets remaining size */
+                        if (numStreamsInFolder > 0)
+                        {
+                            if (folderUnpackSizes)
+                                subStreamSizes[sizeIndex] = folderUnpackSizes[fi] - sumSizes;
+                            else
+                                subStreamSizes[sizeIndex] = 0;
+                            sizeIndex++;
+                        }
+                    }
+                    numSubStreams = sizeIndex;
+                    RINOK(ReadByteFromBuf(&p, bufEnd, &type));
+                }
+                else if (totalSubStreams > 0 && folderUnpackSizes)
+                {
+                    /* No explicit sizes - use folder sizes (1 file per folder) */
+                    subStreamSizes = (UInt64 *)archive->alloc->Alloc(
+                        archive->alloc, sizeof(UInt64) * numFolders);
+                    if (!subStreamSizes)
+                    {
+                        if (folderUnpackSizes) archive->alloc->Free(archive->alloc, folderUnpackSizes);
+                        if (numUnpackStreamsInFolders) archive->alloc->Free(archive->alloc, numUnpackStreamsInFolders);
+                        return SZ_ERROR_MEM;
+                    }
+                    for (UInt32 fi = 0; fi < numFolders; fi++)
+                    {
+                        subStreamSizes[fi] = folderUnpackSizes[fi];
+                    }
+                    numSubStreams = numFolders;
+                }
+
+                if (numUnpackStreamsInFolders)
+                    archive->alloc->Free(archive->alloc, numUnpackStreamsInFolders);
+
+                /* Skip remaining data until end */
+                while (type != k7zIdEnd && p < bufEnd)
+                {
+                    RINOK(ReadByteFromBuf(&p, bufEnd, &type));
                 }
             }
             break;
@@ -637,6 +815,36 @@ static SRes ParseStreamsInfoFromBuf(CSz7zArchive *archive, const Byte **bufPtr, 
         if (p < bufEnd)
             RINOK(ReadByteFromBuf(&p, bufEnd, &type));
     }
+
+    /* Store the parsed sizes for later use when populating file info */
+    /* We store subStreamSizes temporarily in folders array */
+    if (subStreamSizes && numSubStreams > 0)
+    {
+        archive->folders = (CSz7zFolder *)archive->alloc->Alloc(
+            archive->alloc, sizeof(CSz7zFolder));
+        if (archive->folders)
+        {
+            archive->folders->UnpackSizes = subStreamSizes;
+            archive->folders->NumUnpackStreams = numSubStreams;
+            archive->numFolders = 1;  /* Signal that we have size data */
+        }
+    }
+    else if (folderUnpackSizes && numFolders > 0)
+    {
+        /* Fall back to folder sizes if no substream info */
+        archive->folders = (CSz7zFolder *)archive->alloc->Alloc(
+            archive->alloc, sizeof(CSz7zFolder));
+        if (archive->folders)
+        {
+            archive->folders->UnpackSizes = folderUnpackSizes;
+            archive->folders->NumUnpackStreams = numFolders;
+            archive->numFolders = 1;
+            folderUnpackSizes = NULL;  /* Don't free, transferred ownership */
+        }
+    }
+
+    if (folderUnpackSizes)
+        archive->alloc->Free(archive->alloc, folderUnpackSizes);
 
     *bufPtr = p;
     return SZ_OK;
@@ -809,6 +1017,23 @@ static SRes ReadFilesInfoFromBuf(CSz7zArchive *archive, const Byte **bufPtr, con
         RINOK(ReadByteFromBuf(&p, bufEnd, &type));
     }
     
+    /* Assign UnpackSize to files from parsed folder unpack sizes */
+    if (archive->folders && archive->folders->UnpackSizes && archive->numFiles > 0)
+    {
+        UInt32 sizeIndex = 0;
+        for (i = 0; i < archive->numFiles; i++)
+        {
+            if (!archive->files[i].IsDir)
+            {
+                if (sizeIndex < archive->folders->NumUnpackStreams)
+                {
+                    archive->files[i].UnpackSize = archive->folders->UnpackSizes[sizeIndex];
+                    sizeIndex++;
+                }
+            }
+        }
+    }
+
     *bufPtr = p;
     return SZ_OK;
 }
