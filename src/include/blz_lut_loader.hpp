@@ -43,7 +43,7 @@ public:
     std::string GetLutFilePath();
 
     // Download LUT file from source
-    bool DownloadLutFile(const std::string& dest_path);
+    bool DownloadLutFile(const std::string& dest_path, ClientContext* context = nullptr);
 
     // Load LUT file into memory
     bool LoadLutFile(const std::string& file_path);

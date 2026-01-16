@@ -76,7 +76,7 @@ bool BlzLutLoader::FileExists(const std::string& path) {
     return f.good();
 }
 
-bool BlzLutLoader::DownloadLutFile(const std::string& dest_path) {
+bool BlzLutLoader::DownloadLutFile(const std::string& dest_path, ClientContext* context) {
     try {
         // Ensure directory exists
         if (!EnsureLutDirectory()) {
@@ -86,15 +86,46 @@ bool BlzLutLoader::DownloadLutFile(const std::string& dest_path) {
 
         std::cout << "Downloading BLZ LUT file from " << LUT_DOWNLOAD_URL << "..." << std::endl;
 
-        // Open output file
-        std::ofstream output_file(dest_path, std::ios::binary);
-        if (!output_file) {
-            std::cerr << "Failed to open output file: " << dest_path << std::endl;
-            return false;
+        // Try using DuckDB's FileSystem if ClientContext is available
+        if (context) {
+            try {
+                auto &fs = FileSystem::GetFileSystem(*context);
+
+                // Read from HTTP URL using DuckDB's FileSystem
+                auto handle = fs.OpenFile(LUT_DOWNLOAD_URL, duckdb::FileOpenFlags::FILE_FLAGS_READ);
+                int64_t file_size = fs.GetFileSize(*handle);
+
+                // Read the entire file into a buffer
+                std::vector<char> buffer(file_size);
+                int64_t bytes_read = 0;
+                while (bytes_read < file_size) {
+                    int64_t to_read = std::min<int64_t>(file_size - bytes_read, 8192);
+                    int64_t chunk_read = handle->Read(buffer.data() + bytes_read, to_read);
+                    if (chunk_read == 0) break;
+                    bytes_read += chunk_read;
+                }
+
+                // Write to destination file
+                std::ofstream output_file(dest_path, std::ios::binary);
+                if (!output_file) {
+                    std::cerr << "Failed to open output file: " << dest_path << std::endl;
+                    return false;
+                }
+
+                output_file.write(buffer.data(), bytes_read);
+                output_file.close();
+
+                std::cout << "Successfully downloaded BLZ LUT file using DuckDB HTTP client to " << dest_path << std::endl;
+                return true;
+
+            } catch (const std::exception& e) {
+                std::cerr << "DuckDB HTTP client failed: " << e.what() << std::endl;
+                std::cerr << "Falling back to curl/wget..." << std::endl;
+                // Fall through to curl/wget fallback
+            }
         }
 
-        // Use curl or wget as fallback for now
-        // TODO: Use DuckDB's HTTP client once we have proper context
+        // Fallback to curl or wget
         std::string download_cmd = "curl -L -o \"" + dest_path + "\" \"" + LUT_DOWNLOAD_URL + "\"";
 
         int result = system(download_cmd.c_str());
@@ -519,7 +550,7 @@ bool BlzLutLoader::Initialize(ClientContext &context) {
         std::cout << "BLZ LUT file not found at " << lut_path << std::endl;
         std::cout << "Attempting to download..." << std::endl;
 
-        if (!DownloadLutFile(lut_path)) {
+        if (!DownloadLutFile(lut_path, &context)) {
             std::cerr << "Failed to download BLZ LUT file" << std::endl;
             std::cerr << "German IBAN validation will require explicit method_id parameter" << std::endl;
             return false;
