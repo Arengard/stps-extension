@@ -27,3 +27,6 @@ actionlint
 
 # CodeQL
 _codeql_detected_source_root
+
+# Git worktrees
+.worktrees/
