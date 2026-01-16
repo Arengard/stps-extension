@@ -6,6 +6,9 @@ set(TARGET_NAME stps)
 project(${TARGET_NAME})
 include_directories(src/include)
 
+# Find libcurl
+find_package(CURL REQUIRED)
+
 set(EXTENSION_SOURCES
     src/stps_unified_extension.cpp
     src/utils.cpp
@@ -58,6 +61,10 @@ target_include_directories(${TARGET_NAME}_loadable_extension PRIVATE ${ZLIB_INCL
 target_include_directories(${TARGET_NAME}_extension PRIVATE ${ZLIB_INCLUDE_DIRS})
 target_link_libraries(${TARGET_NAME}_loadable_extension ${ZLIB_LIBRARIES})
 target_link_libraries(${TARGET_NAME}_extension ${ZLIB_LIBRARIES})
+
+# Link libcurl
+target_link_libraries(${TARGET_NAME}_loadable_extension PRIVATE CURL::libcurl)
+target_link_libraries(${TARGET_NAME}_extension PRIVATE CURL::libcurl)
 
 # Add the static extension to DuckDB's export set to resolve linking
 if(TARGET ${TARGET_NAME}_extension)
