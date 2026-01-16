@@ -5,8 +5,6 @@
 #include <fstream>
 #include <sstream>
 #include <cstdlib>
-#include <iostream>
-#include <algorithm>
 #include <cctype>
 #include <iomanip>
 #include <mutex>
@@ -205,32 +203,6 @@ static std::string extract_json_content(const std::string& json, const std::stri
     }
 
     return result;
-}
-
-static std::string get_temp_filename() {
-#ifdef _WIN32
-    char temp_path[MAX_PATH];
-    char temp_file[MAX_PATH];
-    GetTempPathA(MAX_PATH, temp_path);
-    GetTempFileNameA(temp_path, "stps", 0, temp_file);
-    return std::string(temp_file);
-#else
-    char temp_file[] = "/tmp/stps_ai_XXXXXX";
-    int fd = mkstemp(temp_file);
-    if (fd != -1) {
-        close(fd);
-    }
-    return std::string(temp_file);
-#endif
-}
-
-static std::string read_file_content(const std::string& path) {
-    std::ifstream file(path, std::ios::binary);
-    if (!file) return "";
-
-    std::ostringstream content;
-    content << file.rdbuf();
-    return content.str();
 }
 
 // ============================================================================
