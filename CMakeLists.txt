@@ -64,8 +64,8 @@ target_link_libraries(${TARGET_NAME}_loadable_extension ${ZLIB_LIBRARIES})
 target_link_libraries(${TARGET_NAME}_extension ${ZLIB_LIBRARIES})
 
 # Link libcurl
-target_link_libraries(${TARGET_NAME}_loadable_extension PRIVATE CURL::libcurl)
-target_link_libraries(${TARGET_NAME}_extension PRIVATE CURL::libcurl)
+target_link_libraries(${TARGET_NAME}_loadable_extension CURL::libcurl)
+target_link_libraries(${TARGET_NAME}_extension CURL::libcurl)
 
 # Add the static extension to DuckDB's export set to resolve linking
 if(TARGET ${TARGET_NAME}_extension)
