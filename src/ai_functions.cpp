@@ -288,10 +288,11 @@ static std::string call_anthropic_api(const std::string& context, const std::str
     }
 
     // Extract the assistant's message content from response
-    // Anthropic format: { "content": [{ "text": "..." }] }
+    // Anthropic format: { "content": [{ "type": "text", "text": "..." }] }
+    // extract_json_content will find the first "text" field in the response
     std::string content = extract_json_content(response, "text");
     if (content.empty()) {
-        return "ERROR: Could not parse response from Anthropic API. Response: " + response.substr(0, 200);
+        return "ERROR: Could not parse response from Anthropic API. Response: " + response.substr(0, 500);
     }
 
     return content;

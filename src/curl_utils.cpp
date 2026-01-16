@@ -59,7 +59,7 @@ std::string curl_post_json(const std::string& url,
     curl_easy_setopt(handle.get(), CURLOPT_HTTPHEADER, headers.get());
     curl_easy_setopt(handle.get(), CURLOPT_WRITEFUNCTION, curl_write_callback);
     curl_easy_setopt(handle.get(), CURLOPT_WRITEDATA, &response);
-    curl_easy_setopt(handle.get(), CURLOPT_TIMEOUT, 30L);
+    curl_easy_setopt(handle.get(), CURLOPT_TIMEOUT, 90L);
     curl_easy_setopt(handle.get(), CURLOPT_FOLLOWLOCATION, 1L);
 
     // Perform request
