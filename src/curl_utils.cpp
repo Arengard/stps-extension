@@ -47,23 +47,23 @@ std::string curl_post_json(const std::string& url,
                            const CurlHeaders& headers,
                            long* http_code_out) {
     CurlHandle handle;
-    if (!handle.get()) {
+    if (!handle.handle()) {
         return "ERROR: Failed to initialize curl";
     }
 
     std::string response;
 
     // Set options
-    curl_easy_setopt(handle.get(), CURLOPT_URL, url.c_str());
-    curl_easy_setopt(handle.get(), CURLOPT_POSTFIELDS, json_payload.c_str());
-    curl_easy_setopt(handle.get(), CURLOPT_HTTPHEADER, headers.get());
-    curl_easy_setopt(handle.get(), CURLOPT_WRITEFUNCTION, curl_write_callback);
-    curl_easy_setopt(handle.get(), CURLOPT_WRITEDATA, &response);
-    curl_easy_setopt(handle.get(), CURLOPT_TIMEOUT, 90L);
-    curl_easy_setopt(handle.get(), CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(handle.handle(), CURLOPT_URL, url.c_str());
+    curl_easy_setopt(handle.handle(), CURLOPT_POSTFIELDS, json_payload.c_str());
+    curl_easy_setopt(handle.handle(), CURLOPT_HTTPHEADER, headers.list());
+    curl_easy_setopt(handle.handle(), CURLOPT_WRITEFUNCTION, curl_write_callback);
+    curl_easy_setopt(handle.handle(), CURLOPT_WRITEDATA, &response);
+    curl_easy_setopt(handle.handle(), CURLOPT_TIMEOUT, 90L);
+    curl_easy_setopt(handle.handle(), CURLOPT_FOLLOWLOCATION, 1L);
 
     // Perform request
-    CURLcode res = curl_easy_perform(handle.get());
+    CURLcode res = curl_easy_perform(handle.handle());
 
     if (res != CURLE_OK) {
         std::ostringstream err;
@@ -73,7 +73,7 @@ std::string curl_post_json(const std::string& url,
 
     // Get HTTP status code
     long http_code = 0;
-    curl_easy_getinfo(handle.get(), CURLINFO_RESPONSE_CODE, &http_code);
+    curl_easy_getinfo(handle.handle(), CURLINFO_RESPONSE_CODE, &http_code);
 
     if (http_code_out) {
         *http_code_out = http_code;

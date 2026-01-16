@@ -16,7 +16,7 @@ public:
     CurlHandle(const CurlHandle&) = delete;
     CurlHandle& operator=(const CurlHandle&) = delete;
 
-    CURL* get() { return curl; }
+    CURL* handle() { return curl; }
 
 private:
     CURL* curl;
@@ -33,7 +33,7 @@ public:
     CurlHeaders& operator=(const CurlHeaders&) = delete;
 
     void append(const std::string& header);
-    curl_slist* get() { return headers; }
+    curl_slist* list() { return headers; }
 
 private:
     curl_slist* headers;
