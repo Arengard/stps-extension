@@ -411,23 +411,21 @@ static void StpsAskAIAddressFunction(DataChunk &args, ExpressionState &state, Ve
         std::string company_name = company_name_str.GetString();
 
         // Craft a specific prompt for address extraction with JSON output
-        std::string prompt = "USE WEB SEARCH to find the registered business address (Impressum/legal address) for this company.\n"
+        std::string prompt = "Find the registered business address (Impressum/legal address) for this company based on your knowledge.\n"
                            "\n"
                            "CRITICAL INSTRUCTIONS:\n"
-                           "- YOU MUST USE WEB SEARCH - do not rely on training data alone\n"
-                           "- Search for the company's official website and Impressum page\n"
-                           "- ONLY return information you can verify from current web sources\n"
+                           "- Use only information you are highly confident about from your training data\n"
                            "- DO NOT make up, guess, or hallucinate any address information\n"
-                           "- If you cannot find verified information, use empty strings\n"
+                           "- If you cannot provide verified information, use empty strings\n"
                            "- This is for a database system - accuracy is essential\n"
-                           "- Search for the official registered business address, not customer service addresses\n"
+                           "- Focus on official registered business addresses, not customer service addresses\n"
                            "\n"
-                           "Search query suggestion: '" + company_name + " Impressum Adresse' or '" + company_name + " business address'\n"
+                           "Company: " + company_name + "\n"
                            "\n"
                            "Respond ONLY with a JSON object in this exact format (no other text or markdown):\n"
                            "{\"city\":\"\",\"postal_code\":\"\",\"street_name\":\"\",\"street_nr\":\"\"}\n"
                            "\n"
-                           "Fill in ONLY fields you can verify from web search. Use empty strings for unknown fields.";
+                           "Fill in ONLY fields you are confident about. Use empty strings for unknown fields.";
 
         std::string response = call_anthropic_api(company_name, prompt, model, 250);
 
