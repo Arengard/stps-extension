@@ -28,6 +28,7 @@ namespace stps {
 static std::mutex ai_config_mutex;
 static std::string anthropic_api_key;
 static std::string anthropic_model = "claude-sonnet-4-5-20250929";  // Default model (Claude Sonnet 4.5)
+static std::string brave_api_key;
 
 void SetAnthropicApiKey(const std::string& key) {
     std::lock_guard<std::mutex> lock(ai_config_mutex);
@@ -37,6 +38,11 @@ void SetAnthropicApiKey(const std::string& key) {
 void SetAnthropicModel(const std::string& model) {
     std::lock_guard<std::mutex> lock(ai_config_mutex);
     anthropic_model = model;
+}
+
+void SetBraveApiKey(const std::string& key) {
+    std::lock_guard<std::mutex> lock(ai_config_mutex);
+    brave_api_key = key;
 }
 
 std::string GetAnthropicModel() {
@@ -83,6 +89,163 @@ std::string GetAnthropicApiKey() {
     }
 
     return "";
+}
+
+std::string GetBraveApiKey() {
+    // Check if key was set via stps_set_brave_api_key()
+    {
+        std::lock_guard<std::mutex> lock(ai_config_mutex);
+        if (!brave_api_key.empty()) {
+            return brave_api_key;
+        }
+    }
+
+    // Check environment variable BRAVE_API_KEY
+    const char* env_key = std::getenv("BRAVE_API_KEY");
+    if (env_key != nullptr) {
+        return std::string(env_key);
+    }
+
+    // Check ~/.stps/brave_api_key file
+    const char* home = std::getenv("HOME");
+    if (!home) {
+#ifdef _WIN32
+        home = std::getenv("USERPROFILE");
+#endif
+    }
+
+    if (home) {
+        std::string key_file = std::string(home) + "/.stps/brave_api_key";
+        std::ifstream file(key_file);
+        if (file.is_open()) {
+            std::string key;
+            std::getline(file, key);
+            // Trim whitespace
+            key.erase(0, key.find_first_not_of(" \t\n\r"));
+            key.erase(key.find_last_not_of(" \t\n\r") + 1);
+            if (!key.empty()) {
+                return key;
+            }
+        }
+    }
+
+    return "";
+}
+
+static std::string url_encode(const std::string& str) {
+    std::ostringstream escaped;
+    escaped.fill('0');
+    escaped << std::hex;
+
+    for (char c : str) {
+        // Keep alphanumeric and safe chars
+        if (isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') {
+            escaped << c;
+        } else if (c == ' ') {
+            escaped << '+';
+        } else {
+            escaped << '%' << std::setw(2) << int((unsigned char)c);
+        }
+    }
+
+    return escaped.str();
+}
+
+static std::string format_search_results(const std::string& json) {
+    std::ostringstream formatted;
+    formatted << "Search Results:\n\n";
+
+    // Simple JSON parsing for Brave Search results
+    // Look for "web" -> "results" array
+
+    size_t results_start = json.find("\"results\"");
+    if (results_start == std::string::npos) {
+        return "No search results found.";
+    }
+
+    // Find the array start
+    size_t array_start = json.find("[", results_start);
+    if (array_start == std::string::npos) {
+        return "Error parsing search results.";
+    }
+
+    int result_count = 0;
+    size_t pos = array_start + 1;
+
+    // Extract up to 5 results
+    while (result_count < 5 && pos < json.length()) {
+        // Find next result object
+        size_t obj_start = json.find("{", pos);
+        if (obj_start == std::string::npos || obj_start > json.find("]", pos)) {
+            break;
+        }
+
+        // Extract title
+        std::string title = extract_json_content(json.substr(obj_start, 1000), "title");
+        // Extract url
+        std::string url = extract_json_content(json.substr(obj_start, 1000), "url");
+        // Extract description
+        std::string description = extract_json_content(json.substr(obj_start, 1000), "description");
+
+        if (!title.empty() && !url.empty()) {
+            result_count++;
+            formatted << result_count << ". " << title << "\n";
+            formatted << "   " << url << "\n";
+
+            if (!description.empty()) {
+                // Truncate description to 200 chars
+                if (description.length() > 200) {
+                    description = description.substr(0, 197) + "...";
+                }
+                formatted << "   " << description << "\n";
+            }
+            formatted << "\n";
+        }
+
+        // Move to next result
+        pos = json.find("}", obj_start) + 1;
+    }
+
+    if (result_count == 0) {
+        return "No search results found.";
+    }
+
+    return formatted.str();
+}
+
+static std::string execute_brave_search(const std::string& query) {
+    std::string api_key = GetBraveApiKey();
+
+    if (api_key.empty()) {
+        return "ERROR: Brave API key not configured";
+    }
+
+    // URL encode the query
+    std::string encoded_query = url_encode(query);
+
+    // Build Brave Search API URL
+    std::string url = "https://api.search.brave.com/res/v1/web/search?q=" + encoded_query;
+
+    // Build headers
+    CurlHeaders headers;
+    headers.append("Accept: application/json");
+    headers.append("X-Subscription-Token: " + api_key);
+
+    // Make GET request
+    long http_code = 0;
+    std::string response = curl_get(url, headers, &http_code);
+
+    // Check for errors
+    if (response.find("ERROR:") == 0) {
+        return "Search failed: " + response;
+    }
+
+    if (http_code != 200) {
+        return "Search API returned error (HTTP " + std::to_string(http_code) + ")";
+    }
+
+    // Format the results for Claude
+    return format_search_results(response);
 }
 
 // ============================================================================
@@ -217,6 +380,9 @@ static std::string call_anthropic_api(const std::string& context, const std::str
         return "ERROR: Anthropic API key not configured. Use stps_set_api_key() or set ANTHROPIC_API_KEY environment variable.";
     }
 
+    // Check if we should enable tools
+    bool tools_enabled = !GetBraveApiKey().empty();
+
     // Build JSON request payload for Anthropic Messages API
     std::string system_message = "You are a helpful assistant.";
     std::string user_message = "Context: " + escape_json_string(context) +
@@ -224,8 +390,24 @@ static std::string call_anthropic_api(const std::string& context, const std::str
 
     std::string json_payload = "{"
         "\"model\":\"" + model + "\","
-        "\"max_tokens\":" + std::to_string(max_tokens) + ","
-        "\"system\":\"" + system_message + "\","
+        "\"max_tokens\":" + std::to_string(max_tokens) + ",";
+
+    // Add tools array if Brave key is configured
+    if (tools_enabled) {
+        json_payload += "\"tools\":[{"
+            "\"name\":\"web_search\","
+            "\"description\":\"Search the web for current information\","
+            "\"input_schema\":{"
+                "\"type\":\"object\","
+                "\"properties\":{"
+                    "\"query\":{\"type\":\"string\",\"description\":\"Search query\"}"
+                "},"
+                "\"required\":[\"query\"]"
+            "}"
+        "}],";
+    }
+
+    json_payload += "\"system\":\"" + system_message + "\","
         "\"messages\":["
             "{\"role\":\"user\",\"content\":\"" + user_message + "\"}"
         "],"
@@ -238,7 +420,7 @@ static std::string call_anthropic_api(const std::string& context, const std::str
     headers.append("x-api-key: " + api_key);
     headers.append("anthropic-version: 2023-06-01");
 
-    // Make API call
+    // Make first API call
     long http_code = 0;
     std::string response = curl_post_json(
         "https://api.anthropic.com/v1/messages",
@@ -259,9 +441,89 @@ static std::string call_anthropic_api(const std::string& context, const std::str
         return "ERROR: Anthropic API returned error: " + error_msg;
     }
 
-    // Extract the assistant's message content from response
-    // Anthropic format: { "content": [{ "type": "text", "text": "..." }] }
-    // extract_json_content will find the first "text" field in the response
+    // Check stop_reason
+    std::string stop_reason = extract_json_content(response, "stop_reason");
+
+    // If no tool use, return the text response
+    if (stop_reason != "tool_use" || !tools_enabled) {
+        std::string content = extract_json_content(response, "text");
+        if (content.empty()) {
+            return "ERROR: Could not parse response from Anthropic API. Response: " + response.substr(0, 500);
+        }
+        return content;
+    }
+
+    // Tool use detected - extract tool request
+    // Find the tool_use block in content array
+    size_t tool_use_pos = response.find("\"type\":\"tool_use\"");
+    if (tool_use_pos == std::string::npos) {
+        // No tool use found, return text if available
+        std::string content = extract_json_content(response, "text");
+        return content.empty() ? "No response from API" : content;
+    }
+
+    // Extract tool_use_id and input
+    std::string tool_id = extract_json_content(response.substr(tool_use_pos, 500), "id");
+    std::string tool_name = extract_json_content(response.substr(tool_use_pos, 500), "name");
+
+    // Find the input object
+    size_t input_start = response.find("\"input\"", tool_use_pos);
+    std::string search_query = extract_json_content(response.substr(input_start, 500), "query");
+
+    if (tool_name != "web_search" || search_query.empty()) {
+        // Unexpected tool or malformed request
+        return "ERROR: Unexpected tool request";
+    }
+
+    // Execute the search
+    std::string search_results = execute_brave_search(search_query);
+
+    bool search_failed = search_results.find("ERROR:") == 0 || search_results.find("Search failed") == 0;
+
+    // Build second API request with tool result
+    std::string tool_result_content = search_failed
+        ? "Search unavailable. Please answer from your knowledge."
+        : search_results;
+
+    std::string second_payload = "{"
+        "\"model\":\"" + model + "\","
+        "\"max_tokens\":" + std::to_string(max_tokens) + ","
+        "\"system\":\"" + system_message + "\","
+        "\"messages\":["
+            "{\"role\":\"user\",\"content\":\"" + user_message + "\"},"
+            "{\"role\":\"assistant\",\"content\":["
+                "{\"type\":\"tool_use\",\"id\":\"" + tool_id + "\",\"name\":\"web_search\","
+                "\"input\":{\"query\":\"" + escape_json_string(search_query) + "\"}}"
+            "]},"
+            "{\"role\":\"user\",\"content\":["
+                "{\"type\":\"tool_result\",\"tool_use_id\":\"" + tool_id + "\","
+                "\"content\":\"" + escape_json_string(tool_result_content) + "\""
+                + (search_failed ? ",\"is_error\":true" : "") + "}"
+            "]}"
+        "],"
+        "\"temperature\":0.7"
+    "}";
+
+    // Make second API call
+    response = curl_post_json(
+        "https://api.anthropic.com/v1/messages",
+        second_payload,
+        headers,
+        &http_code
+    );
+
+    // Check for errors
+    if (response.find("ERROR:") == 0) {
+        return response;
+    }
+
+    error_type = extract_json_content(response, "type");
+    if (error_type == "error") {
+        std::string error_msg = extract_json_content(response, "message");
+        return "ERROR: Anthropic API returned error: " + error_msg;
+    }
+
+    // Extract final text response
     std::string content = extract_json_content(response, "text");
     if (content.empty()) {
         return "ERROR: Could not parse response from Anthropic API. Response: " + response.substr(0, 500);
@@ -339,6 +601,22 @@ static void StpsSetModelFunction(DataChunk &args, ExpressionState &state, Vector
         FlatVector::SetNull(result, 0, false);
     } else {
         FlatVector::GetData<string_t>(result)[0] = StringVector::AddString(result, "ERROR: Model cannot be NULL");
+        FlatVector::SetNull(result, 0, false);
+    }
+}
+
+static void StpsSetBraveApiKeyFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+    auto &key_vec = args.data[0];
+
+    if (!FlatVector::IsNull(key_vec, 0)) {
+        string_t key_str = FlatVector::GetData<string_t>(key_vec)[0];
+        std::string key = key_str.GetString();
+        SetBraveApiKey(key);
+
+        FlatVector::GetData<string_t>(result)[0] = StringVector::AddString(result, "Brave API key configured successfully");
+        FlatVector::SetNull(result, 0, false);
+    } else {
+        FlatVector::GetData<string_t>(result)[0] = StringVector::AddString(result, "ERROR: API key cannot be NULL");
         FlatVector::SetNull(result, 0, false);
     }
 }
@@ -525,6 +803,15 @@ void RegisterAIFunctions(ExtensionLoader& loader) {
         StpsGetModelFunction
     ));
     loader.RegisterFunction(get_model_set);
+
+    // Register stps_set_brave_api_key function
+    ScalarFunctionSet set_brave_key_set("stps_set_brave_api_key");
+    set_brave_key_set.AddFunction(ScalarFunction(
+        {LogicalType::VARCHAR},
+        LogicalType::VARCHAR,
+        StpsSetBraveApiKeyFunction
+    ));
+    loader.RegisterFunction(set_brave_key_set);
 }
 
 } // namespace stps

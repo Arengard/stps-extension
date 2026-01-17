@@ -361,6 +361,42 @@ SELECT stps_set_api_key('sk-ant-...');
 
 **Cost Example:** Processing 1,000 rows with claude-sonnet-4-5-20250929 ≈ $0.34
 
+#### Brave Search Integration
+
+Enable Claude to search the web for current information:
+
+```sql
+-- Configure Brave API key (get from https://brave.com/search/api/)
+SELECT stps_set_brave_api_key('BSA-your-key-here');
+
+-- Now queries automatically search when needed
+SELECT stps_ask_ai('TSLA', 'What is the current stock price?');
+-- Claude will search the web and return current price
+
+SELECT stps_ask_ai('Germany', 'Who is the current chancellor?');
+-- Searches for up-to-date political information
+
+-- Works with address lookups too
+SELECT stps_ask_ai_address('Anthropic PBC');
+-- Searches for current Anthropic address, returns structured data
+```
+
+**Brave API Key Configuration:**
+```sql
+-- Option 1: SQL function
+SELECT stps_set_brave_api_key('BSA-...');
+
+-- Option 2: Environment variable
+-- export BRAVE_API_KEY='BSA-...'
+
+-- Option 3: Config file
+-- echo "BSA-..." > ~/.stps/brave_api_key
+```
+
+**Cost:** Queries using web search cost ~2x (two Claude API calls + Brave search at $0.003)
+
+**Free Tier:** Brave provides 2,000 searches/month free
+
 ---
 
 ### 🔢 Smart Type Casting

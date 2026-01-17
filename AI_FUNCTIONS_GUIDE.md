@@ -63,13 +63,78 @@ The extension supports the following Anthropic Claude models:
 - Use **Sonnet** (default) for: Most tasks, address lookups, summarization, translation
 - Use **Opus** for: Complex financial analysis, detailed reasoning, critical accuracy needs
 
+## Web Search Integration
+
+### Overview
+
+When configured with a Brave Search API key, both `stps_ask_ai` and `stps_ask_ai_address` can automatically search the web for current information.
+
+### Setup
+
+1. Get Brave API key from https://brave.com/search/api/
+2. Configure using one of three methods (same as Anthropic key)
+3. Queries automatically use search when Claude determines it's needed
+
+### Examples
+
+**Real-time Financial Data:**
+```sql
+SELECT stps_set_brave_api_key('BSA-...');
+
+SELECT
+    ticker,
+    stps_ask_ai(ticker, 'Current stock price?') as price
+FROM stocks;
+```
+
+**Current Events:**
+```sql
+SELECT stps_ask_ai('Ukraine', 'What is the latest news today?');
+```
+
+**Company Information:**
+```sql
+SELECT
+    company_name,
+    stps_ask_ai(company_name, 'Latest quarterly revenue?') as revenue
+FROM companies;
+```
+
+**Address Lookups (Structured Output):**
+```sql
+-- stps_ask_ai_address also benefits from web search
+SELECT
+    company,
+    (stps_ask_ai_address(company)).city,
+    (stps_ask_ai_address(company)).postal_code,
+    (stps_ask_ai_address(company)).street_name
+FROM new_companies
+-- For recently founded companies, Claude will search for current address
+```
+
+### Cost Implications
+
+- **Without search:** 1 Claude API call per query
+- **With search:** 2 Claude API calls + 1 Brave search
+- **Cost:** Approximately 2x Claude cost + $0.003/search
+- **Free tier:** 2,000 searches/month from Brave
+
+### When Search is Used
+
+Claude automatically decides when to search based on the query:
+- ✅ "Current price of Bitcoin" → Searches
+- ✅ "Latest news about X" → Searches
+- ✅ "Who is the current CEO of Y" → Searches
+- ❌ "What is a database?" → Uses knowledge, no search
+- ❌ "Explain Python lists" → Uses knowledge, no search
+
 ## Functions Overview
 
 ### `stps_ask_ai_address(company_name[, model])`
 
 Get structured address data using AI - automatically formats response into organized address components.
 
-> **Note:** This function uses Claude's training data, not real-time web search. For critical address verification, consider using supplementary address validation services.
+> **Note:** When Brave API key is configured, this function can search the web for current address information. Without Brave key, it uses Claude's training data. For critical address verification, consider using supplementary address validation services.
 
 **Parameters:**
 - `company_name` (VARCHAR, required): Company name or location to look up

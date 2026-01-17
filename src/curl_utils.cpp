@@ -88,5 +88,49 @@ std::string curl_post_json(const std::string& url,
     return response;
 }
 
+std::string curl_get(const std::string& url,
+                     const CurlHeaders& headers,
+                     long* http_code_out) {
+    CurlHandle handle;
+    if (!handle.handle()) {
+        return "ERROR: Failed to initialize curl";
+    }
+
+    std::string response;
+
+    // Set options
+    curl_easy_setopt(handle.handle(), CURLOPT_URL, url.c_str());
+    curl_easy_setopt(handle.handle(), CURLOPT_HTTPHEADER, headers.list());
+    curl_easy_setopt(handle.handle(), CURLOPT_WRITEFUNCTION, curl_write_callback);
+    curl_easy_setopt(handle.handle(), CURLOPT_WRITEDATA, &response);
+    curl_easy_setopt(handle.handle(), CURLOPT_TIMEOUT, 30L);  // 30s timeout for searches
+    curl_easy_setopt(handle.handle(), CURLOPT_FOLLOWLOCATION, 1L);
+
+    // Perform request
+    CURLcode res = curl_easy_perform(handle.handle());
+
+    if (res != CURLE_OK) {
+        std::ostringstream err;
+        err << "ERROR: curl request failed: " << curl_easy_strerror(res);
+        return err.str();
+    }
+
+    // Get HTTP status code
+    long http_code = 0;
+    curl_easy_getinfo(handle.handle(), CURLINFO_RESPONSE_CODE, &http_code);
+
+    if (http_code_out) {
+        *http_code_out = http_code;
+    }
+
+    if (http_code < 200 || http_code >= 300) {
+        std::ostringstream err;
+        err << "ERROR: HTTP " << http_code << " - " << response;
+        return err.str();
+    }
+
+    return response;
+}
+
 } // namespace stps
 } // namespace duckdb

@@ -49,5 +49,11 @@ std::string curl_post_json(const std::string& url,
                            const CurlHeaders& headers,
                            long* http_code_out = nullptr);
 
+// Make HTTP GET request
+// Returns: response body as string, or "ERROR: ..." on failure
+std::string curl_get(const std::string& url,
+                     const CurlHeaders& headers,
+                     long* http_code_out = nullptr);
+
 } // namespace stps
 } // namespace duckdb
