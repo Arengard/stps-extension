@@ -6,7 +6,11 @@
 
 ## Overview
 
-Step-by-step implementation plan for adding web search tool execution to `stps_ask_ai`. Each step includes specific code changes with line numbers and validation steps.
+Step-by-step implementation plan for adding web search tool execution to `stps_ask_ai` and `stps_ask_ai_address`. Each step includes specific code changes with line numbers and validation steps.
+
+**Important:** Since both functions use the same underlying `call_anthropic_api()` function, modifying it in Phase 3 will automatically enable web search for both:
+- `stps_ask_ai()` - General AI queries
+- `stps_ask_ai_address()` - Structured address lookups
 
 ---
 
@@ -597,6 +601,10 @@ SELECT stps_ask_ai('TSLA', 'What is the current stock price?');
 
 SELECT stps_ask_ai('Germany', 'Who is the current chancellor?');
 -- Searches for up-to-date political information
+
+-- Works with address lookups too
+SELECT stps_ask_ai_address('Anthropic PBC');
+-- Searches for current Anthropic address, returns structured data
 ```
 
 **Brave API Key Configuration:**
@@ -629,7 +637,7 @@ SELECT stps_set_brave_api_key('BSA-...');
 
 ### Overview
 
-When configured with a Brave Search API key, `stps_ask_ai` can automatically search the web for current information.
+When configured with a Brave Search API key, both `stps_ask_ai` and `stps_ask_ai_address` can automatically search the web for current information.
 
 ### Setup
 
@@ -660,6 +668,18 @@ SELECT
     company_name,
     stps_ask_ai(company_name, 'Latest quarterly revenue?') as revenue
 FROM companies;
+```
+
+**Address Lookups (Structured Output):**
+```sql
+-- stps_ask_ai_address also benefits from web search
+SELECT
+    company,
+    (stps_ask_ai_address(company)).city,
+    (stps_ask_ai_address(company)).postal_code,
+    (stps_ask_ai_address(company)).street_name
+FROM new_companies
+-- For recently founded companies, Claude will search for current address
 ```
 
 ### Cost Implications
@@ -725,11 +745,32 @@ SELECT stps_ask_ai('Bitcoin', 'Current price?');
 ```
 ✅ Expected: Gracefully falls back to knowledge-based answer
 
-**Test 6: Address Function (No Search)**
+**Test 6: Address Function (Basic)**
 ```sql
 SELECT stps_ask_ai_address('Deutsche Bank AG');
 ```
-✅ Expected: Works as before (no web search for structured output)
+✅ Expected: Returns structured address (may use web search if needed)
+
+**Test 7: Address Function with Current Company**
+```sql
+-- Test with recently founded company not in training data
+SELECT stps_ask_ai_address('Anthropic PBC');
+```
+✅ Expected: Searches web for current address, returns structured data
+
+**Test 8: Address Function Batch Processing**
+```sql
+CREATE TABLE test_companies AS
+SELECT * FROM (VALUES ('Apple Inc'), ('Microsoft Corporation'), ('Tesla Inc')) t(company);
+
+SELECT
+    company,
+    (stps_ask_ai_address(company)).city AS city,
+    (stps_ask_ai_address(company)).postal_code AS postal_code,
+    (stps_ask_ai_address(company)).street_name AS street
+FROM test_companies;
+```
+✅ Expected: Each company address looked up (with web search if needed), returns structured data
 
 ---
 
@@ -738,7 +779,7 @@ SELECT stps_ask_ai_address('Deutsche Bank AG');
 Before marking complete:
 
 - [ ] All code compiles without warnings
-- [ ] All 6 test cases pass
+- [ ] All 8 test cases pass
 - [ ] Documentation updated (README + AI_FUNCTIONS_GUIDE)
 - [ ] Commit messages follow format
 - [ ] Design document matches implementation
