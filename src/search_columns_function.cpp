@@ -168,14 +168,22 @@ static void SearchColumnsFunction(ClientContext &context, TableFunctionInput &da
 }
 
 void RegisterSearchColumnsFunction(ExtensionLoader& loader) {
-    TableFunction search_columns_func("stps_search_columns", {LogicalType::VARCHAR, LogicalType::VARCHAR},
-                                      SearchColumnsFunction, SearchColumnsBind, SearchColumnsInit);
+    // Create function set to support multiple signatures
+    TableFunctionSet search_columns_set("stps_search_columns");
 
-    // Optional third parameter for case sensitivity
-    search_columns_func.arguments.push_back(LogicalType::BOOLEAN);
+    // Version 1: Two parameters (table_name, pattern) - case_sensitive defaults to false
+    search_columns_set.AddFunction(TableFunction(
+        {LogicalType::VARCHAR, LogicalType::VARCHAR},
+        SearchColumnsFunction, SearchColumnsBind, SearchColumnsInit
+    ));
 
+    // Version 2: Three parameters (table_name, pattern, case_sensitive)
+    search_columns_set.AddFunction(TableFunction(
+        {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::BOOLEAN},
+        SearchColumnsFunction, SearchColumnsBind, SearchColumnsInit
+    ));
 
-    loader.RegisterFunction(search_columns_func);
+    loader.RegisterFunction(search_columns_set);
 }
 
 } // namespace stps

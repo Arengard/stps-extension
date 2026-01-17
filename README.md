@@ -603,6 +603,34 @@ SELECT stps_lambda([1, 2, 3], 'x -> x * 2') AS doubled;
 -- Result: [2, 4, 6]
 ```
 
+#### `stps_search_columns(table_name VARCHAR, pattern VARCHAR[, case_sensitive BOOLEAN]) → TABLE`
+Search for columns in a table by name pattern using SQL LIKE wildcards.
+```sql
+-- Find all columns containing 'date' (case-insensitive)
+SELECT * FROM stps_search_columns('my_table', '%date%');
+-- Returns: column_name, column_index
+
+-- Find columns starting with 'customer_' (case-sensitive)
+SELECT * FROM stps_search_columns('orders', 'customer_%', true);
+
+-- Find columns ending with '_id'
+SELECT * FROM stps_search_columns('products', '%_id');
+
+-- Use results to build dynamic queries
+SELECT column_name
+FROM stps_search_columns('sales_data', '%_amount%')
+ORDER BY column_index;
+```
+
+**Parameters:**
+- `table_name` - Table to search
+- `pattern` - SQL LIKE pattern (% = any chars, _ = single char)
+- `case_sensitive` - Optional: true for case-sensitive search (default: false)
+
+**Returns:** Table with columns:
+- `column_name` - Name of matching column
+- `column_index` - 1-based position in table
+
 ---
 
 ## 🚀 Common Use Cases
