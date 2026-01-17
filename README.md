@@ -300,7 +300,7 @@ FROM companies;
 **Parameters:**
 - `context` - Background data or information
 - `prompt` - Your question or instruction
-- `model` - Optional: 'claude-3-5-sonnet-20241022' (default), 'claude-3-5-haiku-20241022', 'claude-opus-4-5-20251101'
+- `model` - Optional: 'claude-sonnet-4-5-20250929' (default), 'claude-3-7-sonnet-20250219', 'claude-opus-4-5-20251101'
 - `max_tokens` - Optional: Max response length (default: 1000)
 
 **Common Use Cases:**
@@ -312,13 +312,13 @@ SELECT stps_ask_ai(product_name, 'Is this a food or drink item? Answer with one 
 SELECT stps_ask_ai(long_description, 'Summarize in one sentence (max 15 words).');
 
 -- Sentiment Analysis
-SELECT stps_ask_ai(review_text, 'Sentiment: POSITIVE, NEGATIVE, or NEUTRAL?', 'claude-3-5-haiku-20241022', 10);
+SELECT stps_ask_ai(review_text, 'Sentiment: POSITIVE, NEGATIVE, or NEUTRAL?', 'claude-3-7-sonnet-20250219', 10);
 
 -- Data Validation
 SELECT stps_ask_ai(email, 'Is this email format valid? YES or NO only.');
 
 -- Translation
-SELECT stps_ask_ai(text_de, 'Translate to English:', 'claude-3-5-sonnet-20241022', 500);
+SELECT stps_ask_ai(text_de, 'Translate to English:', 'claude-sonnet-4-5-20250929', 500);
 
 -- Using Claude Opus for complex analysis
 SELECT stps_ask_ai(
@@ -359,7 +359,7 @@ SELECT stps_set_api_key('sk-ant-...');
 - `curl` installed
 - Anthropic account with credits
 
-**Cost Example:** Processing 1,000 rows with claude-3-5-sonnet-20241022 ≈ $0.34
+**Cost Example:** Processing 1,000 rows with claude-sonnet-4-5-20250929 ≈ $0.34
 
 ---
 

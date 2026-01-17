@@ -54,8 +54,8 @@ The extension supports the following Anthropic Claude models:
 
 | Model | Use Case | Speed | Cost | Context Window |
 |-------|----------|-------|------|----------------|
-| `claude-3-5-sonnet-20241022` | **Default** - Best balance of speed, cost, and capability | Fast | Medium | 200K tokens |
-| `claude-3-5-haiku-20241022` | Simple tasks - Fast and cost-effective | Fastest | Lowest | 200K tokens |
+| `claude-sonnet-4-5-20250929` | **Default** - Best balance of speed, cost, and capability | Fast | Medium | 200K tokens |
+| `claude-3-7-sonnet-20250219` | Simple tasks - Fast and cost-effective | Fastest | Lowest | 200K tokens |
 | `claude-opus-4-5-20251101` | Complex reasoning - Most capable | Slower | Highest | 200K tokens |
 
 **Model Selection Guidelines:**
@@ -73,7 +73,7 @@ Get structured address data using AI - automatically formats response into organ
 
 **Parameters:**
 - `company_name` (VARCHAR, required): Company name or location to look up
-- `model` (VARCHAR, optional): Claude model to use (default: `claude-3-5-sonnet-20241022`)
+- `model` (VARCHAR, optional): Claude model to use (default: `claude-sonnet-4-5-20250929`)
 
 **Returns:** STRUCT with fields:
 - `city` (VARCHAR): City name
@@ -110,7 +110,7 @@ Query Anthropic's Claude with context and a prompt - returns free-form text resp
 **Parameters:**
 - `context` (VARCHAR, required): Background information or data to provide context
 - `prompt` (VARCHAR, required): The question or instruction for Claude
-- `model` (VARCHAR, optional): Claude model to use (default: `claude-3-5-sonnet-20241022`)
+- `model` (VARCHAR, optional): Claude model to use (default: `claude-sonnet-4-5-20250929`)
 - `max_tokens` (INTEGER, optional): Maximum response length (default: 1000)
 
 **Returns:** VARCHAR - The AI-generated response
@@ -208,7 +208,7 @@ SELECT
     stps_ask_ai(
         description,
         'Summarize this product description in one sentence (max 15 words).',
-        'claude-3-5-sonnet-20241022',
+        'claude-sonnet-4-5-20250929',
         50  -- Shorter response
     ) AS summary
 FROM products
@@ -239,7 +239,7 @@ SELECT
     stps_ask_ai(
         feedback_text,
         'Analyze the sentiment of this feedback. Respond with: POSITIVE, NEGATIVE, or NEUTRAL.',
-        'claude-3-5-sonnet-20241022',
+        'claude-sonnet-4-5-20250929',
         10
     ) AS sentiment
 FROM customer_feedback
@@ -256,7 +256,7 @@ SELECT
     stps_ask_ai(
         description_de,
         'Translate this German text to English. Provide only the translation.',
-        'claude-3-5-sonnet-20241022',
+        'claude-sonnet-4-5-20250929',
         500
     ) AS description_en
 FROM products
@@ -347,8 +347,8 @@ FROM million_row_table;
 
 **✅ Good: Use appropriate model**
 ```sql
--- Use claude-3-5-sonnet-20241022 for simple tasks
-SELECT stps_ask_ai(name, 'Categorize: food or drink?', 'claude-3-5-sonnet-20241022', 10);
+-- Use claude-sonnet-4-5-20250929 for simple tasks
+SELECT stps_ask_ai(name, 'Categorize: food or drink?', 'claude-sonnet-4-5-20250929', 10);
 ```
 
 **❌ Bad: Use Claude Opus unnecessarily**
@@ -408,13 +408,13 @@ SELECT stps_ask_ai(
 
 | Model | Input (per 1K tokens) | Output (per 1K tokens) |
 |-------|----------------------|------------------------|
-| claude-3-5-sonnet-20241022 | $0.0005 | $0.0015 |
+| claude-sonnet-4-5-20250929 | $0.0005 | $0.0015 |
 | claude-opus-4-5-20251101 | $0.03 | $0.06 |
 | claude-opus-4-5-20251101-turbo | $0.01 | $0.03 |
 
 ### Cost Example
 
-Processing 1,000 rows with claude-3-5-sonnet-20241022:
+Processing 1,000 rows with claude-sonnet-4-5-20250929:
 - Average context: 100 tokens
 - Average prompt: 20 tokens
 - Average response: 50 tokens
@@ -423,7 +423,7 @@ Processing 1,000 rows with claude-3-5-sonnet-20241022:
 
 ### Cost Optimization Tips
 
-1. **Use claude-3-5-sonnet-20241022** for most tasks (20-60x cheaper than Claude Opus)
+1. **Use claude-sonnet-4-5-20250929** for most tasks (20-60x cheaper than Claude Opus)
 2. **Limit `max_tokens`** to only what you need
 3. **Process in batches** and cache results
 4. **Keep context concise** - extract only relevant data
@@ -498,7 +498,7 @@ Common errors and solutions:
 |--------------|----------|
 | `insufficient_quota` | Add credits to Anthropic account |
 | `invalid_api_key` | Check API key is correct |
-| `model_not_found` | Use valid model name (claude-3-5-sonnet-20241022, claude-opus-4-5-20251101) |
+| `model_not_found` | Use valid model name (claude-sonnet-4-5-20250929, claude-opus-4-5-20251101) |
 | `context_length_exceeded` | Reduce context size or max_tokens |
 
 ## Requirements

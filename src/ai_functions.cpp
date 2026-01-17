@@ -27,7 +27,7 @@ namespace stps {
 
 static std::mutex ai_config_mutex;
 static std::string anthropic_api_key;
-static std::string anthropic_model = "claude-3-5-sonnet-20241022";  // Default model
+static std::string anthropic_model = "claude-sonnet-4-5-20250929";  // Default model (Claude Sonnet 4.5)
 
 void SetAnthropicApiKey(const std::string& key) {
     std::lock_guard<std::mutex> lock(ai_config_mutex);
