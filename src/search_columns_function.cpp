@@ -19,7 +19,10 @@ struct SearchColumnsBindData : public TableFunctionData {
 };
 
 struct SearchColumnsGlobalState : public GlobalTableFunctionState {
-    idx_t current_idx = 0;
+    unique_ptr<QueryResult> result;  // Result from executing dynamic SQL
+    unique_ptr<DataChunk> current_chunk;  // Current chunk being processed
+    idx_t chunk_offset = 0;  // Offset within current chunk
+    bool query_executed = false;  // Track if query has been run
 };
 
 static unique_ptr<FunctionData> SearchColumnsBind(ClientContext &context, TableFunctionBindInput &input,
