@@ -677,27 +677,57 @@ static void StpsAskAIAddressFunction(DataChunk &args, ExpressionState &state, Ve
         string_t company_name_str = FlatVector::GetData<string_t>(company_name_vec)[i];
         std::string company_name = company_name_str.GetString();
 
-        // Craft a specific prompt for address extraction with JSON output
-        std::string prompt = "Find the current registered business address (Impressum/legal address) for this company.\n"
-                           "\n"
-                           "INSTRUCTIONS:\n"
-                           "- You MUST use web search to find the most current, accurate business address\n"
-                           "- Search for official business registry information, company websites, or business directories\n"
-                           "- Look for the legal/registered address (Impressum), not customer service addresses\n"
-                           "- Extract the complete address with all components\n"
-                           "\n"
-                           "Company: " + company_name + "\n"
-                           "\n"
-                           "Respond ONLY with a JSON object in this exact format (no markdown, no code blocks, no explanatory text):\n"
-                           "{\"city\":\"<city>\",\"postal_code\":\"<code>\",\"street_name\":\"<street>\",\"street_nr\":\"<number>\"}\n"
-                           "\n"
-                           "Example: {\"city\":\"Karlsruhe\",\"postal_code\":\"76135\",\"street_name\":\"Brauerstraße\",\"street_nr\":\"12\"}\n"
-                           "\n"
-                           "If a field cannot be determined, use an empty string for that field only.";
+        // Check if web search is available
+        bool tools_enabled = !GetBraveApiKey().empty();
 
-        std::string system_msg = "You are a business address lookup assistant with web search capabilities. "
-                                 "When searching for company addresses, you MUST use the web_search tool to find current, accurate information. "
-                                 "Always search official sources like business registries, company websites, and verified business directories.";
+        std::string prompt, system_msg;
+
+        if (tools_enabled) {
+            // Web search enabled - aggressive search prompt
+            prompt = "Find the current registered business address (Impressum/legal address) for this company.\n"
+                     "\n"
+                     "INSTRUCTIONS:\n"
+                     "- You MUST use web search to find the most current, accurate business address\n"
+                     "- Search for official business registry information, company websites, or business directories\n"
+                     "- Look for the legal/registered address (Impressum), not customer service addresses\n"
+                     "- Extract the complete address with all components\n"
+                     "\n"
+                     "Company: " + company_name + "\n"
+                     "\n"
+                     "Respond ONLY with a JSON object in this exact format (no markdown, no code blocks, no explanatory text):\n"
+                     "{\"city\":\"<city>\",\"postal_code\":\"<code>\",\"street_name\":\"<street>\",\"street_nr\":\"<number>\"}\n"
+                     "\n"
+                     "Example: {\"city\":\"Karlsruhe\",\"postal_code\":\"76135\",\"street_name\":\"Brauerstraße\",\"street_nr\":\"12\"}\n"
+                     "\n"
+                     "If a field cannot be determined, use an empty string for that field only.";
+
+            system_msg = "You are a business address lookup assistant with web search capabilities. "
+                         "When searching for company addresses, you MUST use the web_search tool to find current, accurate information. "
+                         "Always search official sources like business registries, company websites, and verified business directories.";
+        } else {
+            // Fallback to knowledge-based lookup
+            prompt = "Find the registered business address (Impressum/legal address) for this company based on your knowledge.\n"
+                     "\n"
+                     "INSTRUCTIONS:\n"
+                     "- Use information from your training data about official business addresses\n"
+                     "- Focus on registered/legal addresses (Impressum), not customer service addresses\n"
+                     "- Only provide information you are confident about\n"
+                     "- Extract the complete address with all components\n"
+                     "\n"
+                     "Company: " + company_name + "\n"
+                     "\n"
+                     "Respond ONLY with a JSON object in this exact format (no markdown, no code blocks, no explanatory text):\n"
+                     "{\"city\":\"<city>\",\"postal_code\":\"<code>\",\"street_name\":\"<street>\",\"street_nr\":\"<number>\"}\n"
+                     "\n"
+                     "Example: {\"city\":\"Karlsruhe\",\"postal_code\":\"76135\",\"street_name\":\"Brauerstraße\",\"street_nr\":\"12\"}\n"
+                     "\n"
+                     "If a field cannot be determined, use an empty string for that field only.";
+
+            system_msg = "You are a business address lookup assistant. "
+                         "Use your training data to provide accurate registered business addresses. "
+                         "Only provide information you are confident about from official sources in your training data.";
+        }
+
         std::string response = call_anthropic_api(company_name, prompt, model, 500, system_msg);
 
         // Parse JSON response
