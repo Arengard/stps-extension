@@ -86,12 +86,15 @@ static unique_ptr<FunctionData> SearchColumnsBind(ClientContext &context, TableF
 
     result->generated_sql = sql;
 
-    // Define output columns
-    return_types.push_back(LogicalType::VARCHAR);
-    names.push_back("column_name");
+    // Define output schema: original columns + matched_columns array
+    for (idx_t i = 0; i < result->original_column_names.size(); i++) {
+        return_types.push_back(result->original_column_types[i]);
+        names.push_back(result->original_column_names[i]);
+    }
 
-    return_types.push_back(LogicalType::INTEGER);
-    names.push_back("column_index");
+    // Add matched_columns as VARCHAR[] (list of strings)
+    return_types.push_back(LogicalType::LIST(LogicalType::VARCHAR));
+    names.push_back("matched_columns");
 
     return std::move(result);
 }
