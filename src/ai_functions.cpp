@@ -382,7 +382,8 @@ static std::string execute_brave_search(const std::string& query) {
 // ============================================================================
 
 static std::string call_anthropic_api(const std::string& context, const std::string& prompt,
-                                      const std::string& model, int max_tokens) {
+                                      const std::string& model, int max_tokens,
+                                      const std::string& custom_system_message = "") {
     std::string api_key = GetAnthropicApiKey();
 
     if (api_key.empty()) {
@@ -393,9 +394,14 @@ static std::string call_anthropic_api(const std::string& context, const std::str
     bool tools_enabled = !GetBraveApiKey().empty();
 
     // Build JSON request payload for Anthropic Messages API
-    std::string system_message = tools_enabled
-        ? "You are a helpful assistant with access to web search. When asked about current information, real-time data, recent events, stock prices, or anything that requires up-to-date information, you MUST use the web_search tool. Always search first before saying you don't have access to current data."
-        : "You are a helpful assistant.";
+    std::string system_message;
+    if (!custom_system_message.empty()) {
+        system_message = custom_system_message;
+    } else {
+        system_message = tools_enabled
+            ? "You are a helpful assistant with access to web search. When asked about current information, real-time data, recent events, stock prices, or anything that requires up-to-date information, you MUST use the web_search tool. Always search first before saying you don't have access to current data."
+            : "You are a helpful assistant.";
+    }
     std::string user_message = "Context: " + escape_json_string(context) +
                               "\\n\\nQuestion: " + escape_json_string(prompt);
 
