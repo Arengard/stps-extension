@@ -132,122 +132,6 @@ std::string GetBraveApiKey() {
     return "";
 }
 
-static std::string url_encode(const std::string& str) {
-    std::ostringstream escaped;
-    escaped.fill('0');
-    escaped << std::hex;
-
-    for (char c : str) {
-        // Keep alphanumeric and safe chars
-        if (isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') {
-            escaped << c;
-        } else if (c == ' ') {
-            escaped << '+';
-        } else {
-            escaped << '%' << std::setw(2) << int((unsigned char)c);
-        }
-    }
-
-    return escaped.str();
-}
-
-static std::string format_search_results(const std::string& json) {
-    std::ostringstream formatted;
-    formatted << "Search Results:\n\n";
-
-    // Simple JSON parsing for Brave Search results
-    // Look for "web" -> "results" array
-
-    size_t results_start = json.find("\"results\"");
-    if (results_start == std::string::npos) {
-        return "No search results found.";
-    }
-
-    // Find the array start
-    size_t array_start = json.find("[", results_start);
-    if (array_start == std::string::npos) {
-        return "Error parsing search results.";
-    }
-
-    int result_count = 0;
-    size_t pos = array_start + 1;
-
-    // Extract up to 5 results
-    while (result_count < 5 && pos < json.length()) {
-        // Find next result object
-        size_t obj_start = json.find("{", pos);
-        if (obj_start == std::string::npos || obj_start > json.find("]", pos)) {
-            break;
-        }
-
-        // Extract title
-        std::string title = extract_json_content(json.substr(obj_start, 1000), "title");
-        // Extract url
-        std::string url = extract_json_content(json.substr(obj_start, 1000), "url");
-        // Extract description
-        std::string description = extract_json_content(json.substr(obj_start, 1000), "description");
-
-        if (!title.empty() && !url.empty()) {
-            result_count++;
-            formatted << result_count << ". " << title << "\n";
-            formatted << "   " << url << "\n";
-
-            if (!description.empty()) {
-                // Truncate description to 200 chars
-                if (description.length() > 200) {
-                    description = description.substr(0, 197) + "...";
-                }
-                formatted << "   " << description << "\n";
-            }
-            formatted << "\n";
-        }
-
-        // Move to next result
-        pos = json.find("}", obj_start) + 1;
-    }
-
-    if (result_count == 0) {
-        return "No search results found.";
-    }
-
-    return formatted.str();
-}
-
-static std::string execute_brave_search(const std::string& query) {
-    std::string api_key = GetBraveApiKey();
-
-    if (api_key.empty()) {
-        return "ERROR: Brave API key not configured";
-    }
-
-    // URL encode the query
-    std::string encoded_query = url_encode(query);
-
-    // Build Brave Search API URL
-    std::string url = "https://api.search.brave.com/res/v1/web/search?q=" + encoded_query;
-
-    // Build headers
-    CurlHeaders headers;
-    headers.append("Accept: application/json");
-    headers.append("X-Subscription-Token: " + api_key);
-
-    // Make GET request
-    long http_code = 0;
-    std::string response = curl_get(url, headers, &http_code);
-
-    // Check for errors
-    if (response.find("ERROR:") == 0) {
-        return "Search failed: " + response;
-    }
-
-    if (http_code != 200) {
-        return "Search API returned error (HTTP " + std::to_string(http_code) + ")";
-    }
-
-    // Format the results for Claude
-    return format_search_results(response);
-}
-
 // ============================================================================
 // Helper functions
 // ============================================================================
@@ -366,6 +250,131 @@ static std::string extract_json_content(const std::string& json, const std::stri
     }
 
     return result;
+}
+
+// ============================================================================
+// Web Search Support
+// ============================================================================
+
+// URL-encode a string for use in HTTP GET parameters
+static std::string url_encode(const std::string& value) {
+    std::ostringstream escaped;
+    escaped.fill('0');
+    escaped << std::hex;
+
+    for (char c : value) {
+        // Keep alphanumeric and other safe characters
+        if (isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') {
+            escaped << c;
+        } else {
+            // Percent-encode everything else
+            escaped << '%' << std::setw(2) << int((unsigned char)c);
+        }
+    }
+
+    return escaped.str();
+}
+
+// Format Brave Search API results into a readable string
+static std::string format_search_results(const std::string& json_response) {
+    std::ostringstream formatted;
+
+    // Extract query from response (optional, for context)
+    std::string query = extract_json_content(json_response, "query");
+
+    // Parse web results array
+    // Look for "web":{"results":[...]} pattern
+    size_t web_pos = json_response.find("\"web\"");
+    if (web_pos == std::string::npos) {
+        return "No search results found.";
+    }
+
+    size_t results_pos = json_response.find("\"results\"", web_pos);
+    if (results_pos == std::string::npos) {
+        return "No search results found.";
+    }
+
+    // Find the opening bracket of results array
+    size_t array_start = json_response.find('[', results_pos);
+    if (array_start == std::string::npos) {
+        return "No search results found.";
+    }
+
+    // Simple parsing: find each result object
+    formatted << "Search Results:\n\n";
+
+    size_t pos = array_start + 1;
+    int result_num = 1;
+
+    while (pos < json_response.length() && result_num <= 5) {
+        // Find next result object
+        size_t obj_start = json_response.find('{', pos);
+        if (obj_start == std::string::npos) break;
+
+        size_t obj_end = json_response.find('}', obj_start);
+        if (obj_end == std::string::npos) break;
+
+        std::string result_obj = json_response.substr(obj_start, obj_end - obj_start + 1);
+
+        // Extract title, url, description
+        std::string title = extract_json_content(result_obj, "title");
+        std::string url = extract_json_content(result_obj, "url");
+        std::string description = extract_json_content(result_obj, "description");
+
+        if (!title.empty() && !url.empty()) {
+            formatted << result_num << ". " << title << "\n";
+            formatted << "   URL: " << url << "\n";
+            if (!description.empty()) {
+                formatted << "   " << description << "\n";
+            }
+            formatted << "\n";
+            result_num++;
+        }
+
+        pos = obj_end + 1;
+
+        // Break if we hit the end of the array
+        if (json_response.find(',', pos) == std::string::npos ||
+            json_response.find(']', pos) < json_response.find('{', pos)) {
+            break;
+        }
+    }
+
+    if (result_num == 1) {
+        return "No search results found.";
+    }
+
+    return formatted.str();
+}
+
+// Execute a Brave Search API query
+static std::string execute_brave_search(const std::string& query) {
+    std::string api_key = GetBraveApiKey();
+
+    if (api_key.empty()) {
+        return "ERROR: Brave API key not configured. Cannot perform web search.";
+    }
+
+    // Build Brave Search API URL
+    std::string encoded_query = url_encode(query);
+    std::string url = "https://api.search.brave.com/res/v1/web/search?q=" + encoded_query + "&count=5";
+
+    // Set up headers with API key
+    CurlHeaders headers;
+    headers.append("Accept: application/json");
+    headers.append("X-Subscription-Token: " + api_key);
+
+    // Make the request
+    long http_code = 0;
+    std::string response = curl_get(url, headers, &http_code);
+
+    // Check for errors
+    if (response.find("ERROR:") == 0) {
+        return "Search failed: " + response;
+    }
+
+    // Format and return results
+    return format_search_results(response);
 }
 
 // ============================================================================
