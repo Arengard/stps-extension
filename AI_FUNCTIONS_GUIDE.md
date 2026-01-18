@@ -170,6 +170,22 @@ FROM companies
 WHERE address_missing = true;
 ```
 
+#### How It Works
+
+This function uses a two-step approach for reliability:
+
+1. **Search Step:** Retrieves address information using web search (if Brave API key configured) or training data. Claude responds naturally with explanatory text and context.
+
+2. **Parsing Step:** Extracts structured components (city, postal_code, street_name, street_nr) from the natural language result into JSON format.
+
+**Why Two Steps?**
+
+The two-step approach works with Claude's natural behavior instead of constraining it with strict "JSON-only" requirements. When Claude uses the web_search tool, it naturally includes explanatory text like "Based on my web search, I found...". The first step allows this natural behavior, then the second step cleanly extracts the structured data.
+
+**API Calls:** 2 per lookup (search + parse)
+**Latency:** Typically 3-5 seconds per address
+**Cost:** ~$0.002 per lookup with Claude Sonnet 4.5
+
 **Web Search Behavior:**
 This function is equivalent to:
 ```sql
