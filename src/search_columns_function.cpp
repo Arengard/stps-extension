@@ -29,37 +29,32 @@ static unique_ptr<FunctionData> SearchColumnsBind(ClientContext &context, TableF
                                                    vector<LogicalType> &return_types, vector<string> &names) {
     auto result = make_uniq<SearchColumnsBindData>();
 
-    // Get parameters
+    // Get parameters - only 2 parameters now (removed case_sensitive)
+    if (input.inputs.size() < 2) {
+        throw BinderException("stps_search_columns requires 2 arguments: table_name, pattern");
+    }
+
     result->table_name = input.inputs[0].GetValue<string>();
     result->search_pattern = input.inputs[1].GetValue<string>();
 
-    if (input.inputs.size() >= 3) {
-        result->case_sensitive = input.inputs[2].GetValue<bool>();
+    // Create connection to query table schema
+    Connection conn(context.db->GetDatabase(context));
+
+    // Get table schema (column names and types) using LIMIT 0
+    string schema_query = "SELECT * FROM " + result->table_name + " LIMIT 0";
+    auto schema_result = conn.Query(schema_query);
+
+    if (schema_result->HasError()) {
+        throw BinderException("Table '%s' not found or inaccessible: %s",
+                            result->table_name.c_str(), schema_result->GetError().c_str());
     }
 
-    // Get table columns from catalog
-    auto &catalog = Catalog::GetCatalog(context, INVALID_CATALOG);
-    auto &schema = catalog.GetSchema(context, DEFAULT_SCHEMA);
-    auto transaction = CatalogTransaction::GetSystemCatalogTransaction(context);
+    // Store original column names and types
+    result->original_column_names = schema_result->names;
+    result->original_column_types = schema_result->types;
 
-    try {
-        auto table_entry = schema.GetEntry(transaction, CatalogType::TABLE_ENTRY, result->table_name);
-        if (table_entry && table_entry->type == CatalogType::TABLE_ENTRY) {
-            auto &table = table_entry->Cast<TableCatalogEntry>();
-            auto &columns = table.GetColumns();
-
-            // Find matching columns
-            for (auto &col : columns.Logical()) {
-                if (column_matches_pattern(col.Name(), result->search_pattern, result->case_sensitive)) {
-                    result->matching_columns.push_back(col.Name());
-                }
-            }
-        } else {
-            throw BinderException("Table '%s' not found", result->table_name); // unify error handling
-        }
-    } catch (std::exception &e) {
-        // Table not found or error accessing it
-        throw BinderException("Table '%s' not found or inaccessible: %s", result->table_name, e.what());
+    if (result->original_column_names.empty()) {
+        throw BinderException("Table '%s' has no columns", result->table_name.c_str());
     }
 
     // Define output columns
