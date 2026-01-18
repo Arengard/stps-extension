@@ -228,24 +228,28 @@ static std::string extract_json_content(const std::string& json, const std::stri
     std::string result = cleaned.substr(pos, end - pos);
 
     // Unescape basic sequences
+    // Process \\ first to avoid double-processing
     size_t esc_pos = 0;
-    while ((esc_pos = result.find("\\n", esc_pos)) != std::string::npos) {
-        result.replace(esc_pos, 2, "\n");
+    while ((esc_pos = result.find("\\\\", esc_pos)) != std::string::npos) {
+        result.replace(esc_pos, 2, "\\");
         esc_pos += 1;
     }
-    esc_pos = 0;
-    while ((esc_pos = result.find("\\t", esc_pos)) != std::string::npos) {
-        result.replace(esc_pos, 2, "\t");
-        esc_pos += 1;
-    }
+    // Then \" to avoid conflicts
     esc_pos = 0;
     while ((esc_pos = result.find("\\\"", esc_pos)) != std::string::npos) {
         result.replace(esc_pos, 2, "\"");
         esc_pos += 1;
     }
+    // Then \n
     esc_pos = 0;
-    while ((esc_pos = result.find("\\\\", esc_pos)) != std::string::npos) {
-        result.replace(esc_pos, 2, "\\");
+    while ((esc_pos = result.find("\\n", esc_pos)) != std::string::npos) {
+        result.replace(esc_pos, 2, "\n");
+        esc_pos += 1;
+    }
+    // Finally \t
+    esc_pos = 0;
+    while ((esc_pos = result.find("\\t", esc_pos)) != std::string::npos) {
+        result.replace(esc_pos, 2, "\t");
         esc_pos += 1;
     }
 
