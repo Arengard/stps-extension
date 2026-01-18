@@ -184,7 +184,7 @@ The two-step approach works with Claude's natural behavior instead of constraini
 
 **API Calls:** 2 per lookup (search + parse)
 **Latency:** Typically 3-5 seconds per address
-**Cost:** ~$0.002 per lookup with Claude Sonnet 4.5
+**Cost:** ~$0.002 per lookup with Claude Sonnet 4.5 (includes 2 Claude API calls + 1 Brave search)
 
 **Web Search Behavior:**
 This function is equivalent to:
@@ -192,8 +192,6 @@ This function is equivalent to:
 SELECT stps_ask_ai(company_name, 'make a websearch and look for business address')
 ```
 ...but with structured JSON output instead of natural language text.
-
-**Cost:** When web search is used, this function makes 2 Claude API calls + 1 Brave search per company.
 
 **Performance Tip:** For batch processing, consider caching results to avoid duplicate lookups.
 
