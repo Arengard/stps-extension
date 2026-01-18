@@ -1,11 +1,8 @@
 #include "duckdb.hpp"
 #include "duckdb/function/table_function.hpp"
 #include "duckdb/parser/parsed_data/create_table_function_info.hpp"
-#include "duckdb/catalog/catalog.hpp"
-#include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
-#include "duckdb/catalog/catalog_transaction.hpp"
-#include <algorithm>
-#include <cctype>
+#include "duckdb/main/client_context.hpp"
+#include "duckdb/main/connection.hpp"
 
 namespace duckdb {
 namespace stps {
