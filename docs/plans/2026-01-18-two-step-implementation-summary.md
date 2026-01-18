@@ -40,6 +40,7 @@ Replaced single-step strict prompt with two-step approach:
 - Removed custom system message for address function
 - Added Step 1: natural search with conditional prompt (web search vs training data)
 - Added Step 2: parse natural language into JSON
+- Applied security fix: escape address_text to prevent prompt injection
 - Maintained existing error handling and JSON parsing logic
 
 **2. AI_FUNCTIONS_GUIDE.md**
@@ -116,7 +117,7 @@ Implementation is successful when:
 ### Cost
 - **Before:** 1-2 API calls per lookup
 - **After:** Always 2 API calls per lookup
-- **Increase:** ~$0.001 per lookup (negligible)
+- **Increase:** ~$0.001 per lookup (negligible, from single call to double call)
 
 ### Latency
 - **Before:** 2-4 seconds (when working)
@@ -133,10 +134,12 @@ Implementation is successful when:
 ## Commits
 
 1. `feat: implement two-step approach for stps_ask_ai_address`
-2. `docs: document two-step approach in stps_ask_ai_address`
-3. `docs: update README with two-step address lookup details`
-4. `docs: update test suite with two-step behavior notes`
-5. `docs: add implementation summary`
+2. `fix: escape address_text in Step 2 to prevent prompt injection`
+3. `docs: document two-step approach in stps_ask_ai_address`
+4. `docs: consolidate duplicate cost information in AI_FUNCTIONS_GUIDE`
+5. `docs: update README with two-step address lookup details`
+6. `docs: update test suite with two-step behavior notes`
+7. `docs: add implementation summary`
 
 ---
 
