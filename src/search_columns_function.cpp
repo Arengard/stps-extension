@@ -109,24 +109,68 @@ static void SearchColumnsFunction(ClientContext &context, TableFunctionInput &da
     auto &bind_data = data_p.bind_data->Cast<SearchColumnsBindData>();
     auto &state = data_p.global_state->Cast<SearchColumnsGlobalState>();
 
+    // Execute query on first call
+    if (!state.query_executed) {
+        Connection conn(context.db->GetDatabase(context));
+
+        // Create prepared statement with parameters
+        auto prepared = conn.Prepare(bind_data.generated_sql);
+        if (prepared->HasError()) {
+            throw InvalidInputException("Failed to prepare search query: %s", prepared->GetError().c_str());
+        }
+
+        // Bind pattern parameters
+        vector<Value> params;
+        // Add pattern for each CASE statement in SELECT
+        for (idx_t i = 0; i < bind_data.original_column_names.size(); i++) {
+            params.push_back(Value(bind_data.search_pattern));
+        }
+        // Add pattern for each OR clause in WHERE
+        for (idx_t i = 0; i < bind_data.original_column_names.size(); i++) {
+            params.push_back(Value(bind_data.search_pattern));
+        }
+
+        state.result = prepared->Execute(params);
+
+        if (state.result->HasError()) {
+            throw InvalidInputException("Search query failed: %s", state.result->GetError().c_str());
+        }
+
+        state.query_executed = true;
+    }
+
+    // Fetch next chunk if needed
+    if (!state.current_chunk || state.chunk_offset >= state.current_chunk->size()) {
+        state.current_chunk = state.result->Fetch();
+        state.chunk_offset = 0;
+
+        // No more data
+        if (!state.current_chunk || state.current_chunk->size() == 0) {
+            output.SetCardinality(0);
+            return;
+        }
+    }
+
+    // Copy data from current chunk to output
     idx_t count = 0;
-    idx_t max_count = STANDARD_VECTOR_SIZE;
+    idx_t max_count = std::min(STANDARD_VECTOR_SIZE, state.current_chunk->size() - state.chunk_offset);
 
-    while (state.current_idx < bind_data.matching_columns.size() && count < max_count) {
-        auto &col_name = bind_data.matching_columns[state.current_idx];
+    for (idx_t i = 0; i < max_count; i++) {
+        idx_t source_row = state.chunk_offset + i;
 
-        // Set column name
-        auto col_name_data = FlatVector::GetData<string_t>(output.data[0]);
-        col_name_data[count] = StringVector::AddString(output.data[0], col_name);
+        // Copy all columns (including matched_columns from result)
+        for (idx_t col_idx = 0; col_idx < output.ColumnCount(); col_idx++) {
+            auto &source_vector = state.current_chunk->data[col_idx];
+            auto &dest_vector = output.data[col_idx];
 
-        // Set column index (1-based for SQL convention)
-        auto col_idx_data = FlatVector::GetData<int32_t>(output.data[1]);
-        col_idx_data[count] = static_cast<int32_t>(state.current_idx + 1);
+            // Copy value from source to destination
+            VectorOperations::Copy(source_vector, dest_vector, source_row + 1, source_row, i);
+        }
 
-        state.current_idx++;
         count++;
     }
 
+    state.chunk_offset += count;
     output.SetCardinality(count);
 }
 
