@@ -100,7 +100,9 @@ static unique_ptr<FunctionData> SearchColumnsBind(ClientContext &context, TableF
 }
 
 static unique_ptr<GlobalTableFunctionState> SearchColumnsInit(ClientContext &context, TableFunctionInitInput &input) {
-    return make_uniq<SearchColumnsGlobalState>();
+    auto state = make_uniq<SearchColumnsGlobalState>();
+    state->query_executed = false;
+    return std::move(state);
 }
 
 static void SearchColumnsFunction(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
