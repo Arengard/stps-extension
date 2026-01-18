@@ -271,10 +271,16 @@ WHERE address_missing = true;
 ```
 
 **How it works:**
-- With Brave API key: Automatically searches business registries and official sources
+- Makes 2 Claude API calls per lookup:
+  1. Search for address (with web search if Brave key configured)
+  2. Parse natural language into structured format
+- With Brave API key: Searches business registries and official sources
 - Without Brave API key: Uses Claude's knowledge (may be outdated)
 - Returns structured data ready for database storage
 - NULL for fields that cannot be determined
+
+**Cost:** ~$0.002 per lookup (2 API calls)
+**Latency:** 3-5 seconds per address
 
 ---
 
