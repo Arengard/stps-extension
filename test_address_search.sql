@@ -9,6 +9,21 @@
 -- Run this in DuckDB after configuring API keys
 -- ============================================================================
 
+-- ============================================================================
+-- IMPORTANT: Two-Step Implementation
+-- ============================================================================
+-- stps_ask_ai_address now makes 2 API calls per lookup:
+--   1. Search for address information (natural language with web search)
+--   2. Parse the natural language result into structured JSON format
+--
+-- This is intentional for reliability. The two-step approach works with
+-- Claude's natural web search behavior instead of constraining it with
+-- strict formatting requirements.
+--
+-- Expected cost: ~$0.002 per lookup (2 Claude API calls)
+-- Expected latency: 3-5 seconds per address
+-- ============================================================================
+
 .echo on
 
 -- Setup: Configure API keys
@@ -24,7 +39,11 @@ SELECT stps_set_brave_api_key('YOUR-BRAVE-API-KEY-HERE');
 -- ============================================================================
 .print ''
 .print '=== Test 1: STP Solution GmbH (should search web) ==='
-.print 'Expected: {city: Karlsruhe, postal_code: 76135, street_name: Brauerstraße, street_nr: 12}'
+.print 'Expected behavior:'
+.print '  - Step 1: Claude uses web_search tool to find current address'
+.print '  - Step 2: Claude parses natural language into JSON structure'
+.print '  - Total: 2 API calls, 3-5 seconds latency'
+.print 'Expected result: {city: Karlsruhe, postal_code: 76135, street_name: Brauerstraße, street_nr: 12}'
 SELECT stps_ask_ai_address('STP Solution GmbH') AS result;
 
 -- ============================================================================
