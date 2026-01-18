@@ -681,67 +681,45 @@ static void StpsAskAIAddressFunction(DataChunk &args, ExpressionState &state, Ve
         string_t company_name_str = FlatVector::GetData<string_t>(company_name_vec)[i];
         std::string company_name = company_name_str.GetString();
 
-        // Check if web search is available
+        // STEP 1: Get address information with natural search
         bool tools_enabled = !GetBraveApiKey().empty();
 
-        std::string prompt, system_msg;
-
+        std::string search_prompt;
         if (tools_enabled) {
-            // Web search enabled - aggressive search prompt
-            prompt = "Find the current registered business address (Impressum/legal address) for this company.\n"
-                     "\n"
-                     "INSTRUCTIONS:\n"
-                     "- You MUST use web search to find the most current, accurate business address\n"
-                     "- Search for official business registry information, company websites, or business directories\n"
-                     "- Look for the legal/registered address (Impressum), not customer service addresses\n"
-                     "- Extract the complete address with all components\n"
-                     "\n"
-                     "Company: " + company_name + "\n"
-                     "\n"
-                     "Respond ONLY with a JSON object in this exact format (no markdown, no code blocks, no explanatory text):\n"
-                     "{\"city\":\"<city>\",\"postal_code\":\"<code>\",\"street_name\":\"<street>\",\"street_nr\":\"<number>\"}\n"
-                     "\n"
-                     "Example: {\"city\":\"Karlsruhe\",\"postal_code\":\"76135\",\"street_name\":\"Brauerstraße\",\"street_nr\":\"12\"}\n"
-                     "\n"
-                     "If a field cannot be determined, use an empty string for that field only.";
-
-            system_msg = "You are a business address lookup assistant with web search capabilities. "
-                         "When searching for company addresses, you MUST use the web_search tool to find current, accurate information. "
-                         "Always search official sources like business registries, company websites, and verified business directories.";
+            // With Brave API key: request web search
+            search_prompt = "Find the current registered business address (Impressum/legal address) for this company: " + company_name + ". "
+                           "Search for official business registry information, company websites, or business directories. "
+                           "Focus on the legal/registered address, not customer service addresses.";
         } else {
-            // Fallback to knowledge-based lookup
-            prompt = "Find the registered business address (Impressum/legal address) for this company based on your knowledge.\n"
-                     "\n"
-                     "INSTRUCTIONS:\n"
-                     "- Use information from your training data about official business addresses\n"
-                     "- Focus on registered/legal addresses (Impressum), not customer service addresses\n"
-                     "- Only provide information you are confident about\n"
-                     "- Extract the complete address with all components\n"
-                     "\n"
-                     "Company: " + company_name + "\n"
-                     "\n"
-                     "Respond ONLY with a JSON object in this exact format (no markdown, no code blocks, no explanatory text):\n"
-                     "{\"city\":\"<city>\",\"postal_code\":\"<code>\",\"street_name\":\"<street>\",\"street_nr\":\"<number>\"}\n"
-                     "\n"
-                     "Example: {\"city\":\"Karlsruhe\",\"postal_code\":\"76135\",\"street_name\":\"Brauerstraße\",\"street_nr\":\"12\"}\n"
-                     "\n"
-                     "If a field cannot be determined, use an empty string for that field only.";
-
-            system_msg = "You are a business address lookup assistant. "
-                         "Use your training data to provide accurate registered business addresses. "
-                         "Only provide information you are confident about from official sources in your training data.";
+            // Without Brave API key: fallback to training data
+            search_prompt = "What is the registered business address (Impressum/legal address) for " + company_name + "? "
+                           "Provide the legal/registered address if you know it from your training data.";
         }
 
-        std::string response = call_anthropic_api(company_name, prompt, model, 500, system_msg);
+        // Use default system message (empty string = natural behavior with web search)
+        std::string address_text = call_anthropic_api(company_name, search_prompt, model, 500, "");
 
-        // Parse JSON response
-        if (response.find("ERROR:") == 0) {
-            // Error occurred, set all fields to NULL
+        // Check for errors from Step 1
+        if (address_text.find("ERROR:") == 0) {
             result_validity.SetInvalid(i);
             continue;
         }
 
-        // Extract JSON fields
+        // STEP 2: Parse natural language response into structured JSON
+        std::string parse_prompt = "Extract the address components from the following text and respond with ONLY a JSON object in this format: "
+                                  "{\"city\":\"...\",\"postal_code\":\"...\",\"street_name\":\"...\",\"street_nr\":\"...\"}. "
+                                  "Use empty strings for any fields you cannot determine. "
+                                  "Text to parse: " + address_text;
+
+        std::string response = call_anthropic_api("", parse_prompt, model, 200, "");
+
+        // Check for errors from Step 2
+        if (response.find("ERROR:") == 0) {
+            result_validity.SetInvalid(i);
+            continue;
+        }
+
+        // Parse JSON fields
         std::string city = extract_json_content(response, "city");
         std::string postal_code = extract_json_content(response, "postal_code");
         std::string street_name = extract_json_content(response, "street_name");
