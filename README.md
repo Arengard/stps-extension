@@ -240,37 +240,41 @@ FROM companies;
 
 ### 🤖 AI Functions (Anthropic Claude Integration)
 
-#### `stps_ask_ai_address(company_name VARCHAR[, model VARCHAR]) → STRUCT`
+#### stps_ask_ai_address - Business Address Lookup
 
-Get structured address data using AI - returns organized address components.
+Get structured business address data with automatic web search:
 
-**Quick Example:**
 ```sql
--- Set API key first
-SELECT stps_set_api_key('sk-your-key-here');
+-- Configure API keys (Brave key enables web search)
+SELECT stps_set_api_key('sk-ant-...');
+SELECT stps_set_brave_api_key('BSA-...');  -- Optional but recommended
 
--- Get structured address
-SELECT stps_ask_ai_address('Tax Network GmbH');
--- Returns: {city: 'München', postal_code: '80331', street_name: 'Musterstraße', street_nr: '123'}
+-- Lookup address (automatically searches web if Brave key configured)
+SELECT stps_ask_ai_address('STP Solution GmbH');
+-- Returns: {city: Karlsruhe, postal_code: 76135, street_name: Brauerstraße, street_nr: 12}
 
--- Access individual fields
+-- Extract specific fields
 SELECT
-    company_name,
-    (stps_ask_ai_address(company_name)).city AS city,
-    (stps_ask_ai_address(company_name)).postal_code AS plz,
-    (stps_ask_ai_address(company_name)).street_name AS street,
-    (stps_ask_ai_address(company_name)).street_nr AS nr
+    company,
+    (stps_ask_ai_address(company)).city,
+    (stps_ask_ai_address(company)).postal_code
 FROM companies;
 
--- Use Claude Opus for better accuracy
-SELECT stps_ask_ai_address('Deutsche Bank AG', 'claude-opus-4-5-20251101');
+-- Batch address enrichment
+UPDATE companies
+SET
+    city = (stps_ask_ai_address(company_name)).city,
+    postal_code = (stps_ask_ai_address(company_name)).postal_code,
+    street = (stps_ask_ai_address(company_name)).street_name,
+    street_nr = (stps_ask_ai_address(company_name)).street_nr
+WHERE address_missing = true;
 ```
 
-**Returns STRUCT with:**
-- `city` - City name
-- `postal_code` - Postal/ZIP code
-- `street_name` - Street name
-- `street_nr` - Street number
+**How it works:**
+- With Brave API key: Automatically searches business registries and official sources
+- Without Brave API key: Uses Claude's knowledge (may be outdated)
+- Returns structured data ready for database storage
+- NULL for fields that cannot be determined
 
 ---
 

@@ -130,43 +130,56 @@ Claude automatically decides when to search based on the query:
 
 ## Functions Overview
 
-### `stps_ask_ai_address(company_name[, model])`
+### stps_ask_ai_address - Structured Address Lookup with Web Search
 
-Get structured address data using AI - automatically formats response into organized address components.
-
-> **Note:** When Brave API key is configured, this function can search the web for current address information. Without Brave key, it uses Claude's training data. For critical address verification, consider using supplementary address validation services.
-
-**Parameters:**
-- `company_name` (VARCHAR, required): Company name or location to look up
-- `model` (VARCHAR, optional): Claude model to use (default: `claude-sonnet-4-5-20250929`)
-
-**Returns:** STRUCT with fields:
-- `city` (VARCHAR): City name
-- `postal_code` (VARCHAR): Postal/ZIP code
-- `street_name` (VARCHAR): Street name
-- `street_nr` (VARCHAR): Street/house number
-
-**Example:**
+**Signature:**
 ```sql
--- Basic usage
-SELECT stps_ask_ai_address('Tax Network GmbH');
--- Returns: {city: 'München', postal_code: '80331', street_name: 'Leopoldstraße', street_nr: '244'}
+stps_ask_ai_address(company_name VARCHAR) → STRUCT(city VARCHAR, postal_code VARCHAR, street_name VARCHAR, street_nr VARCHAR)
+stps_ask_ai_address(company_name VARCHAR, model VARCHAR) → STRUCT(...)
+```
 
--- Access individual fields
+**Description:**
+Looks up the registered business address for a company using web search (when Brave API key is configured) and returns structured address data. This function automatically triggers web search to find current, accurate address information from business registries and official sources.
+
+**Behavior:**
+- **With Brave API key:** Automatically searches the web for current business address
+- **Without Brave API key:** Uses Claude's training data (may be outdated for recent companies)
+- **Output:** Structured data with city, postal_code, street_name, street_nr fields
+- **NULL fields:** If a specific field cannot be determined, it will be NULL
+
+**Examples:**
+
+```sql
+-- Basic usage (requires API keys configured)
+SELECT stps_ask_ai_address('STP Solution GmbH');
+-- Result: {city: Karlsruhe, postal_code: 76135, street_name: Brauerstraße, street_nr: 12}
+
+-- Extract individual fields
 SELECT
-    (stps_ask_ai_address('Tax Network GmbH')).city AS city,
-    (stps_ask_ai_address('Tax Network GmbH')).postal_code AS plz;
+    (stps_ask_ai_address('Deutsche Bank AG')).city AS city,
+    (stps_ask_ai_address('Deutsche Bank AG')).postal_code AS plz,
+    (stps_ask_ai_address('Deutsche Bank AG')).street_name AS street;
 
--- Use with table data
+-- Batch processing
 SELECT
     company_name,
-    (stps_ask_ai_address(company_name)).city AS city,
-    (stps_ask_ai_address(company_name)).postal_code AS postal_code
-FROM companies;
-
--- Use Claude Opus for better accuracy
-SELECT stps_ask_ai_address('Deutsche Bank AG', 'claude-opus-4-5-20251101');
+    (stps_ask_ai_address(company_name)).city,
+    (stps_ask_ai_address(company_name)).postal_code,
+    (stps_ask_ai_address(company_name)).street_name
+FROM companies
+WHERE address_missing = true;
 ```
+
+**Web Search Behavior:**
+This function is equivalent to:
+```sql
+SELECT stps_ask_ai(company_name, 'make a websearch and look for business address')
+```
+...but with structured JSON output instead of natural language text.
+
+**Cost:** When web search is used, this function makes 2 Claude API calls + 1 Brave search per company.
+
+**Performance Tip:** For batch processing, consider caching results to avoid duplicate lookups.
 
 ### `stps_ask_ai(context, prompt[, model][, max_tokens])`
 
