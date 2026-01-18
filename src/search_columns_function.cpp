@@ -57,6 +57,35 @@ static unique_ptr<FunctionData> SearchColumnsBind(ClientContext &context, TableF
         throw BinderException("Table '%s' has no columns", result->table_name.c_str());
     }
 
+    // Generate dynamic SQL to search all columns
+    // Pattern: SELECT *, [col1_match, col2_match, ...] FROM table WHERE (col1 LIKE pattern OR col2 LIKE pattern...)
+
+    string sql = "SELECT *, LIST_VALUE(";
+
+    // Build list of CASE statements for matched columns
+    for (idx_t i = 0; i < result->original_column_names.size(); i++) {
+        if (i > 0) sql += ", ";
+        string col_name = result->original_column_names[i];
+        // Escape single quotes in column name
+        string escaped_col = col_name;
+        size_t pos = 0;
+        while ((pos = escaped_col.find("'", pos)) != string::npos) {
+            escaped_col.replace(pos, 1, "''");
+            pos += 2;
+        }
+        sql += "CASE WHEN LOWER(CAST(\"" + col_name + "\" AS VARCHAR)) LIKE LOWER(?) THEN '" + escaped_col + "' END";
+    }
+
+    sql += ") FILTER (WHERE value IS NOT NULL) AS matched_columns FROM " + result->table_name + " WHERE ";
+
+    // Build WHERE clause - at least one column must match
+    for (idx_t i = 0; i < result->original_column_names.size(); i++) {
+        if (i > 0) sql += " OR ";
+        sql += "LOWER(CAST(\"" + result->original_column_names[i] + "\" AS VARCHAR)) LIKE LOWER(?)";
+    }
+
+    result->generated_sql = sql;
+
     // Define output columns
     return_types.push_back(LogicalType::VARCHAR);
     names.push_back("column_name");
