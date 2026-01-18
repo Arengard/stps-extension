@@ -678,23 +678,27 @@ static void StpsAskAIAddressFunction(DataChunk &args, ExpressionState &state, Ve
         std::string company_name = company_name_str.GetString();
 
         // Craft a specific prompt for address extraction with JSON output
-        std::string prompt = "Find the registered business address (Impressum/legal address) for this company based on your knowledge.\n"
+        std::string prompt = "Find the current registered business address (Impressum/legal address) for this company.\n"
                            "\n"
-                           "CRITICAL INSTRUCTIONS:\n"
-                           "- Use only information you are highly confident about from your training data\n"
-                           "- DO NOT make up, guess, or hallucinate any address information\n"
-                           "- If you cannot provide verified information, use empty strings\n"
-                           "- This is for a database system - accuracy is essential\n"
-                           "- Focus on official registered business addresses, not customer service addresses\n"
+                           "INSTRUCTIONS:\n"
+                           "- You MUST use web search to find the most current, accurate business address\n"
+                           "- Search for official business registry information, company websites, or business directories\n"
+                           "- Look for the legal/registered address (Impressum), not customer service addresses\n"
+                           "- Extract the complete address with all components\n"
                            "\n"
                            "Company: " + company_name + "\n"
                            "\n"
-                           "Respond ONLY with a JSON object in this exact format (no other text or markdown):\n"
-                           "{\"city\":\"\",\"postal_code\":\"\",\"street_name\":\"\",\"street_nr\":\"\"}\n"
+                           "Respond ONLY with a JSON object in this exact format (no markdown, no code blocks, no explanatory text):\n"
+                           "{\"city\":\"<city>\",\"postal_code\":\"<code>\",\"street_name\":\"<street>\",\"street_nr\":\"<number>\"}\n"
                            "\n"
-                           "Fill in ONLY fields you are confident about. Use empty strings for unknown fields.";
+                           "Example: {\"city\":\"Karlsruhe\",\"postal_code\":\"76135\",\"street_name\":\"Brauerstraße\",\"street_nr\":\"12\"}\n"
+                           "\n"
+                           "If a field cannot be determined, use an empty string for that field only.";
 
-        std::string response = call_anthropic_api(company_name, prompt, model, 250);
+        std::string system_msg = "You are a business address lookup assistant with web search capabilities. "
+                                 "When searching for company addresses, you MUST use the web_search tool to find current, accurate information. "
+                                 "Always search official sources like business registries, company websites, and verified business directories.";
+        std::string response = call_anthropic_api(company_name, prompt, model, 500, system_msg);
 
         // Parse JSON response
         if (response.find("ERROR:") == 0) {
