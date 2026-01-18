@@ -150,7 +150,8 @@ static void SearchColumnsFunction(ClientContext &context, TableFunctionInput &da
 
     // Copy data from current chunk to output
     idx_t count = 0;
-    idx_t max_count = std::min(STANDARD_VECTOR_SIZE, state.current_chunk->size() - state.chunk_offset);
+    idx_t remaining = state.current_chunk->size() - state.chunk_offset;
+    idx_t max_count = (STANDARD_VECTOR_SIZE < remaining) ? STANDARD_VECTOR_SIZE : remaining;
 
     for (idx_t i = 0; i < max_count; i++) {
         idx_t source_row = state.chunk_offset + i;
