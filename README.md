@@ -639,33 +639,53 @@ SELECT stps_lambda([1, 2, 3], 'x -> x * 2') AS doubled;
 -- Result: [2, 4, 6]
 ```
 
-#### `stps_search_columns(table_name VARCHAR, pattern VARCHAR[, case_sensitive BOOLEAN]) → TABLE`
-Search for columns in a table by name pattern using SQL LIKE wildcards.
+#### `stps_search_columns(table_name VARCHAR, pattern VARCHAR) → TABLE`
+Search for pattern matches in data values across all columns of a table.
+
+**Breaking Change:** This function previously searched column names. It now searches data values.
+
 ```sql
--- Find all columns containing 'date' (case-insensitive)
-SELECT * FROM stps_search_columns('my_table', '%date%');
--- Returns: column_name, column_index
+-- Find all rows where any column contains 'Hoeger'
+SELECT * FROM stps_search_columns('customers', '%Hoeger%');
+-- Returns: all original columns + matched_columns (VARCHAR[])
 
--- Find columns starting with 'customer_' (case-sensitive)
-SELECT * FROM stps_search_columns('orders', 'customer_%', true);
+-- Find rows with numeric value 123 in any column
+SELECT * FROM stps_search_columns('orders', '%123%');
 
--- Find columns ending with '_id'
-SELECT * FROM stps_search_columns('products', '%_id');
+-- Case-insensitive pattern matching (always)
+SELECT * FROM stps_search_columns('products', '%widget%');
 
--- Use results to build dynamic queries
-SELECT column_name
-FROM stps_search_columns('sales_data', '%_amount%')
-ORDER BY column_index;
+-- Get just the matched column names
+SELECT id, name, matched_columns
+FROM stps_search_columns('users', '%@gmail.com%');
 ```
 
 **Parameters:**
 - `table_name` - Table to search
 - `pattern` - SQL LIKE pattern (% = any chars, _ = single char)
-- `case_sensitive` - Optional: true for case-sensitive search (default: false)
 
-**Returns:** Table with columns:
-- `column_name` - Name of matching column
-- `column_index` - 1-based position in table
+**Returns:** Table with:
+- All original columns from the source table
+- `matched_columns` (VARCHAR[]) - List of column names where pattern was found
+
+**Behavior:**
+- Searches across ALL columns (converts all types to VARCHAR)
+- Case-insensitive matching
+- NULL values are not matched
+- Pattern uses SQL LIKE syntax
+
+**Migration from old version:**
+If you were using `stps_search_columns` to find columns by name, use DuckDB's built-in:
+```sql
+-- Old way (no longer works):
+SELECT * FROM stps_search_columns('my_table', '%date%');
+
+-- New way (find columns by name):
+DESCRIBE my_table;
+-- or
+SELECT column_name FROM information_schema.columns
+WHERE table_name = 'my_table' AND column_name LIKE '%date%';
+```
 
 ---
 
