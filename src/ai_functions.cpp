@@ -709,7 +709,7 @@ static void StpsAskAIAddressFunction(DataChunk &args, ExpressionState &state, Ve
         std::string parse_prompt = "Extract the address components from the following text and respond with ONLY a JSON object in this format: "
                                   "{\"city\":\"...\",\"postal_code\":\"...\",\"street_name\":\"...\",\"street_nr\":\"...\"}. "
                                   "Use empty strings for any fields you cannot determine. "
-                                  "Text to parse: " + address_text;
+                                  "Text to parse: " + escape_json_string(address_text);
 
         std::string response = call_anthropic_api("", parse_prompt, model, 200, "");
 
