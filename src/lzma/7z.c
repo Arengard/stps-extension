@@ -464,6 +464,23 @@ static SRes ReadEncodedHeaderStreamsInfo(FILE *f, CEncodedHeaderInfo *info)
         RINOK(ReadByte(f, &type));
     }
     
+    /* Assign UnpackSize to files from parsed folder unpack sizes */
+    if (archive->folders && archive->folders->UnpackSizes && archive->numFiles > 0)
+    {
+        UInt32 sizeIndex = 0;
+        for (i = 0; i < archive->numFiles; i++)
+        {
+            if (!archive->files[i].IsDir)
+            {
+                if (sizeIndex < archive->folders->NumUnpackStreams)
+                {
+                    archive->files[i].UnpackSize = archive->folders->UnpackSizes[sizeIndex];
+                    sizeIndex++;
+                }
+            }
+        }
+    }
+
     return SZ_OK;
 }
 
@@ -1462,6 +1479,13 @@ SRes Sz7z_Extract(CSz7zArchive *archive, UInt32 fileIndex,
     if (totalUnpackSize == 0)
     {
         archive->alloc->Free(archive->alloc, packedData);
+        /* Check if this specific file has size */
+        if (fileInfo->UnpackSize > 0)
+        {
+            /* File has size but totalUnpackSize is 0 - something wrong with parsing */
+            return SZ_ERROR_DATA;
+        }
+        /* Actually an empty archive */
         return SZ_ERROR_DATA;
     }
 
@@ -1496,7 +1520,8 @@ SRes Sz7z_Extract(CSz7zArchive *archive, UInt32 fileIndex,
     if (res != SZ_OK)
     {
         archive->alloc->Free(archive->alloc, unpackedData);
-        return res;
+        /* Return more specific error */
+        return (res == SZ_ERROR_DATA) ? SZ_ERROR_DATA : SZ_ERROR_FAIL;
     }
 
     /* Find offset for requested file in unpacked stream */
