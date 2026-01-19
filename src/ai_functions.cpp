@@ -403,7 +403,7 @@ static std::string call_anthropic_api(const std::string& context, const std::str
         system_message = custom_system_message;
     } else {
         system_message = tools_enabled
-            ? "You are a helpful assistant with access to web search. When asked about current information, real-time data, recent events, stock prices, or anything that requires up-to-date information, you MUST use the web_search tool. Always search first before saying you don't have access to current data."
+            ? "You are a helpful assistant with access to web search. When asked about current information, real-time data, business address, recent events, stock prices, or anything that requires up-to-date information, you MUST use the web_search tool. Always search first before saying you don't have access to current data."
             : "You are a helpful assistant.";
     }
     std::string user_message = "Context: " + escape_json_string(context) +
@@ -681,48 +681,32 @@ static void StpsAskAIAddressFunction(DataChunk &args, ExpressionState &state, Ve
         string_t company_name_str = FlatVector::GetData<string_t>(company_name_vec)[i];
         std::string company_name = company_name_str.GetString();
 
-        // STEP 1: Get address information with natural search
+        // Single API call: Search and get JSON in one step
         bool tools_enabled = !GetBraveApiKey().empty();
 
         std::string search_prompt;
         if (tools_enabled) {
-            // With Brave API key: request web search
-            search_prompt = "Find the current registered business address (Impressum/legal address) for this company: " + company_name + ". "
-                           "Search for official business registry information, company websites, or business directories. "
-                           "Focus on the legal/registered address, not customer service addresses.";
+            search_prompt = "Search for the registered business address (Impressum) of " + company_name + ". "
+                           "After finding the address, respond with ONLY a JSON object in this exact format (no markdown, no explanation):\n"
+                           "{\"city\":\"...\",\"postal_code\":\"...\",\"street_name\":\"...\",\"street_nr\":\"...\"}\n"
+                           "Use empty strings for fields you cannot find.";
         } else {
-            // Without Brave API key: fallback to training data
-            search_prompt = "What is the registered business address (Impressum/legal address) for " + company_name + "? "
-                           "Provide the legal/registered address if you know it from your training data.";
+            search_prompt = "What is the registered business address (Impressum) of " + company_name + "? "
+                           "Respond with ONLY a JSON object in this exact format (no markdown, no explanation):\n"
+                           "{\"city\":\"...\",\"postal_code\":\"...\",\"street_name\":\"...\",\"street_nr\":\"...\"}\n"
+                           "Use empty strings for fields you don't know.";
         }
 
-        // Use default system message (empty string = natural behavior with web search)
-        std::string address_text = call_anthropic_api(company_name, search_prompt, model, 500, "");
+        std::string response = call_anthropic_api(company_name, search_prompt, model, 400, "");
 
-        // Check for errors from Step 1
-        if (address_text.find("ERROR:") == 0) {
-            result_validity.SetInvalid(i);
-            continue;
-        }
-
-        // Check if we got meaningful address content
-        if (address_text.empty() || address_text.length() < 10) {
-            result_validity.SetInvalid(i);
-            continue;
-        }
-
-        // STEP 2: Parse natural language response into structured JSON
-        // Use a cleaner system message for JSON extraction
-        std::string parse_system = "You are a JSON extraction assistant. You ONLY respond with valid JSON objects, no markdown, no explanation.";
-
-        std::string parse_prompt = "Extract the address from this text into JSON format:\n\n" + address_text + "\n\n"
-                                  "Respond with ONLY this JSON (no markdown code blocks, no other text):\n"
-                                  "{\"city\":\"...\",\"postal_code\":\"...\",\"street_name\":\"...\",\"street_nr\":\"...\"}";
-
-        std::string response = call_anthropic_api("", parse_prompt, model, 200, parse_system);
-
-        // Check for errors from Step 2
+        // Check for errors
         if (response.find("ERROR:") == 0) {
+            result_validity.SetInvalid(i);
+            continue;
+        }
+
+        // Check if we got meaningful content
+        if (response.empty() || response.length() < 5) {
             result_validity.SetInvalid(i);
             continue;
         }
@@ -739,6 +723,16 @@ static void StpsAskAIAddressFunction(DataChunk &args, ExpressionState &state, Ve
         std::string postal_code = extract_json_content(response, "postal_code");
         std::string street_name = extract_json_content(response, "street_name");
         std::string street_nr = extract_json_content(response, "street_nr");
+
+        // Check if we got at least some data
+        bool has_any_data = !city.empty() || !postal_code.empty() || !street_name.empty() || !street_nr.empty();
+        if (!has_any_data) {
+            result_validity.SetInvalid(i);
+            continue;
+        }
+
+        // Mark the struct result as valid - THIS IS CRITICAL!
+        result_validity.SetValid(i);
 
         // Set struct fields
         if (city.empty()) {
