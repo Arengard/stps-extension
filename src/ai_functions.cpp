@@ -797,14 +797,12 @@ static void StpsAskAIAddressFunction(DataChunk &args, ExpressionState &state, Ve
     auto count = args.size();
     auto &company_name_vec = args.data[0];
 
-    // Use configured model as default, allow override via parameter
     string model = GetAnthropicModel();
     if (args.ColumnCount() >= 2 && !FlatVector::IsNull(args.data[1], 0)) {
         string_t model_str = FlatVector::GetData<string_t>(args.data[1])[0];
         model = model_str.GetString();
     }
 
-    // Get struct entries for output
     auto &struct_entries = StructVector::GetEntries(result);
     auto &city_vec = *struct_entries[0];
     auto &postal_code_vec = *struct_entries[1];
@@ -812,6 +810,23 @@ static void StpsAskAIAddressFunction(DataChunk &args, ExpressionState &state, Ve
     auto &street_nr_vec = *struct_entries[3];
 
     auto &result_validity = FlatVector::Validity(result);
+
+    // System message that FORCES JSON output
+    const std::string system_message = R"(You are a structured data extraction assistant.
+You MUST find the official German business address of the provided company.
+You MUST use web search if available.
+Return ONLY valid JSON in EXACTLY this format and nothing else:
+{
+  "city": "",
+  "postal_code": "",
+  "street_name": "",
+  "street_nr": ""
+}
+Rules:
+- Do not include explanations
+- Do not include markdown
+- If the address cannot be found, return empty strings
+- Always respond in German address format)";
 
     for (idx_t i = 0; i < count; i++) {
         if (FlatVector::IsNull(company_name_vec, i)) {
@@ -822,58 +837,52 @@ static void StpsAskAIAddressFunction(DataChunk &args, ExpressionState &state, Ve
         string_t company_name_str = FlatVector::GetData<string_t>(company_name_vec)[i];
         std::string company_name = company_name_str.GetString();
 
-        // SAME call as stps_ask_ai(company_name, 'Search for the business address')
-        std::string prompt = "Search for the business address";
-        std::string response = call_anthropic_api(company_name, prompt, model, 1000, "");
+        std::string prompt = "Find the official business address for this company in Germany: " + company_name;
 
-        // Check for errors
+        // Call API with system message that forces JSON output
+        std::string response = call_anthropic_api(
+            company_name,
+            prompt,
+            model,
+            800,
+            system_message
+        );
+
         if (response.find("ERROR:") == 0 || response.empty()) {
             result_validity.SetInvalid(i);
             continue;
         }
 
-        // Parse the address from response text
-        ParsedAddress addr = parse_german_address(response);
+        // Extract structured fields directly from JSON response
+        std::string city = extract_json_content(response, "city");
+        std::string postal_code = extract_json_content(response, "postal_code");
+        std::string street_name = extract_json_content(response, "street_name");
+        std::string street_nr = extract_json_content(response, "street_nr");
 
-        // Check if we got at least some data
-        bool has_any_data = !addr.city.empty() || !addr.postal_code.empty() ||
-                           !addr.street_name.empty() || !addr.street_nr.empty();
-        if (!has_any_data) {
+        bool has_data = !city.empty() || !postal_code.empty() ||
+                        !street_name.empty() || !street_nr.empty();
+
+        if (!has_data) {
             result_validity.SetInvalid(i);
             continue;
         }
 
-        // Mark the struct result as valid
         result_validity.SetValid(i);
 
-        // Set struct fields
-        if (addr.city.empty()) {
-            FlatVector::SetNull(city_vec, i, true);
-        } else {
-            FlatVector::GetData<string_t>(city_vec)[i] = StringVector::AddString(city_vec, addr.city);
-            FlatVector::SetNull(city_vec, i, false);
-        }
+        // Helper lambda to set field or null
+        auto set_or_null = [&](Vector &vec, const std::string &value) {
+            if (value.empty()) {
+                FlatVector::SetNull(vec, i, true);
+            } else {
+                FlatVector::GetData<string_t>(vec)[i] = StringVector::AddString(vec, value);
+                FlatVector::SetNull(vec, i, false);
+            }
+        };
 
-        if (addr.postal_code.empty()) {
-            FlatVector::SetNull(postal_code_vec, i, true);
-        } else {
-            FlatVector::GetData<string_t>(postal_code_vec)[i] = StringVector::AddString(postal_code_vec, addr.postal_code);
-            FlatVector::SetNull(postal_code_vec, i, false);
-        }
-
-        if (addr.street_name.empty()) {
-            FlatVector::SetNull(street_name_vec, i, true);
-        } else {
-            FlatVector::GetData<string_t>(street_name_vec)[i] = StringVector::AddString(street_name_vec, addr.street_name);
-            FlatVector::SetNull(street_name_vec, i, false);
-        }
-
-        if (addr.street_nr.empty()) {
-            FlatVector::SetNull(street_nr_vec, i, true);
-        } else {
-            FlatVector::GetData<string_t>(street_nr_vec)[i] = StringVector::AddString(street_nr_vec, addr.street_nr);
-            FlatVector::SetNull(street_nr_vec, i, false);
-        }
+        set_or_null(city_vec, city);
+        set_or_null(postal_code_vec, postal_code);
+        set_or_null(street_name_vec, street_name);
+        set_or_null(street_nr_vec, street_nr);
     }
 }
 
