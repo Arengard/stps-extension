@@ -822,12 +822,9 @@ static void StpsAskAIAddressFunction(DataChunk &args, ExpressionState &state, Ve
         string_t company_name_str = FlatVector::GetData<string_t>(company_name_vec)[i];
         std::string company_name = company_name_str.GetString();
 
-        // Single API call: Search for address
-        std::string search_prompt = "Search for the registered business address (Impressum) of " + company_name + ". "
-                       "Provide the full street address including street name, number, postal code and city.";
-
-        // Empty system message enables web search tools
-        std::string response = call_anthropic_api(company_name, search_prompt, model, 500, "");
+        // SAME call as stps_ask_ai(company_name, 'Search for the business address')
+        std::string prompt = "Search for the business address";
+        std::string response = call_anthropic_api(company_name, prompt, model, 1000, "");
 
         // Check for errors
         if (response.find("ERROR:") == 0 || response.empty()) {
@@ -835,43 +832,8 @@ static void StpsAskAIAddressFunction(DataChunk &args, ExpressionState &state, Ve
             continue;
         }
 
-        // Try to parse address from the response text using regex patterns
+        // Parse the address from response text
         ParsedAddress addr = parse_german_address(response);
-
-        // Also try JSON parsing in case response contains JSON
-        if (addr.city.empty() && addr.postal_code.empty()) {
-            // Strip markdown code blocks if present
-            std::string cleaned = response;
-            size_t code_start = cleaned.find("```");
-            if (code_start != std::string::npos) {
-                size_t line_end = cleaned.find('\n', code_start);
-                if (line_end != std::string::npos) {
-                    cleaned = cleaned.substr(line_end + 1);
-                }
-            }
-            size_t code_end = cleaned.rfind("```");
-            if (code_end != std::string::npos) {
-                cleaned = cleaned.substr(0, code_end);
-            }
-
-            // Find JSON object
-            size_t json_start = cleaned.find('{');
-            size_t json_end = cleaned.rfind('}');
-            if (json_start != std::string::npos && json_end != std::string::npos && json_end > json_start) {
-                cleaned = cleaned.substr(json_start, json_end - json_start + 1);
-
-                // Try JSON parsing
-                std::string json_city = extract_json_content(cleaned, "city");
-                std::string json_postal = extract_json_content(cleaned, "postal_code");
-                std::string json_street = extract_json_content(cleaned, "street_name");
-                std::string json_nr = extract_json_content(cleaned, "street_nr");
-
-                if (!json_city.empty()) addr.city = json_city;
-                if (!json_postal.empty()) addr.postal_code = json_postal;
-                if (!json_street.empty()) addr.street_name = json_street;
-                if (!json_nr.empty()) addr.street_nr = json_nr;
-            }
-        }
 
         // Check if we got at least some data
         bool has_any_data = !addr.city.empty() || !addr.postal_code.empty() ||
@@ -881,7 +843,7 @@ static void StpsAskAIAddressFunction(DataChunk &args, ExpressionState &state, Ve
             continue;
         }
 
-        // Mark the struct result as valid - THIS IS CRITICAL!
+        // Mark the struct result as valid
         result_validity.SetValid(i);
 
         // Set struct fields
