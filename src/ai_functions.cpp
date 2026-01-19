@@ -467,6 +467,20 @@ static std::string call_anthropic_api(const std::string& context, const std::str
 
     // If no tool use, return the text response
     if (stop_reason != "tool_use" || !tools_enabled) {
+        // Extract text from content array: content:[{"type":"text","text":"..."}]
+        // First find the content array
+        size_t content_pos = response.find("\"content\"");
+        if (content_pos != std::string::npos) {
+            // Find the text field within content array
+            size_t text_start = response.find("\"text\"", content_pos);
+            if (text_start != std::string::npos) {
+                std::string content = extract_json_content(response.substr(text_start), "text");
+                if (!content.empty()) {
+                    return content;
+                }
+            }
+        }
+        // Fallback: try to find text directly
         std::string content = extract_json_content(response, "text");
         if (content.empty()) {
             return "ERROR: Could not parse response from Anthropic API. Response: " + response.substr(0, 500);
@@ -544,7 +558,18 @@ static std::string call_anthropic_api(const std::string& context, const std::str
         return "ERROR: Anthropic API returned error: " + error_msg;
     }
 
-    // Extract final text response
+    // Extract final text response from content array
+    size_t content_pos = response.find("\"content\"");
+    if (content_pos != std::string::npos) {
+        size_t text_start = response.find("\"text\"", content_pos);
+        if (text_start != std::string::npos) {
+            std::string content = extract_json_content(response.substr(text_start), "text");
+            if (!content.empty()) {
+                return content;
+            }
+        }
+    }
+    // Fallback
     std::string content = extract_json_content(response, "text");
     if (content.empty()) {
         return "ERROR: Could not parse response from Anthropic API. Response: " + response.substr(0, 500);
