@@ -926,7 +926,8 @@ static SRes ReadFilesInfoFromBuf(CSz7zArchive *archive, const Byte **bufPtr, con
     UInt64 numFiles;
     Byte type;
     UInt32 i;
-    
+    UInt32 sizeIndex;
+
     RINOK(ReadNumberFromBuf(&p, bufEnd, &numFiles));
     archive->numFiles = (UInt32)numFiles;
     
@@ -1037,7 +1038,7 @@ static SRes ReadFilesInfoFromBuf(CSz7zArchive *archive, const Byte **bufPtr, con
     /* Assign UnpackSize to files from parsed folder unpack sizes */
     if (archive->folders && archive->folders->UnpackSizes && archive->numFiles > 0)
     {
-        UInt32 sizeIndex = 0;
+        sizeIndex = 0;
         for (i = 0; i < archive->numFiles; i++)
         {
             if (!archive->files[i].IsDir)
@@ -1184,6 +1185,23 @@ static SRes ReadUnpackInfo(FILE *f, CSz7zArchive *archive)
         RINOK(ReadByte(f, &type));
     }
     
+    /* Assign UnpackSize to files from parsed folder unpack sizes */
+    if (archive->folders && archive->folders->UnpackSizes && archive->numFiles > 0)
+    {
+        sizeIndex = 0;
+        for (i = 0; i < archive->numFiles; i++)
+        {
+            if (!archive->files[i].IsDir)
+            {
+                if (sizeIndex < archive->folders->NumUnpackStreams)
+                {
+                    archive->files[i].UnpackSize = archive->folders->UnpackSizes[sizeIndex];
+                    sizeIndex++;
+                }
+            }
+        }
+    }
+
     return SZ_OK;
 }
 
@@ -1209,7 +1227,8 @@ static SRes ReadFilesInfo(FILE *f, CSz7zArchive *archive)
     UInt64 numFiles;
     Byte type;
     UInt32 i;
-    
+    UInt32 sizeIndex;
+
     RINOK(ReadNumber(f, &numFiles));
     archive->numFiles = (UInt32)numFiles;
     
