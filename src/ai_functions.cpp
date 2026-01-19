@@ -257,6 +257,112 @@ static std::string extract_json_content(const std::string& json, const std::stri
 }
 
 // ============================================================================
+// German Address Parser - extracts address components from text
+// ============================================================================
+
+struct ParsedAddress {
+    std::string city;
+    std::string postal_code;
+    std::string street_name;
+    std::string street_nr;
+};
+
+static ParsedAddress parse_german_address(const std::string& text) {
+    ParsedAddress addr;
+
+    // Find 5-digit German postal code (PLZ)
+    for (size_t i = 0; i + 4 < text.length(); i++) {
+        if (std::isdigit(text[i]) && std::isdigit(text[i+1]) &&
+            std::isdigit(text[i+2]) && std::isdigit(text[i+3]) &&
+            std::isdigit(text[i+4])) {
+            // Check it's not part of a longer number
+            bool valid = (i == 0 || !std::isdigit(text[i-1])) &&
+                        (i + 5 >= text.length() || !std::isdigit(text[i+5]));
+            if (valid) {
+                addr.postal_code = text.substr(i, 5);
+
+                // City is usually right after the postal code
+                size_t city_start = i + 5;
+                while (city_start < text.length() && (text[city_start] == ' ' || text[city_start] == ',')) {
+                    city_start++;
+                }
+                size_t city_end = city_start;
+                while (city_end < text.length() && text[city_end] != ',' && text[city_end] != '\n' &&
+                       text[city_end] != '*' && text[city_end] != ')') {
+                    city_end++;
+                }
+                if (city_end > city_start) {
+                    addr.city = text.substr(city_start, city_end - city_start);
+                    // Trim trailing spaces and "Germany"
+                    while (!addr.city.empty() && (addr.city.back() == ' ' || addr.city.back() == '*')) {
+                        addr.city.pop_back();
+                    }
+                    // Remove " Germany" suffix if present
+                    if (addr.city.length() > 8 && addr.city.substr(addr.city.length() - 7) == "Germany") {
+                        addr.city = addr.city.substr(0, addr.city.length() - 7);
+                        while (!addr.city.empty() && (addr.city.back() == ' ' || addr.city.back() == ',')) {
+                            addr.city.pop_back();
+                        }
+                    }
+                }
+                break;
+            }
+        }
+    }
+
+    // Find street pattern: word(s) ending in typical German street suffixes followed by number
+    // Common patterns: "Straße", "Str.", "straße", "weg", "platz", "allee", "ring", "gasse"
+    std::vector<std::string> street_suffixes = {"straße", "strasse", "str.", "weg", "platz", "allee", "ring", "gasse", "damm", "ufer"};
+
+    std::string lower_text = text;
+    for (auto& c : lower_text) c = std::tolower(static_cast<unsigned char>(c));
+
+    for (const auto& suffix : street_suffixes) {
+        size_t pos = lower_text.find(suffix);
+        if (pos != std::string::npos) {
+            // Find start of street name (go back to find beginning of word)
+            size_t street_start = pos;
+            while (street_start > 0 && text[street_start-1] != ' ' && text[street_start-1] != '\n' &&
+                   text[street_start-1] != ',' && text[street_start-1] != '*') {
+                street_start--;
+            }
+            // Skip leading ** if markdown
+            while (street_start < text.length() && text[street_start] == '*') {
+                street_start++;
+            }
+
+            size_t street_end = pos + suffix.length();
+            addr.street_name = text.substr(street_start, street_end - street_start);
+
+            // Find street number after the street name
+            size_t nr_start = street_end;
+            while (nr_start < text.length() && (text[nr_start] == ' ' || text[nr_start] == '.')) {
+                nr_start++;
+            }
+            size_t nr_end = nr_start;
+            while (nr_end < text.length() && (std::isdigit(text[nr_end]) || std::isalpha(text[nr_end]))) {
+                // Allow letter suffix like "12a" but stop at comma/space after number
+                if (std::isalpha(text[nr_end]) && nr_end > nr_start && !std::isdigit(text[nr_end-1])) {
+                    break;
+                }
+                nr_end++;
+            }
+            if (nr_end > nr_start) {
+                addr.street_nr = text.substr(nr_start, nr_end - nr_start);
+                // Trim trailing non-digits except single letter suffix
+                while (addr.street_nr.length() > 1 && !std::isdigit(addr.street_nr.back()) &&
+                       !std::isdigit(addr.street_nr[addr.street_nr.length()-2])) {
+                    addr.street_nr.pop_back();
+                }
+            }
+            break;
+        }
+    }
+
+    return addr;
+}
+
+// ============================================================================
 // Web Search Support
 // ============================================================================
 
@@ -716,64 +822,60 @@ static void StpsAskAIAddressFunction(DataChunk &args, ExpressionState &state, Ve
         string_t company_name_str = FlatVector::GetData<string_t>(company_name_vec)[i];
         std::string company_name = company_name_str.GetString();
 
-        // Step 1: Use web search to find the address
+        // Single API call: Search for address
         std::string search_prompt = "Search for the registered business address (Impressum) of " + company_name + ". "
-                       "Provide the full address including street, number, postal code, and city.";
+                       "Provide the full street address including street name, number, postal code and city.";
 
         // Empty system message enables web search tools
-        std::string search_response = call_anthropic_api(company_name, search_prompt, model, 500, "");
+        std::string response = call_anthropic_api(company_name, search_prompt, model, 500, "");
 
         // Check for errors
-        if (search_response.find("ERROR:") == 0 || search_response.empty()) {
+        if (response.find("ERROR:") == 0 || response.empty()) {
             result_validity.SetInvalid(i);
             continue;
         }
 
-        // Step 2: Parse the text response into JSON structure using a second AI call
-        std::string parse_prompt = "Extract the business address from this text and return ONLY a JSON object:\n\n" + search_response + "\n\n"
-                       "Return ONLY this JSON format (no markdown, no explanation):\n"
-                       "{\"city\":\"...\",\"postal_code\":\"...\",\"street_name\":\"...\",\"street_nr\":\"...\"}\n"
-                       "Use empty strings for fields not found.";
+        // Try to parse address from the response text using regex patterns
+        ParsedAddress addr = parse_german_address(response);
 
-        // Use custom system message to disable tools for parsing step
-        std::string parse_response = call_anthropic_api("", parse_prompt, model, 200,
-                       "You are a JSON extractor. Return ONLY valid JSON, no markdown, no explanation.");
+        // Also try JSON parsing in case response contains JSON
+        if (addr.city.empty() && addr.postal_code.empty()) {
+            // Strip markdown code blocks if present
+            std::string cleaned = response;
+            size_t code_start = cleaned.find("```");
+            if (code_start != std::string::npos) {
+                size_t line_end = cleaned.find('\n', code_start);
+                if (line_end != std::string::npos) {
+                    cleaned = cleaned.substr(line_end + 1);
+                }
+            }
+            size_t code_end = cleaned.rfind("```");
+            if (code_end != std::string::npos) {
+                cleaned = cleaned.substr(0, code_end);
+            }
 
-        // Check for errors
-        if (parse_response.find("ERROR:") == 0) {
-            result_validity.SetInvalid(i);
-            continue;
-        }
+            // Find JSON object
+            size_t json_start = cleaned.find('{');
+            size_t json_end = cleaned.rfind('}');
+            if (json_start != std::string::npos && json_end != std::string::npos && json_end > json_start) {
+                cleaned = cleaned.substr(json_start, json_end - json_start + 1);
 
-        // Strip markdown code blocks if present
-        std::string cleaned = parse_response;
-        size_t code_start = cleaned.find("```");
-        if (code_start != std::string::npos) {
-            size_t line_end = cleaned.find('\n', code_start);
-            if (line_end != std::string::npos) {
-                cleaned = cleaned.substr(line_end + 1);
+                // Try JSON parsing
+                std::string json_city = extract_json_content(cleaned, "city");
+                std::string json_postal = extract_json_content(cleaned, "postal_code");
+                std::string json_street = extract_json_content(cleaned, "street_name");
+                std::string json_nr = extract_json_content(cleaned, "street_nr");
+
+                if (!json_city.empty()) addr.city = json_city;
+                if (!json_postal.empty()) addr.postal_code = json_postal;
+                if (!json_street.empty()) addr.street_name = json_street;
+                if (!json_nr.empty()) addr.street_nr = json_nr;
             }
         }
-        size_t code_end = cleaned.rfind("```");
-        if (code_end != std::string::npos) {
-            cleaned = cleaned.substr(0, code_end);
-        }
-
-        // Find JSON object
-        size_t json_start = cleaned.find('{');
-        size_t json_end = cleaned.rfind('}');
-        if (json_start != std::string::npos && json_end != std::string::npos && json_end > json_start) {
-            cleaned = cleaned.substr(json_start, json_end - json_start + 1);
-        }
-
-        // Parse JSON fields
-        std::string city = extract_json_content(cleaned, "city");
-        std::string postal_code = extract_json_content(cleaned, "postal_code");
-        std::string street_name = extract_json_content(cleaned, "street_name");
-        std::string street_nr = extract_json_content(cleaned, "street_nr");
 
         // Check if we got at least some data
-        bool has_any_data = !city.empty() || !postal_code.empty() || !street_name.empty() || !street_nr.empty();
+        bool has_any_data = !addr.city.empty() || !addr.postal_code.empty() ||
+                           !addr.street_name.empty() || !addr.street_nr.empty();
         if (!has_any_data) {
             result_validity.SetInvalid(i);
             continue;
@@ -783,31 +885,31 @@ static void StpsAskAIAddressFunction(DataChunk &args, ExpressionState &state, Ve
         result_validity.SetValid(i);
 
         // Set struct fields
-        if (city.empty()) {
+        if (addr.city.empty()) {
             FlatVector::SetNull(city_vec, i, true);
         } else {
-            FlatVector::GetData<string_t>(city_vec)[i] = StringVector::AddString(city_vec, city);
+            FlatVector::GetData<string_t>(city_vec)[i] = StringVector::AddString(city_vec, addr.city);
             FlatVector::SetNull(city_vec, i, false);
         }
 
-        if (postal_code.empty()) {
+        if (addr.postal_code.empty()) {
             FlatVector::SetNull(postal_code_vec, i, true);
         } else {
-            FlatVector::GetData<string_t>(postal_code_vec)[i] = StringVector::AddString(postal_code_vec, postal_code);
+            FlatVector::GetData<string_t>(postal_code_vec)[i] = StringVector::AddString(postal_code_vec, addr.postal_code);
             FlatVector::SetNull(postal_code_vec, i, false);
         }
 
-        if (street_name.empty()) {
+        if (addr.street_name.empty()) {
             FlatVector::SetNull(street_name_vec, i, true);
         } else {
-            FlatVector::GetData<string_t>(street_name_vec)[i] = StringVector::AddString(street_name_vec, street_name);
+            FlatVector::GetData<string_t>(street_name_vec)[i] = StringVector::AddString(street_name_vec, addr.street_name);
             FlatVector::SetNull(street_name_vec, i, false);
         }
 
-        if (street_nr.empty()) {
+        if (addr.street_nr.empty()) {
             FlatVector::SetNull(street_nr_vec, i, true);
         } else {
-            FlatVector::GetData<string_t>(street_nr_vec)[i] = StringVector::AddString(street_nr_vec, street_nr);
+            FlatVector::GetData<string_t>(street_nr_vec)[i] = StringVector::AddString(street_nr_vec, addr.street_nr);
             FlatVector::SetNull(street_nr_vec, i, false);
         }
     }
