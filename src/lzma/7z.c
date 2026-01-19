@@ -1185,22 +1185,6 @@ static SRes ReadUnpackInfo(FILE *f, CSz7zArchive *archive)
         RINOK(ReadByte(f, &type));
     }
     
-    /* Assign UnpackSize to files from parsed folder unpack sizes */
-    if (archive->folders && archive->folders->UnpackSizes && archive->numFiles > 0)
-    {
-        sizeIndex = 0;
-        for (i = 0; i < archive->numFiles; i++)
-        {
-            if (!archive->files[i].IsDir)
-            {
-                if (sizeIndex < archive->folders->NumUnpackStreams)
-                {
-                    archive->files[i].UnpackSize = archive->folders->UnpackSizes[sizeIndex];
-                    sizeIndex++;
-                }
-            }
-        }
-    }
 
     return SZ_OK;
 }
@@ -1339,6 +1323,23 @@ static SRes ReadFilesInfo(FILE *f, CSz7zArchive *archive)
         RINOK(ReadByte(f, &type));
     }
     
+    /* Assign UnpackSize to files from parsed folder unpack sizes */
+    if (archive->folders && archive->folders->UnpackSizes && archive->numFiles > 0)
+    {
+        sizeIndex = 0;
+        for (i = 0; i < archive->numFiles; i++)
+        {
+            if (!archive->files[i].IsDir)
+            {
+                if (sizeIndex < archive->folders->NumUnpackStreams)
+                {
+                    archive->files[i].UnpackSize = archive->folders->UnpackSizes[sizeIndex];
+                    sizeIndex++;
+                }
+            }
+        }
+    }
+
     return SZ_OK;
 }
 
