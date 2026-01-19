@@ -706,23 +706,16 @@ static void StpsAskAIAddressFunction(DataChunk &args, ExpressionState &state, Ve
         string_t company_name_str = FlatVector::GetData<string_t>(company_name_vec)[i];
         std::string company_name = company_name_str.GetString();
 
-        // Single API call: Search and get JSON in one step
-        bool tools_enabled = !GetBraveApiKey().empty();
+        // Use a direct prompt without web search tools to get structured JSON
+        // The tools flow is causing issues with empty responses
+        std::string search_prompt = "What is the registered business address (Impressum) of " + company_name + "? "
+                       "Respond with ONLY a JSON object in this exact format (no markdown, no explanation, no code blocks):\n"
+                       "{\"city\":\"...\",\"postal_code\":\"...\",\"street_name\":\"...\",\"street_nr\":\"...\"}\n"
+                       "Use empty strings for fields you don't know.";
 
-        std::string search_prompt;
-        if (tools_enabled) {
-            search_prompt = "Search for the registered business address (Impressum) of " + company_name + ". "
-                           "After finding the address, respond with ONLY a JSON object in this exact format (no markdown, no explanation):\n"
-                           "{\"city\":\"...\",\"postal_code\":\"...\",\"street_name\":\"...\",\"street_nr\":\"...\"}\n"
-                           "Use empty strings for fields you cannot find.";
-        } else {
-            search_prompt = "What is the registered business address (Impressum) of " + company_name + "? "
-                           "Respond with ONLY a JSON object in this exact format (no markdown, no explanation):\n"
-                           "{\"city\":\"...\",\"postal_code\":\"...\",\"street_name\":\"...\",\"street_nr\":\"...\"}\n"
-                           "Use empty strings for fields you don't know.";
-        }
-
-        std::string response = call_anthropic_api(company_name, search_prompt, model, 400, "");
+        // Use a custom system message to disable tools and get direct JSON response
+        std::string system_msg = "You are a business address lookup assistant. Return ONLY valid JSON, no markdown, no explanation.";
+        std::string response = call_anthropic_api(company_name, search_prompt, model, 400, system_msg);
 
         // Check for errors
         if (response.find("ERROR:") == 0) {
