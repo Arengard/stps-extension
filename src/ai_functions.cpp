@@ -322,8 +322,8 @@ static ParsedAddress parse_german_address(const std::string& text) {
         if (pos != std::string::npos) {
             // Find start of street name (go back to find beginning of word)
             size_t street_start = pos;
-            while (street_start > 0 && text[street_start-1] != ' ' && text[street_start-1] != '\n' &&
-                   text[street_start-1] != ',' && text[street_start-1] != '*') {
+            while (street_start > 0 && text[street_start - 1] != '\n' && text[street_start - 1] != ',' &&
+                text[street_start - 1] != '*' && text[street_start - 1] != '(') {
                 street_start--;
             }
             // Skip leading ** if markdown
