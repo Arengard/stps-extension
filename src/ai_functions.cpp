@@ -536,7 +536,7 @@ static std::string call_anthropic_api(const std::string& context, const std::str
                 + (search_failed ? ",\"is_error\":true" : "") + "}"
             "]}"
         "],"
-        "\"temperature\":0.7"
+        "\"temperature\":0.3"
     "}";
 
     // Make second API call
@@ -558,6 +558,12 @@ static std::string call_anthropic_api(const std::string& context, const std::str
         return "ERROR: Anthropic API returned error: " + error_msg;
     }
 
+    // Check for empty content array - this means no response text
+    if (response.find("\"content\":[]") != std::string::npos) {
+        // Return the search results directly as fallback
+        return search_results.empty() ? "No response from API" : search_results;
+    }
+
     // Extract final text response from content array
     size_t content_pos = response.find("\"content\"");
     if (content_pos != std::string::npos) {
@@ -572,6 +578,10 @@ static std::string call_anthropic_api(const std::string& context, const std::str
     // Fallback
     std::string content = extract_json_content(response, "text");
     if (content.empty()) {
+        // If we have search results, return them as the response
+        if (!search_results.empty() && search_results.find("ERROR:") != 0) {
+            return search_results;
+        }
         return "ERROR: Could not parse response from Anthropic API. Response: " + response.substr(0, 500);
     }
 
@@ -706,41 +716,61 @@ static void StpsAskAIAddressFunction(DataChunk &args, ExpressionState &state, Ve
         string_t company_name_str = FlatVector::GetData<string_t>(company_name_vec)[i];
         std::string company_name = company_name_str.GetString();
 
-        // Use a direct prompt without web search tools to get structured JSON
-        // The tools flow is causing issues with empty responses
-        std::string search_prompt = "What is the registered business address (Impressum) of " + company_name + "? "
-                       "Respond with ONLY a JSON object in this exact format (no markdown, no explanation, no code blocks):\n"
-                       "{\"city\":\"...\",\"postal_code\":\"...\",\"street_name\":\"...\",\"street_nr\":\"...\"}\n"
-                       "Use empty strings for fields you don't know.";
+        // Step 1: Use web search to find the address
+        std::string search_prompt = "Search for the registered business address (Impressum) of " + company_name + ". "
+                       "Provide the full address including street, number, postal code, and city.";
 
-        // Use a custom system message to disable tools and get direct JSON response
-        std::string system_msg = "You are a business address lookup assistant. Return ONLY valid JSON, no markdown, no explanation.";
-        std::string response = call_anthropic_api(company_name, search_prompt, model, 400, system_msg);
+        // Empty system message enables web search tools
+        std::string search_response = call_anthropic_api(company_name, search_prompt, model, 500, "");
 
         // Check for errors
-        if (response.find("ERROR:") == 0) {
+        if (search_response.find("ERROR:") == 0 || search_response.empty()) {
             result_validity.SetInvalid(i);
             continue;
         }
 
-        // Check if we got meaningful content
-        if (response.empty() || response.length() < 5) {
+        // Step 2: Parse the text response into JSON structure using a second AI call
+        std::string parse_prompt = "Extract the business address from this text and return ONLY a JSON object:\n\n" + search_response + "\n\n"
+                       "Return ONLY this JSON format (no markdown, no explanation):\n"
+                       "{\"city\":\"...\",\"postal_code\":\"...\",\"street_name\":\"...\",\"street_nr\":\"...\"}\n"
+                       "Use empty strings for fields not found.";
+
+        // Use custom system message to disable tools for parsing step
+        std::string parse_response = call_anthropic_api("", parse_prompt, model, 200,
+                       "You are a JSON extractor. Return ONLY valid JSON, no markdown, no explanation.");
+
+        // Check for errors
+        if (parse_response.find("ERROR:") == 0) {
             result_validity.SetInvalid(i);
             continue;
         }
 
-        // Try to find JSON object in the response
-        size_t json_start = response.find('{');
-        size_t json_end = response.rfind('}');
+        // Strip markdown code blocks if present
+        std::string cleaned = parse_response;
+        size_t code_start = cleaned.find("```");
+        if (code_start != std::string::npos) {
+            size_t line_end = cleaned.find('\n', code_start);
+            if (line_end != std::string::npos) {
+                cleaned = cleaned.substr(line_end + 1);
+            }
+        }
+        size_t code_end = cleaned.rfind("```");
+        if (code_end != std::string::npos) {
+            cleaned = cleaned.substr(0, code_end);
+        }
+
+        // Find JSON object
+        size_t json_start = cleaned.find('{');
+        size_t json_end = cleaned.rfind('}');
         if (json_start != std::string::npos && json_end != std::string::npos && json_end > json_start) {
-            response = response.substr(json_start, json_end - json_start + 1);
+            cleaned = cleaned.substr(json_start, json_end - json_start + 1);
         }
 
         // Parse JSON fields
-        std::string city = extract_json_content(response, "city");
-        std::string postal_code = extract_json_content(response, "postal_code");
-        std::string street_name = extract_json_content(response, "street_name");
-        std::string street_nr = extract_json_content(response, "street_nr");
+        std::string city = extract_json_content(cleaned, "city");
+        std::string postal_code = extract_json_content(cleaned, "postal_code");
+        std::string street_name = extract_json_content(cleaned, "street_name");
+        std::string street_nr = extract_json_content(cleaned, "street_nr");
 
         // Check if we got at least some data
         bool has_any_data = !city.empty() || !postal_code.empty() || !street_name.empty() || !street_nr.empty();
