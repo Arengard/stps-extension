@@ -55,9 +55,9 @@ static unique_ptr<FunctionData> SearchColumnsBind(ClientContext &context, TableF
     }
 
     // Generate dynamic SQL to search all columns
-    // Pattern: SELECT *, [col1_match, col2_match, ...] FROM table WHERE (col1 LIKE pattern OR col2 LIKE pattern...)
+    // Pattern: SELECT *, list_filter([col1_match, col2_match, ...], x -> x IS NOT NULL) FROM table WHERE (col1 LIKE pattern OR col2 LIKE pattern...)
 
-    string sql = "SELECT *, LIST_VALUE(";
+    string sql = "SELECT *, list_filter([";
 
     // Build list of CASE statements for matched columns
     for (idx_t i = 0; i < result->original_column_names.size(); i++) {
@@ -70,10 +70,10 @@ static unique_ptr<FunctionData> SearchColumnsBind(ClientContext &context, TableF
             escaped_col.replace(pos, 1, "''");
             pos += 2;
         }
-        sql += "CASE WHEN LOWER(CAST(\"" + col_name + "\" AS VARCHAR)) LIKE LOWER(?) THEN '" + escaped_col + "' END";
+        sql += "CASE WHEN LOWER(CAST(\"" + col_name + "\" AS VARCHAR)) LIKE LOWER(?) THEN '" + escaped_col + "' ELSE NULL END";
     }
 
-    sql += ") FILTER (WHERE value IS NOT NULL) AS matched_columns FROM " + result->table_name + " WHERE ";
+    sql += "], x -> x IS NOT NULL) AS matched_columns FROM " + result->table_name + " WHERE ";
 
     // Build WHERE clause - at least one column must match
     for (idx_t i = 0; i < result->original_column_names.size(); i++) {
