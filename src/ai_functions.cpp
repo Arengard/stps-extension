@@ -394,8 +394,8 @@ static std::string call_anthropic_api(const std::string& context, const std::str
         return "ERROR: Anthropic API key not configured. Use stps_set_api_key() or set ANTHROPIC_API_KEY environment variable.";
     }
 
-    // Check if we should enable tools
-    bool tools_enabled = !GetBraveApiKey().empty();
+    // Check if we should enable tools (only if no custom system message - custom means structured task)
+    bool tools_enabled = !GetBraveApiKey().empty() && custom_system_message.empty();
 
     // Build JSON request payload for Anthropic Messages API
     std::string system_message;
@@ -705,18 +705,33 @@ static void StpsAskAIAddressFunction(DataChunk &args, ExpressionState &state, Ve
             continue;
         }
 
-        // STEP 2: Parse natural language response into structured JSON
-        std::string parse_prompt = "Extract the address components from the following text and respond with ONLY a JSON object in this format: "
-                                  "{\"city\":\"...\",\"postal_code\":\"...\",\"street_name\":\"...\",\"street_nr\":\"...\"}. "
-                                  "Use empty strings for any fields you cannot determine. "
-                                  "Text to parse: " + escape_json_string(address_text);
+        // Check if we got meaningful address content
+        if (address_text.empty() || address_text.length() < 10) {
+            result_validity.SetInvalid(i);
+            continue;
+        }
 
-        std::string response = call_anthropic_api("", parse_prompt, model, 200, "");
+        // STEP 2: Parse natural language response into structured JSON
+        // Use a cleaner system message for JSON extraction
+        std::string parse_system = "You are a JSON extraction assistant. You ONLY respond with valid JSON objects, no markdown, no explanation.";
+
+        std::string parse_prompt = "Extract the address from this text into JSON format:\n\n" + address_text + "\n\n"
+                                  "Respond with ONLY this JSON (no markdown code blocks, no other text):\n"
+                                  "{\"city\":\"...\",\"postal_code\":\"...\",\"street_name\":\"...\",\"street_nr\":\"...\"}";
+
+        std::string response = call_anthropic_api("", parse_prompt, model, 200, parse_system);
 
         // Check for errors from Step 2
         if (response.find("ERROR:") == 0) {
             result_validity.SetInvalid(i);
             continue;
+        }
+
+        // Try to find JSON object in the response
+        size_t json_start = response.find('{');
+        size_t json_end = response.rfind('}');
+        if (json_start != std::string::npos && json_end != std::string::npos && json_end > json_start) {
+            response = response.substr(json_start, json_end - json_start + 1);
         }
 
         // Parse JSON fields
