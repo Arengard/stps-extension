@@ -471,8 +471,8 @@ static std::string call_anthropic_api(const std::string& context, const std::str
         // First find the content array
         size_t content_pos = response.find("\"content\"");
         if (content_pos != std::string::npos) {
-            // Find the text field within content array
-            size_t text_start = response.find("\"text\"", content_pos);
+            // Find the text field within content array (search for "text": to avoid matching "type":"text")
+            size_t text_start = response.find("\"text\":", content_pos);
             if (text_start != std::string::npos) {
                 std::string content = extract_json_content(response.substr(text_start), "text");
                 if (!content.empty()) {
@@ -561,7 +561,7 @@ static std::string call_anthropic_api(const std::string& context, const std::str
     // Extract final text response from content array
     size_t content_pos = response.find("\"content\"");
     if (content_pos != std::string::npos) {
-        size_t text_start = response.find("\"text\"", content_pos);
+        size_t text_start = response.find("\"text\":", content_pos);
         if (text_start != std::string::npos) {
             std::string content = extract_json_content(response.substr(text_start), "text");
             if (!content.empty()) {
