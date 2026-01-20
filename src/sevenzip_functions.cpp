@@ -25,6 +25,13 @@ struct View7zipGlobalState : public GlobalTableFunctionState {
     idx_t total_files = 0;
     bool initialized = false;
     string error_message;
+
+    ~View7zipGlobalState() {
+        if (initialized) {
+            Sz7z_Close(&archive);
+            initialized = false;
+        }
+    }
 };
 
 // Bind function for stps_view_7zip
@@ -112,39 +119,29 @@ static void View7zipScan(ClientContext &context, TableFunctionInput &data_p, Dat
     }
     
     output.SetCardinality(count);
-    
-    // Clean up when done
-    if (state.current_file_index >= state.total_files && state.initialized) {
-        Sz7z_Close(&state.archive);
-        state.initialized = false;
-    }
 }
 
 //===--------------------------------------------------------------------===//
 // stps_7zip - Read a file from inside a 7-Zip archive
-// Note: Full extraction requires complex stream handling
-// This function lists the files for now with a note about extraction support
 //===--------------------------------------------------------------------===//
 
 struct SevenZipBindData : public TableFunctionData {
     string archive_path;
     string inner_filename;
-    bool auto_detect_file = true;
+    int file_index = -1;
+    bool is_binary_mode = false;
+    string temp_file_path;  // For binary files extracted to temp
 };
 
 struct SevenZipGlobalState : public GlobalTableFunctionState {
-    unique_ptr<char[]> file_content;
-    size_t file_size = 0;
-    std::vector<string> column_names;
-    std::vector<LogicalType> column_types;
-    std::vector<std::vector<Value>> rows;
+    vector<string> column_names;
+    vector<LogicalType> column_types;
+    vector<vector<Value>> rows;
     idx_t current_row = 0;
-    bool parsed = false;
     string error_message;
-    bool extraction_not_supported = false;
 };
 
-// Bind function for stps_7zip
+// Bind function for stps_7zip - determines file index and schema only
 static unique_ptr<FunctionData> SevenZipBind(ClientContext &context, TableFunctionBindInput &input,
                                              vector<LogicalType> &return_types, vector<string> &names) {
     auto result = make_uniq<SevenZipBindData>();
@@ -154,13 +151,14 @@ static unique_ptr<FunctionData> SevenZipBind(ClientContext &context, TableFuncti
     }
     result->archive_path = input.inputs[0].GetValue<string>();
 
-    // Optional second argument: inner filename
+    string target_filename;
+    bool auto_detect = true;
     if (input.inputs.size() >= 2) {
-        result->inner_filename = input.inputs[1].GetValue<string>();
-        result->auto_detect_file = false;
+        target_filename = input.inputs[1].GetValue<string>();
+        auto_detect = false;
     }
 
-    // Open the archive
+    // Open archive to determine file index and schema
     CSz7zArchive archive;
     Sz7z_Init(&archive, nullptr);
 
@@ -184,22 +182,20 @@ static unique_ptr<FunctionData> SevenZipBind(ClientContext &context, TableFuncti
         throw IOException("7z archive is empty: " + result->archive_path);
     }
 
-    // Find the file to read
-    int file_index = -1;
-
-    if (result->auto_detect_file) {
+    // Find the target file
+    if (auto_detect) {
         // Find first non-directory file
         for (UInt32 i = 0; i < numFiles; i++) {
             const CSz7zFileInfo *info = Sz7z_GetFileInfo(&archive, i);
             if (info && !info->IsDir) {
-                file_index = i;
+                result->file_index = static_cast<int>(i);
                 result->inner_filename = info->Name ? info->Name : "";
                 break;
             }
         }
     } else {
-        // Look for specific file (case-insensitive)
-        string target_lower = result->inner_filename;
+        // Case-insensitive search
+        string target_lower = target_filename;
         std::transform(target_lower.begin(), target_lower.end(), target_lower.begin(), ::tolower);
 
         for (UInt32 i = 0; i < numFiles; i++) {
@@ -208,233 +204,166 @@ static unique_ptr<FunctionData> SevenZipBind(ClientContext &context, TableFuncti
                 string name_lower = info->Name;
                 std::transform(name_lower.begin(), name_lower.end(), name_lower.begin(), ::tolower);
                 if (target_lower == name_lower) {
-                    file_index = i;
-                    result->inner_filename = info->Name;  // Use actual case from archive
+                    result->file_index = static_cast<int>(i);
+                    result->inner_filename = info->Name;
                     break;
                 }
             }
         }
     }
 
-    if (file_index < 0) {
-        // Build list of available files for error message
-        string available_files;
-        int file_count = 0;
-        for (UInt32 i = 0; i < numFiles && file_count < 10; i++) {
+    if (result->file_index < 0) {
+        // Build available files list for error message
+        string available;
+        int count = 0;
+        for (UInt32 i = 0; i < numFiles && count < 10; i++) {
             const CSz7zFileInfo *info = Sz7z_GetFileInfo(&archive, i);
             if (info && info->Name && !info->IsDir) {
-                if (file_count > 0) available_files += ", ";
-                available_files += "'" + string(info->Name) + "'";
-                file_count++;
+                if (count > 0) available += ", ";
+                available += "'" + string(info->Name) + "'";
+                count++;
             }
         }
-        if (file_count == 0) available_files = "(no files)";
-        else if (numFiles > 10) available_files += ", ...";
+        if (count == 0) available = "(no files)";
+        else if (numFiles > 10) available += ", ...";
 
         Sz7z_Close(&archive);
-        if (result->auto_detect_file) {
+        if (auto_detect) {
             throw IOException("No files found in 7z archive: " + result->archive_path);
         } else {
-            throw IOException("File '" + result->inner_filename + "' not found in 7z archive. Available files: " + available_files);
+            throw IOException("File '" + target_filename + "' not found. Available: " + available);
         }
     }
 
-    // Extract file content
+    // Determine if binary by filename
+    if (IsBinaryFormat(result->inner_filename)) {
+        result->is_binary_mode = true;
+        names = {"extracted_path", "original_filename", "file_size", "file_type", "usage_hint"};
+        return_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::BIGINT,
+                       LogicalType::VARCHAR, LogicalType::VARCHAR};
+        Sz7z_Close(&archive);
+        return result;
+    }
+
+    // Extract a small preview to determine schema (first 8KB)
     Byte *outBuf = nullptr;
     size_t outSize = 0;
 
-    res = Sz7z_Extract(&archive, file_index, &outBuf, &outSize);
-    if (res != SZ_OK) {
-        Sz7z_Close(&archive);
-        if (res == SZ_ERROR_DATA) {
-            throw IOException("7z extraction failed: unsupported/complex archive or exceeds safety limits (256MB compressed / 512MB uncompressed).");
-        }
-        throw IOException("Failed to extract file from 7z archive: " + result->inner_filename);
+    res = Sz7z_Extract(&archive, result->file_index, &outBuf, &outSize);
+    Sz7z_Close(&archive);
+
+    if (res != SZ_OK || outBuf == nullptr || outSize == 0) {
+        if (outBuf) free(outBuf);
+        throw IOException("Failed to extract file for schema detection: " + result->inner_filename);
     }
 
     string content(reinterpret_cast<char*>(outBuf), outSize);
     free(outBuf);
-    Sz7z_Close(&archive);
 
-    // Check if this is a binary format that can't be parsed as CSV
-    if (IsBinaryFormat(result->inner_filename) || LooksLikeBinary(content)) {
-        // Extract to temp file and return path for user to use with read_parquet etc.
-        string temp_path = ExtractToTemp(content, result->inner_filename, "stps_7zip_");
-        string ext = GetFileExtension(result->inner_filename);
-
-        // Return info about extracted file
+    // Check if content is binary
+    if (LooksLikeBinary(content)) {
+        result->is_binary_mode = true;
         names = {"extracted_path", "original_filename", "file_size", "file_type", "usage_hint"};
         return_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::BIGINT,
                        LogicalType::VARCHAR, LogicalType::VARCHAR};
-
-        // Store temp path in inner_filename for Init to use
-        result->inner_filename = temp_path;
-        result->auto_detect_file = false;  // Signal that this is binary mode
-
         return result;
     }
 
-    // Parse to determine schema for CSV/text files
-    std::vector<string> column_names;
-    std::vector<LogicalType> column_types;
+    // Parse CSV to determine schema
+    std::vector<string> col_names;
+    std::vector<LogicalType> col_types;
     std::vector<std::vector<Value>> temp_rows;
+    ParseCSVContent(content, col_names, col_types, temp_rows);
 
-    ParseCSVContent(content, column_names, column_types, temp_rows);
-
-    if (column_names.empty()) {
-        // If parsing failed, return raw content
+    if (col_names.empty()) {
         names = {"content"};
         return_types = {LogicalType::VARCHAR};
     } else {
-        names.clear();
-        return_types.clear();
-        for (const auto &name : column_names) {
-            names.push_back(name);
-        }
-        for (const auto &type : column_types) {
-            return_types.push_back(type);
-        }
+        names = col_names;
+        return_types = col_types;
     }
 
     return result;
 }
 
-// Init function for stps_7zip
+// Init function for stps_7zip - performs full extraction and parsing
 static unique_ptr<GlobalTableFunctionState> SevenZipInit(ClientContext &context, TableFunctionInitInput &input) {
     auto &bind_data = input.bind_data->Cast<SevenZipBindData>();
-    auto result = make_uniq<SevenZipGlobalState>();
+    auto state = make_uniq<SevenZipGlobalState>();
 
-    // Check if this is binary mode (inner_filename contains temp path)
-    if (!bind_data.auto_detect_file && bind_data.inner_filename.find("stps_7zip_") != string::npos) {
-        // Binary file mode - return extraction info
-        string temp_path = bind_data.inner_filename;
-        string ext = GetFileExtension(temp_path);
+    // Open archive and extract
+    CSz7zArchive archive;
+    Sz7z_Init(&archive, nullptr);
 
-        // Get file size safely (avoid ambiguous ternary with pos_type)
-        size_t file_size = 0;
-        std::ifstream file(temp_path, std::ios::binary | std::ios::ate);
-        if (file.is_open()) {
-            std::streampos pos = file.tellg();
-            if (pos != std::streampos(-1)) {
-                file_size = static_cast<size_t>(pos);
-            }
-        }
+    SRes res = Sz7z_Open(&archive, bind_data.archive_path.c_str());
+    if (res != SZ_OK) {
+        state->error_message = "Failed to open 7z archive: " + bind_data.archive_path;
+        return state;
+    }
 
-        // Determine usage hint based on extension
+    Byte *outBuf = nullptr;
+    size_t outSize = 0;
+
+    res = Sz7z_Extract(&archive, bind_data.file_index, &outBuf, &outSize);
+    Sz7z_Close(&archive);
+
+    if (res != SZ_OK || outBuf == nullptr) {
+        if (outBuf) free(outBuf);
+        state->error_message = "Failed to extract file from 7z archive";
+        return state;
+    }
+
+    string content(reinterpret_cast<char*>(outBuf), outSize);
+    free(outBuf);
+
+    // Handle binary mode
+    if (bind_data.is_binary_mode) {
+        string temp_path = ExtractToTemp(content, bind_data.inner_filename, "stps_7zip_");
+        string ext = GetFileExtension(bind_data.inner_filename);
+
         string usage_hint;
         if (ext == "parquet") {
             usage_hint = "SELECT * FROM read_parquet('" + temp_path + "')";
         } else if (ext == "xlsx" || ext == "xls") {
             usage_hint = "Install and use st_read() for Excel files";
         } else if (ext == "arrow" || ext == "feather") {
-            usage_hint = "SELECT * FROM read_parquet('" + temp_path + "') -- Arrow/Feather compatible";
+            usage_hint = "SELECT * FROM read_parquet('" + temp_path + "')";
         } else {
             usage_hint = "Binary file extracted to: " + temp_path;
         }
 
-        // Extract original filename from temp path
-        string original_name = temp_path;
-        size_t prefix_pos = original_name.find("stps_7zip_");
-        if (prefix_pos != string::npos) {
-            original_name = original_name.substr(prefix_pos + 10);  // Skip "stps_7zip_"
-        }
-
-        result->column_names = {"extracted_path", "original_filename", "file_size", "file_type", "usage_hint"};
-        result->column_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::BIGINT,
-                               LogicalType::VARCHAR, LogicalType::VARCHAR};
+        state->column_names = {"extracted_path", "original_filename", "file_size", "file_type", "usage_hint"};
+        state->column_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::BIGINT,
+                              LogicalType::VARCHAR, LogicalType::VARCHAR};
 
         vector<Value> row;
         row.push_back(Value(temp_path));
-        row.push_back(Value(original_name));
-        row.push_back(Value::BIGINT(file_size));
+        row.push_back(Value(bind_data.inner_filename));
+        row.push_back(Value::BIGINT(static_cast<int64_t>(outSize)));
         row.push_back(Value(ext.empty() ? "binary" : ext));
         row.push_back(Value(usage_hint));
-        result->rows.push_back(row);
-        result->parsed = true;
+        state->rows.push_back(std::move(row));
 
-        return result;
+        return state;
     }
-
-    // Open the archive for CSV/text files
-    CSz7zArchive archive;
-    Sz7z_Init(&archive, nullptr);
-
-    SRes res = Sz7z_Open(&archive, bind_data.archive_path.c_str());
-    if (res != SZ_OK) {
-        result->error_message = "Failed to open 7z archive: " + bind_data.archive_path;
-        return result;
-    }
-
-    // Find the file (case-insensitive search)
-    int file_index = -1;
-    UInt32 numFiles = Sz7z_GetNumFiles(&archive);
-    string target_lower = bind_data.inner_filename;
-    std::transform(target_lower.begin(), target_lower.end(), target_lower.begin(), ::tolower);
-
-    for (UInt32 i = 0; i < numFiles; i++) {
-        const CSz7zFileInfo *info = Sz7z_GetFileInfo(&archive, i);
-        if (info && info->Name) {
-            string name_lower = info->Name;
-            std::transform(name_lower.begin(), name_lower.end(), name_lower.begin(), ::tolower);
-
-            if (target_lower == name_lower) {
-                file_index = i;
-                break;
-            }
-        }
-    }
-
-    if (file_index < 0) {
-        Sz7z_Close(&archive);
-        result->error_message = "File not found in 7z archive: '" + bind_data.inner_filename + "'. Available files: ";
-        // List available files to help user
-        int file_count = 0;
-        for (UInt32 i = 0; i < numFiles && file_count < 5; i++) {
-            const CSz7zFileInfo *info = Sz7z_GetFileInfo(&archive, i);
-            if (info && info->Name && !info->IsDir) {
-                if (file_count > 0) result->error_message += ", ";
-                result->error_message += "'" + string(info->Name) + "'";
-                file_count++;
-            }
-        }
-        if (numFiles > 5) result->error_message += ", ...";
-        return result;
-    }
-
-    // Extract file content
-    Byte *outBuf = nullptr;
-    size_t outSize = 0;
-
-    res = Sz7z_Extract(&archive, file_index, &outBuf, &outSize);
-    if (res != SZ_OK) {
-        Sz7z_Close(&archive);
-        if (res == SZ_ERROR_DATA) {
-            result->error_message = "7z extraction failed: unsupported/complex archive or exceeds safety limits (256MB compressed / 512MB uncompressed).";
-        } else {
-            result->error_message = "Failed to extract file from 7z archive";
-        }
-        return result;
-    }
-
-    string content(reinterpret_cast<char*>(outBuf), outSize);
-    free(outBuf);
-    Sz7z_Close(&archive);
 
     // Parse CSV content
-    ParseCSVContent(content, result->column_names, result->column_types, result->rows);
-    result->parsed = true;
+    ParseCSVContent(content, state->column_names, state->column_types, state->rows);
 
-    // If parsing returned no columns, provide helpful error
-    if (result->column_names.empty()) {
-        result->error_message = "Failed to parse file as CSV/text. File may be binary. Size: " +
-                               std::to_string(outSize) + " bytes.";
-        return result;
+    // Fallback to raw content if parsing failed
+    if (state->column_names.empty()) {
+        state->column_names = {"content"};
+        state->column_types = {LogicalType::VARCHAR};
+        state->rows.clear();
+        vector<Value> row;
+        row.push_back(Value(content));
+        state->rows.push_back(std::move(row));
     }
 
-    return result;
+    return state;
 }
 
-// Scan function for stps_7zip
+// Scan function for stps_7zip - just iterates rows
 static void SevenZipScan(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
     auto &state = data_p.global_state->Cast<SevenZipGlobalState>();
     
@@ -447,11 +376,9 @@ static void SevenZipScan(ClientContext &context, TableFunctionInput &data_p, Dat
     
     while (state.current_row < state.rows.size() && count < max_count) {
         auto &row = state.rows[state.current_row];
-        
         for (idx_t col = 0; col < row.size(); col++) {
             output.SetValue(col, count, row[col]);
         }
-        
         state.current_row++;
         count++;
     }
