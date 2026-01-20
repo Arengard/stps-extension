@@ -8,7 +8,6 @@
 #include <cctype>
 #include <iomanip>
 #include <mutex>
-#include <regex>
 #include "curl_utils.hpp"
 
 #ifdef _WIN32
@@ -30,9 +29,6 @@ static std::mutex ai_config_mutex;
 static std::string anthropic_api_key;
 static std::string anthropic_model = "claude-sonnet-4-5-20250929";  // Default model (Claude Sonnet 4.5)
 static std::string brave_api_key;
-static std::string google_api_key;
-static std::string google_cse_id;  // Google Custom Search Engine ID
-static std::string search_provider = "brave";  // Default: "brave" or "google"
 
 void SetAnthropicApiKey(const std::string& key) {
     std::lock_guard<std::mutex> lock(ai_config_mutex);
@@ -47,41 +43,6 @@ void SetAnthropicModel(const std::string& model) {
 void SetBraveApiKey(const std::string& key) {
     std::lock_guard<std::mutex> lock(ai_config_mutex);
     brave_api_key = key;
-}
-
-void SetGoogleApiKey(const std::string& key) {
-    std::lock_guard<std::mutex> lock(ai_config_mutex);
-    google_api_key = key;
-}
-
-void SetGoogleCseId(const std::string& id) {
-    std::lock_guard<std::mutex> lock(ai_config_mutex);
-    google_cse_id = id;
-}
-
-void SetSearchProvider(const std::string& provider) {
-    std::lock_guard<std::mutex> lock(ai_config_mutex);
-    // Normalize to lowercase
-    std::string p = provider;
-    for (auto& c : p) c = std::tolower(static_cast<unsigned char>(c));
-    if (p == "google" || p == "brave") {
-        search_provider = p;
-    }
-}
-
-std::string GetSearchProvider() {
-    std::lock_guard<std::mutex> lock(ai_config_mutex);
-    return search_provider;
-}
-
-std::string GetGoogleApiKey() {
-    std::lock_guard<std::mutex> lock(ai_config_mutex);
-    return google_api_key;
-}
-
-std::string GetGoogleCseId() {
-    std::lock_guard<std::mutex> lock(ai_config_mutex);
-    return google_cse_id;
 }
 
 std::string GetAnthropicModel() {
@@ -296,9 +257,8 @@ static std::string extract_json_content(const std::string& json, const std::stri
 }
 
 // ============================================================================
-// German Address Parser - extracts address components from text using regex
+// Address structure - used by tool-based address extraction
 // ============================================================================
-
 
 struct ParsedAddress {
     std::string city;
@@ -306,200 +266,6 @@ struct ParsedAddress {
     std::string street_name;
     std::string street_nr;
 };
-
-// Strip HTML tags from text
-static std::string strip_html_tags(const std::string& input) {
-    std::string result;
-    result.reserve(input.length());
-    bool in_tag = false;
-
-    for (size_t i = 0; i < input.length(); i++) {
-        if (input[i] == '<') {
-            in_tag = true;
-        } else if (input[i] == '>') {
-            in_tag = false;
-        } else if (!in_tag) {
-            result += input[i];
-        }
-    }
-    return result;
-}
-
-// Trim whitespace from string
-static std::string trim_string(const std::string& s) {
-    size_t start = s.find_first_not_of(" \t\n\r,.");
-    if (start == std::string::npos) return "";
-    size_t end = s.find_last_not_of(" \t\n\r,.");
-    return s.substr(start, end - start + 1);
-}
-
-// Clean city name - remove phone, country, and other suffixes
-static std::string clean_city_name(const std::string& city) {
-    std::string result = city;
-
-    // Convert to check for stop words (case insensitive)
-    std::string lower = result;
-    for (auto& c : lower) c = std::tolower(static_cast<unsigned char>(c));
-
-    // Stop words - truncate at these
-    std::vector<std::string> stop_words = {
-        "germany", "deutschland", "phone", "tel", "fax", "telefon",
-        "email", "e-mail", "www.", "http", "+49", "(+49", "gmbh", "ag "
-    };
-
-    for (const auto& stop : stop_words) {
-        size_t pos = lower.find(stop);
-        if (pos != std::string::npos && pos > 0) {
-            result = result.substr(0, pos);
-            lower = lower.substr(0, pos);
-        }
-    }
-
-    return trim_string(result);
-}
-
-// Clean street name - extract only the street part, not company names
-static std::string clean_street_name(const std::string& street) {
-    std::string result = street;
-
-    // Find the last occurrence of a street suffix
-    std::string lower = result;
-    for (auto& c : lower) c = std::tolower(static_cast<unsigned char>(c));
-
-    std::vector<std::string> suffixes = {
-        "straße", "strasse", "str.", "weg", "platz", "allee",
-        "ring", "gasse", "damm", "ufer", "chaussee"
-    };
-
-    size_t last_suffix_pos = std::string::npos;
-    size_t last_suffix_len = 0;
-
-    for (const auto& suffix : suffixes) {
-        size_t pos = lower.rfind(suffix);
-        if (pos != std::string::npos) {
-            if (last_suffix_pos == std::string::npos || pos > last_suffix_pos) {
-                last_suffix_pos = pos;
-                last_suffix_len = suffix.length();
-            }
-        }
-    }
-
-    if (last_suffix_pos != std::string::npos) {
-        // Find the start of this street name (go backwards from suffix)
-        size_t street_start = last_suffix_pos;
-
-        // Skip back over the street name word(s)
-        while (street_start > 0) {
-            char prev = result[street_start - 1];
-            // Stop at delimiters that separate company name from street
-            if (prev == ',' || prev == ';' || prev == '|' || prev == '\n') {
-                break;
-            }
-            // Stop at company indicators
-            if (street_start >= 4) {
-                std::string prev4 = lower.substr(street_start - 4, 4);
-                if (prev4 == "gmbh" || prev4 == " ag " || prev4 == " kg ") {
-                    break;
-                }
-            }
-            if (street_start >= 3) {
-                std::string prev3 = lower.substr(street_start - 3, 3);
-                if (prev3 == "mbh" || prev3 == " se") {
-                    break;
-                }
-            }
-            street_start--;
-        }
-
-        // Skip leading spaces/punctuation
-        while (street_start < result.length() &&
-               (result[street_start] == ' ' || result[street_start] == ',' ||
-                result[street_start] == ';')) {
-            street_start++;
-        }
-
-        result = result.substr(street_start, last_suffix_pos + last_suffix_len - street_start);
-    }
-
-    return trim_string(result);
-}
-
-static ParsedAddress parse_german_address(const std::string& text) {
-    ParsedAddress addr;
-
-    // First, strip HTML tags
-    std::string cleaned = strip_html_tags(text);
-
-    // Step 1: Find 5-digit German postal code (PLZ)
-    std::regex plz_pattern(R"((\d{5}))");
-    std::smatch plz_match;
-
-    if (std::regex_search(cleaned, plz_match, plz_pattern)) {
-        // Verify it's not a phone number (check context)
-        size_t plz_pos = plz_match.position();
-        bool is_phone = false;
-
-        // Check if preceded by +, (, Tel, Fax
-        if (plz_pos > 0) {
-            char prev = cleaned[plz_pos - 1];
-            if (prev == '+' || prev == '(' || prev == '-') {
-                is_phone = true;
-            }
-            if (plz_pos >= 3) {
-                std::string prev3 = cleaned.substr(plz_pos - 3, 3);
-                for (auto& c : prev3) c = std::tolower(static_cast<unsigned char>(c));
-                if (prev3 == "tel" || prev3 == "fax" || prev3 == "+49") {
-                    is_phone = true;
-                }
-            }
-        }
-
-        // Check if followed by more digits (phone number)
-        size_t after_plz = plz_pos + 5;
-        if (after_plz < cleaned.length() && std::isdigit(cleaned[after_plz])) {
-            is_phone = true;
-        }
-
-        if (!is_phone) {
-            addr.postal_code = plz_match[1].str();
-
-            // Step 2: Extract city (text after PLZ until delimiter)
-            size_t city_start = after_plz;
-            while (city_start < cleaned.length() &&
-                   (cleaned[city_start] == ' ' || cleaned[city_start] == ',')) {
-                city_start++;
-            }
-
-            size_t city_end = city_start;
-            while (city_end < cleaned.length()) {
-                char c = cleaned[city_end];
-                if (c == ',' || c == '\n' || c == '|' || c == ';' || c == '(') {
-                    break;
-                }
-                city_end++;
-            }
-
-            if (city_end > city_start) {
-                addr.city = clean_city_name(cleaned.substr(city_start, city_end - city_start));
-            }
-        }
-    }
-
-    // Step 3: Find street with number
-    // Pattern: StreetName + suffix + optional space + number
-    std::regex street_pattern(
-        R"(([A-Za-z][A-Za-z\-\.\s]*(?:stra(?:ss|ß)e|str\.|weg|platz|allee|ring|gasse|damm|ufer|chaussee))\s*(\d+[a-zA-Z]?))",
-        std::regex_constants::icase
-    );
-
-    std::smatch street_match;
-    if (std::regex_search(cleaned, street_match, street_pattern)) {
-        addr.street_name = clean_street_name(street_match[1].str());
-        addr.street_nr = trim_string(street_match[2].str());
-    }
-
-    return addr;
-}
 
 // ============================================================================
 // Web Search Support
@@ -626,291 +392,6 @@ static std::string execute_brave_search(const std::string& query) {
     return format_search_results(response);
 }
 
-// Structure to hold parsed address from Brave Local Search
-struct BraveLocalAddress {
-    std::string city;
-    std::string postal_code;
-    std::string street_name;
-    std::string street_nr;
-    bool found;
-};
-
-// Parse German street address like "Brauerstraße 12" into street_name and street_nr
-static void parse_street_address(const std::string& street_full, std::string& street_name, std::string& street_nr) {
-    street_name.clear();
-    street_nr.clear();
-
-    if (street_full.empty()) return;
-
-    // Find last space followed by number
-    size_t last_space = std::string::npos;
-    for (size_t i = street_full.length() - 1; i > 0; i--) {
-        if (street_full[i] == ' ' && i + 1 < street_full.length() && std::isdigit(street_full[i + 1])) {
-            last_space = i;
-            break;
-        }
-    }
-
-    if (last_space != std::string::npos) {
-        street_name = street_full.substr(0, last_space);
-        street_nr = street_full.substr(last_space + 1);
-    } else {
-        street_name = street_full;
-    }
-}
-
-// Execute Brave Local Search API for business address lookup
-// Returns structured address data directly from Brave's POI/locations data
-static BraveLocalAddress execute_brave_local_search(const std::string& company_name) {
-    BraveLocalAddress result = {"", "", "", "", false};
-
-    std::string api_key = GetBraveApiKey();
-    if (api_key.empty()) {
-        return result;
-    }
-
-    // Build optimized search query for German business addresses
-    std::string query = company_name + " Adresse Deutschland";
-    std::string encoded_query = url_encode(query);
-
-    // Use Brave web search with result_filter=locations to get POI data
-    // Also request extra_snippets for more address details
-    std::string url = "https://api.search.brave.com/res/v1/web/search?q=" + encoded_query +
-                      "&count=10&result_filter=locations,web&extra_snippets=true";
-
-    CurlHeaders headers;
-    headers.append("Accept: application/json");
-    headers.append("X-Subscription-Token: " + api_key);
-
-    long http_code = 0;
-    std::string response = curl_get(url, headers, &http_code);
-
-    if (response.find("ERROR:") == 0 || response.empty()) {
-        return result;
-    }
-
-    // First try: Look for "locations" object with structured address data
-    // Brave returns: "locations": {"results": [{"address": {...}, "postal_code": "...", ...}]}
-    size_t locations_pos = response.find("\"locations\"");
-    if (locations_pos != std::string::npos) {
-        size_t results_pos = response.find("\"results\"", locations_pos);
-        if (results_pos != std::string::npos) {
-            // Find first location result
-            size_t obj_start = response.find('{', results_pos + 10);
-            if (obj_start != std::string::npos) {
-                // Find matching closing brace
-                int brace_count = 1;
-                size_t obj_end = obj_start + 1;
-                while (obj_end < response.length() && brace_count > 0) {
-                    if (response[obj_end] == '{') brace_count++;
-                    else if (response[obj_end] == '}') brace_count--;
-                    obj_end++;
-                }
-
-                std::string location_obj = response.substr(obj_start, obj_end - obj_start);
-
-                // Extract address fields from location object
-                // Brave Local returns: city, postal_code, street_address or address_line
-                std::string city = extract_json_content(location_obj, "city");
-                std::string postal = extract_json_content(location_obj, "postal_code");
-                std::string street = extract_json_content(location_obj, "street_address");
-                if (street.empty()) {
-                    street = extract_json_content(location_obj, "address_line");
-                }
-
-                if (!city.empty() || !postal.empty() || !street.empty()) {
-                    result.city = city;
-                    result.postal_code = postal;
-                    parse_street_address(street, result.street_name, result.street_nr);
-                    result.found = true;
-                    return result;
-                }
-            }
-        }
-    }
-
-    // Second try: Parse from web results - look for German address patterns
-    // Pattern: "Street Nr, PLZ City" or "PLZ City, Street Nr"
-    size_t web_pos = response.find("\"web\"");
-    if (web_pos != std::string::npos) {
-        size_t results_pos = response.find("\"results\"", web_pos);
-        if (results_pos != std::string::npos) {
-            // Search through web results for address patterns
-            size_t search_start = results_pos;
-
-            // Look for 5-digit German postal code pattern
-            for (int attempt = 0; attempt < 10 && search_start < response.length(); attempt++) {
-                // Find description or snippet text
-                size_t desc_pos = response.find("\"description\"", search_start);
-                if (desc_pos == std::string::npos) break;
-
-                std::string desc = extract_json_content(response.substr(desc_pos), "description");
-                if (!desc.empty()) {
-                    // Use existing parse_german_address function
-                    ParsedAddress parsed = parse_german_address(desc);
-                    if (!parsed.city.empty() || !parsed.postal_code.empty()) {
-                        result.city = parsed.city;
-                        result.postal_code = parsed.postal_code;
-                        result.street_name = parsed.street_name;
-                        result.street_nr = parsed.street_nr;
-                        result.found = true;
-                        return result;
-                    }
-                }
-                search_start = desc_pos + 15;
-            }
-        }
-    }
-
-    return result;
-}
-
-// Format Google Custom Search API results into a readable string
-static std::string format_google_search_results(const std::string& json_response) {
-    std::ostringstream formatted;
-
-    // Look for "items":[...] pattern (Google CSE uses "items" not "results")
-    size_t items_pos = json_response.find("\"items\"");
-    if (items_pos == std::string::npos) {
-        return "No search results found.";
-    }
-
-    // Find the opening bracket of items array
-    size_t array_start = json_response.find('[', items_pos);
-    if (array_start == std::string::npos) {
-        return "No search results found.";
-    }
-
-    formatted << "Search Results:\n\n";
-
-    size_t pos = array_start + 1;
-    int result_num = 1;
-
-    while (pos < json_response.length() && result_num <= 5) {
-        // Find next result object
-        size_t obj_start = json_response.find('{', pos);
-        if (obj_start == std::string::npos) break;
-
-        // Find matching closing brace (handle nested objects)
-        int brace_count = 1;
-        size_t obj_end = obj_start + 1;
-        while (obj_end < json_response.length() && brace_count > 0) {
-            if (json_response[obj_end] == '{') brace_count++;
-            else if (json_response[obj_end] == '}') brace_count--;
-            obj_end++;
-        }
-        if (brace_count != 0) break;
-
-        std::string result_obj = json_response.substr(obj_start, obj_end - obj_start);
-
-        // Extract title, link (url), snippet (description) - Google uses different field names
-        std::string title = extract_json_content(result_obj, "title");
-        std::string url = extract_json_content(result_obj, "link");
-        std::string description = extract_json_content(result_obj, "snippet");
-
-        if (!title.empty() && !url.empty()) {
-            formatted << result_num << ". " << title << "\n";
-            formatted << "   URL: " << url << "\n";
-            if (!description.empty()) {
-                formatted << "   " << description << "\n";
-            }
-            formatted << "\n";
-            result_num++;
-        }
-
-        pos = obj_end;
-
-        // Check if we've reached the end of the array
-        size_t next_comma = json_response.find(',', pos);
-        size_t array_end = json_response.find(']', pos);
-        if (next_comma == std::string::npos || (array_end != std::string::npos && array_end < next_comma)) {
-            break;
-        }
-    }
-
-    if (result_num == 1) {
-        return "No search results found.";
-    }
-
-    return formatted.str();
-}
-
-// Execute a Google Custom Search API query
-static std::string execute_google_search(const std::string& query) {
-    std::string api_key = GetGoogleApiKey();
-    std::string cse_id = GetGoogleCseId();
-
-    if (api_key.empty()) {
-        return "ERROR: Google API key not configured. Use stps_set_google_api_key() first.";
-    }
-    if (cse_id.empty()) {
-        return "ERROR: Google CSE ID not configured. Use stps_set_google_cse_id() first.";
-    }
-
-    // Build Google Custom Search API URL
-    // https://www.googleapis.com/customsearch/v1?key=API_KEY&cx=CSE_ID&q=QUERY
-    std::string encoded_query = url_encode(query);
-    std::string url = "https://www.googleapis.com/customsearch/v1?key=" + api_key +
-                      "&cx=" + cse_id +
-                      "&q=" + encoded_query +
-                      "&num=5";
-
-    // Set up headers
-    CurlHeaders headers;
-    headers.append("Accept: application/json");
-
-    // Make the request
-    long http_code = 0;
-    std::string response = curl_get(url, headers, &http_code);
-
-    // Check for errors
-    if (response.find("ERROR:") == 0) {
-        return "Search failed: " + response;
-    }
-
-    // Check for API error in response
-    std::string error_msg = extract_json_content(response, "message");
-    if (!error_msg.empty() && response.find("\"error\"") != std::string::npos) {
-        return "ERROR: Google API error: " + error_msg;
-    }
-
-    // Format and return results
-    return format_google_search_results(response);
-}
-
-// Unified web search function - uses configured provider
-static std::string execute_web_search(const std::string& query) {
-    std::string provider = GetSearchProvider();
-
-    if (provider == "google") {
-        // Check if Google is configured
-        if (!GetGoogleApiKey().empty() && !GetGoogleCseId().empty()) {
-            return execute_google_search(query);
-        }
-        // Fall back to Brave if Google not configured
-        if (!GetBraveApiKey().empty()) {
-            return execute_brave_search(query);
-        }
-        return "ERROR: Google search not configured and no fallback available.";
-    } else {
-        // Default: Brave
-        if (!GetBraveApiKey().empty()) {
-            return execute_brave_search(query);
-        }
-        // Fall back to Google if Brave not configured
-        if (!GetGoogleApiKey().empty() && !GetGoogleCseId().empty()) {
-            return execute_google_search(query);
-        }
-        return "ERROR: Brave search not configured and no fallback available.";
-    }
-}
-
-// Check if any search provider is available
-static bool is_search_available() {
-    return !GetBraveApiKey().empty() ||
-           (!GetGoogleApiKey().empty() && !GetGoogleCseId().empty());
-}
-
 // ============================================================================
 // Anthropic API call
 // ============================================================================
@@ -924,8 +405,8 @@ static std::string call_anthropic_api(const std::string& context, const std::str
         return "ERROR: Anthropic API key not configured. Use stps_set_api_key() or set ANTHROPIC_API_KEY environment variable.";
     }
 
-    // Check if we should enable tools (only if no custom system message and search is available)
-    bool tools_enabled = is_search_available() && custom_system_message.empty();
+    // Check if we should enable tools (only if no custom system message - custom means structured task)
+    bool tools_enabled = !GetBraveApiKey().empty() && custom_system_message.empty();
 
     // Build JSON request payload for Anthropic Messages API
     std::string system_message;
@@ -1040,8 +521,8 @@ static std::string call_anthropic_api(const std::string& context, const std::str
         return "ERROR: Unexpected tool request";
     }
 
-    // Execute the search using configured provider
-    std::string search_results = execute_web_search(search_query);
+    // Execute the search
+    std::string search_results = execute_brave_search(search_query);
 
     bool search_failed = search_results.find("ERROR:") == 0 || search_results.find("Search failed") == 0;
 
@@ -1213,76 +694,191 @@ static void StpsGetModelFunction(DataChunk &args, ExpressionState &state, Vector
     FlatVector::SetNull(result, 0, false);
 }
 
-static void StpsSetGoogleApiKeyFunction(DataChunk &args, ExpressionState &state, Vector &result) {
-    auto &key_vec = args.data[0];
-
-    if (!FlatVector::IsNull(key_vec, 0)) {
-        string_t key_str = FlatVector::GetData<string_t>(key_vec)[0];
-        std::string key = key_str.GetString();
-        SetGoogleApiKey(key);
-
-        FlatVector::GetData<string_t>(result)[0] = StringVector::AddString(result, "Google API key configured successfully");
-        FlatVector::SetNull(result, 0, false);
-    } else {
-        FlatVector::GetData<string_t>(result)[0] = StringVector::AddString(result, "ERROR: API key cannot be NULL");
-        FlatVector::SetNull(result, 0, false);
-    }
-}
-
-static void StpsSetGoogleCseIdFunction(DataChunk &args, ExpressionState &state, Vector &result) {
-    auto &id_vec = args.data[0];
-
-    if (!FlatVector::IsNull(id_vec, 0)) {
-        string_t id_str = FlatVector::GetData<string_t>(id_vec)[0];
-        std::string id = id_str.GetString();
-        SetGoogleCseId(id);
-
-        FlatVector::GetData<string_t>(result)[0] = StringVector::AddString(result, "Google CSE ID configured successfully");
-        FlatVector::SetNull(result, 0, false);
-    } else {
-        FlatVector::GetData<string_t>(result)[0] = StringVector::AddString(result, "ERROR: CSE ID cannot be NULL");
-        FlatVector::SetNull(result, 0, false);
-    }
-}
-
-static void StpsSetSearchProviderFunction(DataChunk &args, ExpressionState &state, Vector &result) {
-    auto &provider_vec = args.data[0];
-
-    if (!FlatVector::IsNull(provider_vec, 0)) {
-        string_t provider_str = FlatVector::GetData<string_t>(provider_vec)[0];
-        std::string provider = provider_str.GetString();
-        SetSearchProvider(provider);
-
-        std::string current = GetSearchProvider();
-        std::string msg = "Search provider set to: " + current;
-        FlatVector::GetData<string_t>(result)[0] = StringVector::AddString(result, msg);
-        FlatVector::SetNull(result, 0, false);
-    } else {
-        FlatVector::GetData<string_t>(result)[0] = StringVector::AddString(result, "ERROR: Provider cannot be NULL (use 'brave' or 'google')");
-        FlatVector::SetNull(result, 0, false);
-    }
-}
-
-static void StpsGetSearchProviderFunction(DataChunk &args, ExpressionState &state, Vector &result) {
-    std::string provider = GetSearchProvider();
-    FlatVector::GetData<string_t>(result)[0] = StringVector::AddString(result, provider);
-    FlatVector::SetNull(result, 0, false);
-}
-
 // ============================================================================
-// Address-specific AI function with structured output
+// Address-specific AI function with structured output using tool calling
 // ============================================================================
+
+// Specialized API call for address lookup using tool calling
+static ParsedAddress call_anthropic_api_for_address(const std::string& company_name, const std::string& model) {
+    ParsedAddress addr;
+    std::string api_key = GetAnthropicApiKey();
+
+    if (api_key.empty()) {
+        return addr; // Return empty address on error
+    }
+
+    std::string brave_key = GetBraveApiKey();
+    bool has_brave = !brave_key.empty();
+
+    // Build system message
+    std::string system_message = "You are a helpful assistant that searches for business addresses. "
+                                "Use web_search to find the company's address, then use report_address to provide the structured data.";
+
+    std::string user_message = "Find the business address for: " + escape_json_string(company_name);
+
+    // Build tools array with both web_search and report_address
+    std::string tools_json = "\"tools\":[";
+
+    // Add web_search tool if Brave API is available
+    if (has_brave) {
+        tools_json += "{"
+            "\"name\":\"web_search\","
+            "\"description\":\"Search the web for current information about businesses and addresses\","
+            "\"input_schema\":{"
+                "\"type\":\"object\","
+                "\"properties\":{"
+                    "\"query\":{\"type\":\"string\",\"description\":\"Search query\"}"
+                "},"
+                "\"required\":[\"query\"]"
+            "}"
+        "},";
+    }
+
+    // Add report_address tool
+    tools_json += "{"
+        "\"name\":\"report_address\","
+        "\"description\":\"Report the structured address data for a business\","
+        "\"input_schema\":{"
+            "\"type\":\"object\","
+            "\"properties\":{"
+                "\"city\":{\"type\":\"string\",\"description\":\"City name\"},"
+                "\"postal_code\":{\"type\":\"string\",\"description\":\"Postal code (5 digits for Germany)\"},"
+                "\"street_name\":{\"type\":\"string\",\"description\":\"Street name\"},"
+                "\"street_nr\":{\"type\":\"string\",\"description\":\"Street number\"}"
+            "},"
+            "\"required\":[\"city\",\"postal_code\",\"street_name\",\"street_nr\"]"
+        "}"
+    "}],";
+
+    // First API call
+    std::string json_payload = "{"
+        "\"model\":\"" + model + "\","
+        "\"max_tokens\":1000,"
+        + tools_json +
+        "\"system\":\"" + system_message + "\","
+        "\"messages\":["
+            "{\"role\":\"user\",\"content\":\"" + user_message + "\"}"
+        "],"
+        "\"temperature\":0.7"
+    "}";
+
+    CurlHeaders headers;
+    headers.append("Content-Type: application/json");
+    headers.append("x-api-key: " + api_key);
+    headers.append("anthropic-version: 2023-06-01");
+
+    long http_code = 0;
+    std::string response = curl_post_json(
+        "https://api.anthropic.com/v1/messages",
+        json_payload,
+        headers,
+        &http_code
+    );
+
+    if (response.find("ERROR:") == 0) {
+        return addr;
+    }
+
+    // Handle multi-turn tool calling (up to 5 turns to handle web_search -> report_address)
+    std::string messages_history = "{\"role\":\"user\",\"content\":\"" + user_message + "\"}";
+
+    for (int turn = 0; turn < 5; turn++) {
+        std::string stop_reason = extract_json_content(response, "stop_reason");
+
+        if (stop_reason != "tool_use") {
+            // No tool use, we're done but didn't get structured data
+            break;
+        }
+
+        // Find tool use in content array
+        size_t tool_use_pos = response.find("\"type\":\"tool_use\"");
+        if (tool_use_pos == std::string::npos) {
+            break;
+        }
+
+        std::string tool_id = extract_json_content(response.substr(tool_use_pos, 500), "id");
+        std::string tool_name = extract_json_content(response.substr(tool_use_pos, 500), "name");
+
+        // Find the input object
+        size_t input_start = response.find("\"input\"", tool_use_pos);
+
+        if (tool_name == "report_address") {
+            // Extract address fields from the tool call parameters
+            addr.city = extract_json_content(response.substr(input_start, 1000), "city");
+            addr.postal_code = extract_json_content(response.substr(input_start, 1000), "postal_code");
+            addr.street_name = extract_json_content(response.substr(input_start, 1000), "street_name");
+            addr.street_nr = extract_json_content(response.substr(input_start, 1000), "street_nr");
+
+            // Successfully got address, we're done
+            return addr;
+
+        } else if (tool_name == "web_search" && has_brave) {
+            // Execute web search
+            std::string search_query = extract_json_content(response.substr(input_start, 500), "query");
+            if (search_query.empty()) {
+                break;
+            }
+
+            std::string search_results = execute_brave_search(search_query);
+            bool search_failed = search_results.find("ERROR:") == 0 || search_results.find("Search failed") == 0;
+
+            std::string tool_result_content = search_failed
+                ? "Search unavailable. Please answer from your knowledge."
+                : search_results;
+
+            // Build assistant message with tool use
+            messages_history += ","
+                "{\"role\":\"assistant\",\"content\":["
+                    "{\"type\":\"tool_use\",\"id\":\"" + tool_id + "\",\"name\":\"web_search\","
+                    "\"input\":{\"query\":\"" + escape_json_string(search_query) + "\"}}"
+                "]},"
+                "{\"role\":\"user\",\"content\":["
+                    "{\"type\":\"tool_result\",\"tool_use_id\":\"" + tool_id + "\","
+                    "\"content\":\"" + escape_json_string(tool_result_content) + "\""
+                    + (search_failed ? ",\"is_error\":true" : "") + "}"
+                "]}";
+
+            // Make next API call with updated conversation
+            json_payload = "{"
+                "\"model\":\"" + model + "\","
+                "\"max_tokens\":1000,"
+                + tools_json +
+                "\"system\":\"" + system_message + "\","
+                "\"messages\":[" + messages_history + "],"
+                "\"temperature\":0.3"
+            "}";
+
+            response = curl_post_json(
+                "https://api.anthropic.com/v1/messages",
+                json_payload,
+                headers,
+                &http_code
+            );
+
+            if (response.find("ERROR:") == 0) {
+                break;
+            }
+        } else {
+            // Unknown tool or unexpected state
+            break;
+        }
+    }
+
+    return addr;
+}
 
 static void StpsAskAIAddressFunction(DataChunk &args, ExpressionState &state, Vector &result) {
     auto count = args.size();
     auto &company_name_vec = args.data[0];
 
+    // Use configured model as default, allow override via parameter
     string model = GetAnthropicModel();
     if (args.ColumnCount() >= 2 && !FlatVector::IsNull(args.data[1], 0)) {
         string_t model_str = FlatVector::GetData<string_t>(args.data[1])[0];
         model = model_str.GetString();
     }
 
+    // Get struct entries for output
     auto &struct_entries = StructVector::GetEntries(result);
     auto &city_vec = *struct_entries[0];
     auto &postal_code_vec = *struct_entries[1];
@@ -1300,166 +896,48 @@ static void StpsAskAIAddressFunction(DataChunk &args, ExpressionState &state, Ve
         string_t company_name_str = FlatVector::GetData<string_t>(company_name_vec)[i];
         std::string company_name = company_name_str.GetString();
 
-        std::string city, postal_code, street_name, street_nr;
-        bool has_data = false;
+        // Call Claude API with tool calling to get structured address
+        ParsedAddress addr = call_anthropic_api_for_address(company_name, model);
 
-        // STEP 1: Try direct Brave Local Search first (faster, no Claude API cost)
-        if (!GetBraveApiKey().empty()) {
-            BraveLocalAddress local_result = execute_brave_local_search(company_name);
-            if (local_result.found) {
-                city = local_result.city;
-                postal_code = local_result.postal_code;
-                street_name = local_result.street_name;
-                street_nr = local_result.street_nr;
-                has_data = !city.empty() || !postal_code.empty() ||
-                           !street_name.empty() || !street_nr.empty();
-            }
-        }
-
-        // STEP 2: Fall back to Claude AI with web search if direct search failed
-        if (!has_data && !GetAnthropicApiKey().empty()) {
-            std::string prompt = "Search for the official business address of \"" + company_name +
-                "\" in Germany. After finding the address, respond with ONLY this JSON format, no other text:\n"
-                "{\"city\":\"<city name>\",\"postal_code\":\"<5 digit PLZ>\",\"street_name\":\"<street name>\",\"street_nr\":\"<house number>\"}";
-
-            std::string response = call_anthropic_api(
-                company_name,
-                prompt,
-                model,
-                800,
-                ""  // Empty = tools enabled for web search
-            );
-
-            if (response.find("ERROR:") != 0 && !response.empty()) {
-                // Try JSON extraction first
-                city = extract_json_content(response, "city");
-                postal_code = extract_json_content(response, "postal_code");
-                street_name = extract_json_content(response, "street_name");
-                street_nr = extract_json_content(response, "street_nr");
-
-                has_data = !city.empty() || !postal_code.empty() ||
-                           !street_name.empty() || !street_nr.empty();
-
-                // If JSON extraction failed, try parsing address from plain text
-                if (!has_data) {
-                    ParsedAddress parsed = parse_german_address(response);
-                    city = parsed.city;
-                    postal_code = parsed.postal_code;
-                    street_name = parsed.street_name;
-                    street_nr = parsed.street_nr;
-                    has_data = !city.empty() || !postal_code.empty() ||
-                               !street_name.empty() || !street_nr.empty();
-                }
-            }
-        }
-
-        if (!has_data) {
+        // Check if we got at least some data
+        bool has_any_data = !addr.city.empty() || !addr.postal_code.empty() ||
+                           !addr.street_name.empty() || !addr.street_nr.empty();
+        if (!has_any_data) {
             result_validity.SetInvalid(i);
             continue;
         }
 
+        // Mark the struct result as valid
         result_validity.SetValid(i);
 
-        // Helper lambda to set field or null
-        auto set_or_null = [&](Vector &vec, const std::string &value) {
-            if (value.empty()) {
-                FlatVector::SetNull(vec, i, true);
-            } else {
-                FlatVector::GetData<string_t>(vec)[i] = StringVector::AddString(vec, value);
-                FlatVector::SetNull(vec, i, false);
-            }
-        };
-
-        set_or_null(city_vec, city);
-        set_or_null(postal_code_vec, postal_code);
-        set_or_null(street_name_vec, street_name);
-        set_or_null(street_nr_vec, street_nr);
-    }
-}
-
-// ============================================================================
-// Gender detection from first name
-// ============================================================================
-
-static void StpsAskAIGenderFunction(DataChunk &args, ExpressionState &state, Vector &result) {
-    auto count = args.size();
-    auto &name_vec = args.data[0];
-
-    string model = GetAnthropicModel();
-    if (args.ColumnCount() >= 2 && !FlatVector::IsNull(args.data[1], 0)) {
-        string_t model_str = FlatVector::GetData<string_t>(args.data[1])[0];
-        model = model_str.GetString();
-    }
-
-    // System message for gender detection - no web search needed
-    const std::string system_message =
-        "You are a gender classification assistant. Given a first name, determine the most likely gender. "
-        "Respond with ONLY one of these values: 'male', 'female', or 'unknown'. "
-        "Do not include any explanation or additional text.";
-
-    for (idx_t i = 0; i < count; i++) {
-        if (FlatVector::IsNull(name_vec, i)) {
-            FlatVector::SetNull(result, i, true);
-            continue;
+        // Set struct fields
+        if (addr.city.empty()) {
+            FlatVector::SetNull(city_vec, i, true);
+        } else {
+            FlatVector::GetData<string_t>(city_vec)[i] = StringVector::AddString(city_vec, addr.city);
+            FlatVector::SetNull(city_vec, i, false);
         }
 
-        string_t name_str = FlatVector::GetData<string_t>(name_vec)[i];
-        std::string name = name_str.GetString();
-
-        // Trim the name
-        size_t start = name.find_first_not_of(" \t\n\r");
-        size_t end = name.find_last_not_of(" \t\n\r");
-        if (start == std::string::npos) {
-            FlatVector::SetNull(result, i, true);
-            continue;
-        }
-        name = name.substr(start, end - start + 1);
-
-        // Extract first name only (in case full name is provided)
-        size_t space_pos = name.find(' ');
-        if (space_pos != std::string::npos) {
-            name = name.substr(0, space_pos);
+        if (addr.postal_code.empty()) {
+            FlatVector::SetNull(postal_code_vec, i, true);
+        } else {
+            FlatVector::GetData<string_t>(postal_code_vec)[i] = StringVector::AddString(postal_code_vec, addr.postal_code);
+            FlatVector::SetNull(postal_code_vec, i, false);
         }
 
-        std::string prompt = "What is the gender of the first name: " + name;
-
-        // Call API with custom system message (no web search needed for names)
-        std::string response = call_anthropic_api(
-            name,
-            prompt,
-            model,
-            50,  // Very short response expected
-            system_message
-        );
-
-        if (response.find("ERROR:") == 0 || response.empty()) {
-            FlatVector::GetData<string_t>(result)[i] = StringVector::AddString(result, "unknown");
-            FlatVector::SetNull(result, i, false);
-            continue;
+        if (addr.street_name.empty()) {
+            FlatVector::SetNull(street_name_vec, i, true);
+        } else {
+            FlatVector::GetData<string_t>(street_name_vec)[i] = StringVector::AddString(street_name_vec, addr.street_name);
+            FlatVector::SetNull(street_name_vec, i, false);
         }
 
-        // Normalize response to lowercase and extract gender
-        std::string lower_response = response;
-        for (auto& c : lower_response) c = std::tolower(static_cast<unsigned char>(c));
-
-        std::string gender = "unknown";
-        if (lower_response.find("female") != std::string::npos ||
-            lower_response.find("weiblich") != std::string::npos ||
-            lower_response.find("woman") != std::string::npos ||
-            lower_response.find("girl") != std::string::npos) {
-            gender = "female";
-        } else if (lower_response.find("male") != std::string::npos ||
-                   lower_response.find("männlich") != std::string::npos ||
-                   lower_response.find("man") != std::string::npos ||
-                   lower_response.find("boy") != std::string::npos) {
-            // Check it's not "female" (which contains "male")
-            if (lower_response.find("female") == std::string::npos) {
-                gender = "male";
-            }
+        if (addr.street_nr.empty()) {
+            FlatVector::SetNull(street_nr_vec, i, true);
+        } else {
+            FlatVector::GetData<string_t>(street_nr_vec)[i] = StringVector::AddString(street_nr_vec, addr.street_nr);
+            FlatVector::SetNull(street_nr_vec, i, false);
         }
-
-        FlatVector::GetData<string_t>(result)[i] = StringVector::AddString(result, gender);
-        FlatVector::SetNull(result, i, false);
     }
 }
 
@@ -1552,61 +1030,6 @@ void RegisterAIFunctions(ExtensionLoader& loader) {
         StpsSetBraveApiKeyFunction
     ));
     loader.RegisterFunction(set_brave_key_set);
-
-    // Register stps_set_google_api_key function
-    ScalarFunctionSet set_google_key_set("stps_set_google_api_key");
-    set_google_key_set.AddFunction(ScalarFunction(
-        {LogicalType::VARCHAR},
-        LogicalType::VARCHAR,
-        StpsSetGoogleApiKeyFunction
-    ));
-    loader.RegisterFunction(set_google_key_set);
-
-    // Register stps_set_google_cse_id function
-    ScalarFunctionSet set_google_cse_set("stps_set_google_cse_id");
-    set_google_cse_set.AddFunction(ScalarFunction(
-        {LogicalType::VARCHAR},
-        LogicalType::VARCHAR,
-        StpsSetGoogleCseIdFunction
-    ));
-    loader.RegisterFunction(set_google_cse_set);
-
-    // Register stps_set_search_provider function
-    ScalarFunctionSet set_search_provider_set("stps_set_search_provider");
-    set_search_provider_set.AddFunction(ScalarFunction(
-        {LogicalType::VARCHAR},
-        LogicalType::VARCHAR,
-        StpsSetSearchProviderFunction
-    ));
-    loader.RegisterFunction(set_search_provider_set);
-
-    // Register stps_get_search_provider function
-    ScalarFunctionSet get_search_provider_set("stps_get_search_provider");
-    get_search_provider_set.AddFunction(ScalarFunction(
-        {},
-        LogicalType::VARCHAR,
-        StpsGetSearchProviderFunction
-    ));
-    loader.RegisterFunction(get_search_provider_set);
-
-    // Register stps_ask_ai_gender function
-    ScalarFunctionSet ask_ai_gender_set("stps_ask_ai_gender");
-
-    // stps_ask_ai_gender(name VARCHAR) -> VARCHAR ('male', 'female', 'unknown')
-    ask_ai_gender_set.AddFunction(ScalarFunction(
-        {LogicalType::VARCHAR},
-        LogicalType::VARCHAR,
-        StpsAskAIGenderFunction
-    ));
-
-    // stps_ask_ai_gender(name VARCHAR, model VARCHAR) -> VARCHAR
-    ask_ai_gender_set.AddFunction(ScalarFunction(
-        {LogicalType::VARCHAR, LogicalType::VARCHAR},
-        LogicalType::VARCHAR,
-        StpsAskAIGenderFunction
-    ));
-
-    loader.RegisterFunction(ask_ai_gender_set);
 }
 
 } // namespace stps
