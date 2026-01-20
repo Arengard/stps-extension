@@ -811,23 +811,6 @@ static void StpsAskAIAddressFunction(DataChunk &args, ExpressionState &state, Ve
 
     auto &result_validity = FlatVector::Validity(result);
 
-    // System message that FORCES JSON output
-    const std::string system_message = R"(You are a structured data extraction assistant.
-You MUST find the official German business address of the provided company.
-You MUST use web search if available.
-Return ONLY valid JSON in EXACTLY this format and nothing else:
-{
-  "city": "",
-  "postal_code": "",
-  "street_name": "",
-  "street_nr": ""
-}
-Rules:
-- Do not include explanations
-- Do not include markdown
-- If the address cannot be found, return empty strings
-- Always respond in German address format)";
-
     for (idx_t i = 0; i < count; i++) {
         if (FlatVector::IsNull(company_name_vec, i)) {
             result_validity.SetInvalid(i);
@@ -837,15 +820,19 @@ Rules:
         string_t company_name_str = FlatVector::GetData<string_t>(company_name_vec)[i];
         std::string company_name = company_name_str.GetString();
 
-        std::string prompt = "Find the official business address for this company in Germany: " + company_name;
+        // Include JSON format instructions in the prompt so tools stay enabled
+        // (passing empty custom_system_message keeps tools_enabled = true)
+        std::string prompt = "Search for the official business address of \"" + company_name +
+            "\" in Germany. After finding the address, respond with ONLY this JSON format, no other text:\n"
+            "{\"city\":\"<city name>\",\"postal_code\":\"<5 digit PLZ>\",\"street_name\":\"<street name>\",\"street_nr\":\"<house number>\"}";
 
-        // Call API with system message that forces JSON output
+        // Call API with empty system message to keep web search tools enabled
         std::string response = call_anthropic_api(
             company_name,
             prompt,
             model,
             800,
-            system_message
+            ""  // Empty = tools enabled for web search
         );
 
         if (response.find("ERROR:") == 0 || response.empty()) {
@@ -861,6 +848,17 @@ Rules:
 
         bool has_data = !city.empty() || !postal_code.empty() ||
                         !street_name.empty() || !street_nr.empty();
+
+        // Fallback: if JSON extraction failed, try parsing address from plain text
+        if (!has_data) {
+            ParsedAddress parsed = parse_german_address(response);
+            city = parsed.city;
+            postal_code = parsed.postal_code;
+            street_name = parsed.street_name;
+            street_nr = parsed.street_nr;
+            has_data = !city.empty() || !postal_code.empty() ||
+                       !street_name.empty() || !street_nr.empty();
+        }
 
         if (!has_data) {
             result_validity.SetInvalid(i);
