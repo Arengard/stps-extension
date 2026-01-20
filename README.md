@@ -820,7 +820,8 @@ See [LICENSE](LICENSE) file.
 - **Latest Builds**: https://github.com/Arengard/stps-extension/actions
 - **DuckDB**: https://duckdb.org/
 
----
+cd C:\stps-extension
+cmake --build build/release --config Release---
 
 ## Nextcloud/WebDAV table function
 
