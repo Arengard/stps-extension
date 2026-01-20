@@ -1283,10 +1283,9 @@ static void StpsAskAIGenderFunction(DataChunk &args, ExpressionState &state, Vec
         model = model_str.GetString();
     }
 
-    // Force concise classification; no web search needed
+    // System message forces Claude to respond with just male or female
     const std::string system_message =
-        "You are a gender classification assistant. Given a first name, respond with only one of: male, female, unknown."
-        " Do not add explanations or extra text.";
+        "You are a gender classification assistant. Given a first name, respond with ONLY the word 'male' or 'female'. Nothing else. No explanation.";
 
     for (idx_t i = 0; i < count; i++) {
         if (FlatVector::IsNull(name_vec, i)) {
@@ -1310,10 +1309,10 @@ static void StpsAskAIGenderFunction(DataChunk &args, ExpressionState &state, Vec
             name = name.substr(0, space);
         }
 
-        std::string prompt = "Determine the likely gender for the first name '" + name + "'.";
+        // Simple prompt asking Claude directly
+        std::string prompt = "Is the name '" + name + "' male or female?";
 
-        // No tools: pass custom system message
-        std::string response = call_anthropic_api(name, prompt, model, 50, system_message);
+        std::string response = call_anthropic_api(name, prompt, model, 10, system_message);
 
         if (response.find("ERROR:") == 0 || response.empty()) {
             FlatVector::GetData<string_t>(result)[i] = StringVector::AddString(result, "unknown");
@@ -1321,16 +1320,23 @@ static void StpsAskAIGenderFunction(DataChunk &args, ExpressionState &state, Vec
             continue;
         }
 
+        // Convert to lowercase and trim
         std::string lower = response;
         for (auto &c : lower) c = std::tolower(static_cast<unsigned char>(c));
 
+        start = lower.find_first_not_of(" \t\n\r\"");
+        end = lower.find_last_not_of(" \t\n\r\".");
+        if (start != std::string::npos && end != std::string::npos && end >= start) {
+            lower = lower.substr(start, end - start + 1);
+        }
+
         std::string gender = "unknown";
-        if (lower.find("female") != std::string::npos || lower.find("weiblich") != std::string::npos) {
+
+        // Check for female first (since "male" is contained in "female")
+        if (lower.find("female") != std::string::npos) {
             gender = "female";
-        } else if (lower.find("male") != std::string::npos || lower.find("männlich") != std::string::npos) {
-            if (lower.find("female") == std::string::npos) {
-                gender = "male";
-            }
+        } else if (lower.find("male") != std::string::npos) {
+            gender = "male";
         }
 
         FlatVector::GetData<string_t>(result)[i] = StringVector::AddString(result, gender);

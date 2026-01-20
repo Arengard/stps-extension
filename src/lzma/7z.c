@@ -1419,17 +1419,6 @@ SRes Sz7z_Extract(CSz7zArchive *archive, UInt32 fileIndex,
         return SZ_OK;
     }
 
-    /* For files with zero size, return empty buffer */
-    if (fileInfo->UnpackSize == 0)
-    {
-        *outBuf = (Byte *)archive->alloc->Alloc(archive->alloc, 1);
-        if (!*outBuf)
-            return SZ_ERROR_MEM;
-        (*outBuf)[0] = 0;
-        *outSize = 0;
-        return SZ_OK;
-    }
-
     /* Read packed data from archive */
     if (!archive->file)
         return SZ_ERROR_READ;
@@ -1486,6 +1475,15 @@ SRes Sz7z_Extract(CSz7zArchive *archive, UInt32 fileIndex,
             totalUnpackSize += archive->files[i].UnpackSize;
     }
 
+    /* If unpack size is 0 but we have packed data, estimate unpack size */
+    /* Typical compression ratio is 2-10x, use conservative 20x estimate */
+    if (totalUnpackSize == 0 && packSize > 5)
+    {
+        totalUnpackSize = packSize * 20;
+        if (totalUnpackSize > MAX_UNPACKED_SIZE)
+            totalUnpackSize = MAX_UNPACKED_SIZE;
+    }
+
     if (totalUnpackSize == 0 || totalUnpackSize > MAX_UNPACKED_SIZE)
     {
         archive->alloc->Free(archive->alloc, packedData);
@@ -1527,6 +1525,9 @@ SRes Sz7z_Extract(CSz7zArchive *archive, UInt32 fileIndex,
         return (res == SZ_ERROR_DATA) ? SZ_ERROR_DATA : SZ_ERROR_FAIL;
     }
 
+    /* destLen now contains actual decompressed size */
+    size_t actualUnpackedSize = destLen;
+
     /* Find offset for requested file in unpacked stream */
     UInt64 fileOffset = 0;
     for (UInt32 i = 0; i < fileIndex; i++)
@@ -1535,13 +1536,40 @@ SRes Sz7z_Extract(CSz7zArchive *archive, UInt32 fileIndex,
             fileOffset += archive->files[i].UnpackSize;
     }
 
-    /* Allocate and copy file data */
-    *outSize = (size_t)fileInfo->UnpackSize;
-
-    if (fileOffset + fileInfo->UnpackSize > totalUnpackSize)
+    /* Determine file size - use stored size if available, otherwise use remaining data */
+    size_t fileSize = (size_t)fileInfo->UnpackSize;
+    if (fileSize == 0)
     {
-        archive->alloc->Free(archive->alloc, unpackedData);
-        return SZ_ERROR_DATA;
+        /* UnpackSize not available - if this is the only file or first file, use all data */
+        if (archive->numFiles == 1 || fileIndex == 0)
+        {
+            fileSize = actualUnpackedSize;
+            fileOffset = 0;
+        }
+        else
+        {
+            /* For multi-file archives without sizes, we can't determine boundaries */
+            archive->alloc->Free(archive->alloc, unpackedData);
+            return SZ_ERROR_DATA;
+        }
+    }
+
+    /* Allocate and copy file data */
+    *outSize = fileSize;
+
+    if (fileOffset + fileSize > actualUnpackedSize)
+    {
+        /* Adjust if we're past the actual data */
+        if (fileOffset < actualUnpackedSize)
+        {
+            fileSize = actualUnpackedSize - (size_t)fileOffset;
+            *outSize = fileSize;
+        }
+        else
+        {
+            archive->alloc->Free(archive->alloc, unpackedData);
+            return SZ_ERROR_DATA;
+        }
     }
 
     *outBuf = (Byte *)archive->alloc->Alloc(archive->alloc, *outSize + 1);
