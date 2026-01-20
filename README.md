@@ -819,3 +819,60 @@ See [LICENSE](LICENSE) file.
 - **GitHub Repository**: https://github.com/Arengard/stps-extension
 - **Latest Builds**: https://github.com/Arengard/stps-extension/actions
 - **DuckDB**: https://duckdb.org/
+
+---
+
+## Nextcloud/WebDAV table function
+
+Fetch a file directly over WebDAV and auto-handle by suffix:
+
+- CSV/TSV: parsed in-memory and returned as rows
+- parquet/arrow/feather: downloaded to a temp file; you get `extracted_path`, `file_type`, `usage_hint`
+- xlsx/xls: downloaded to a temp file with a usage hint (open via Excel reader extension)
+- Any other type: raw content string
+
+### Examples
+```sql
+-- Public CSV
+SELECT * FROM next_cloud('https://daten.example.cloud/path/file.csv');
+
+-- Basic auth
+SELECT *
+FROM next_cloud(
+  'https://daten.example.cloud/path/file.csv',
+  username:='myuser',
+  password:='mypassword'
+);
+
+-- Custom headers (newline-separated list)
+SELECT *
+FROM next_cloud(
+  'https://daten.example.cloud/path/file.csv',
+  headers:='X-API-Key: abc123\nAccept: text/csv'
+);
+
+-- Parquet download: returns temp path and hint
+SELECT * FROM next_cloud('https://daten.example.cloud/path/file.parquet');
+```
+
+Notes:
+- Uses HTTP GET via libcurl; `username`/`password` map to Basic Auth.
+- `headers` lets you pass bearer tokens, extra headers, etc. (one header per line).
+- Temp files are created under the extension temp directory; follow the returned `usage_hint` to load them.
+
+---
+
+#### `stps_ask_ai_gender(name VARCHAR[, model VARCHAR]) → VARCHAR`
+Classify first-name gender using Claude (no web search). Returns `male`, `female`, or `unknown`.
+```sql
+-- Simple lookup
+SELECT stps_ask_ai_gender('Ramon');
+
+-- Override model
+SELECT stps_ask_ai_gender('Anna', 'claude-3-7-sonnet-20250219');
+```
+
+Notes:
+- Uses your configured Anthropic key; set via `stps_set_api_key()`.
+- Trims input and uses the first token as the first name.
+- Web search is disabled; purely model-based.

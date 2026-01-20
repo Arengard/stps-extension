@@ -57,6 +57,8 @@ set(EXTENSION_SOURCES
     src/sevenzip_functions.cpp
     src/lzma/7z.c
     src/lzma/LzmaDec.c
+    # Nextcloud/WebDAV fetcher
+    src/nextcloud_functions.cpp
 )
 
 build_static_extension(${TARGET_NAME} ${EXTENSION_SOURCES})
