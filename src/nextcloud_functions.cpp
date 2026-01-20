@@ -125,9 +125,23 @@ static unique_ptr<GlobalTableFunctionState> NextcloudInit(ClientContext &context
     ParseCSVContent(body, col_names_std, col_types_std, rows_std);
 
     if (!col_names_std.empty()) {
-        state->column_names = col_names_std;
-        state->column_types = col_types_std;
-        state->rows.assign(rows_std.begin(), rows_std.end());
+        // Copy element-by-element to avoid std::vector -> duckdb::vector assignment issues
+        state->column_names.clear();
+        for (auto &n : col_names_std) {
+            state->column_names.push_back(n);
+        }
+        state->column_types.clear();
+        for (auto &t : col_types_std) {
+            state->column_types.push_back(t);
+        }
+        state->rows.clear();
+        for (auto &r : rows_std) {
+            vector<Value> row;
+            for (auto &v : r) {
+                row.push_back(v);
+            }
+            state->rows.push_back(std::move(row));
+        }
         return state;
     }
 
