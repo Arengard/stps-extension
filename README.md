@@ -355,7 +355,7 @@ SELECT stps_set_api_key('sk-ant-...');
 -- Create: ~/.stps/anthropic_api_key with your key
 ```
 
-**📖 Full Documentation:** See [AI_FUNCTIONS_GUIDE.md](AI_FUNCTIONS_GUIDE.md) for:
+**📖 Full Documentation:** See [AI_FUNCTIONS_GUIDE.md](howToUseMD/AI_FUNCTIONS_GUIDE.md) for:
 - Detailed examples (9+ use cases)
 - Cost optimization tips
 - Best practices & prompt engineering
@@ -756,10 +756,10 @@ FROM locations;
 
 ## 📖 Documentation
 
-- **[Complete Function List](STPS_FUNCTIONS.md)** - Detailed function reference
-- **[Troubleshooting 7-Zip](TROUBLESHOOTING_7ZIP.md)** - Common 7z issues
-- **[How to Update](HOW_TO_UPDATE_EXTENSION.md)** - Get latest version
-- **[Build Process](BUILD_PROCESS.md)** - GitHub Actions build info
+- **[Complete Function List](howToUseMD/STPS_FUNCTIONS.md)** - Detailed function reference
+- **[Troubleshooting 7-Zip](howToUseMD/TROUBLESHOOTING_7ZIP.md)** - Common 7z issues
+- **[How to Update](howToUseMD/HOW_TO_UPDATE_EXTENSION.md)** - Get latest version
+- **[Build Process](howToUseMD/BUILD_PROCESS.md)** - GitHub Actions build info
 
 ---
 

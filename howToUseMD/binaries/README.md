@@ -55,4 +55,4 @@ You no longer need to run `make debug` or `make release` after pulling - just us
 
 ## Manual Building
 
-If you prefer to build the extension yourself or need a different platform, see the main [README.md](../README.md) for build instructions.
+If you prefer to build the extension yourself or need a different platform, see the main [README.md](../../README.md) for build instructions.
