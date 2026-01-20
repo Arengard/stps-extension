@@ -327,10 +327,101 @@ static std::string strip_html_tags(const std::string& input) {
 
 // Trim whitespace from string
 static std::string trim_string(const std::string& s) {
-    size_t start = s.find_first_not_of(" \t\n\r");
+    size_t start = s.find_first_not_of(" \t\n\r,.");
     if (start == std::string::npos) return "";
-    size_t end = s.find_last_not_of(" \t\n\r");
+    size_t end = s.find_last_not_of(" \t\n\r,.");
     return s.substr(start, end - start + 1);
+}
+
+// Clean city name - remove phone, country, and other suffixes
+static std::string clean_city_name(const std::string& city) {
+    std::string result = city;
+
+    // Convert to check for stop words (case insensitive)
+    std::string lower = result;
+    for (auto& c : lower) c = std::tolower(static_cast<unsigned char>(c));
+
+    // Stop words - truncate at these
+    std::vector<std::string> stop_words = {
+        "germany", "deutschland", "phone", "tel", "fax", "telefon",
+        "email", "e-mail", "www.", "http", "+49", "(+49", "gmbh", "ag "
+    };
+
+    for (const auto& stop : stop_words) {
+        size_t pos = lower.find(stop);
+        if (pos != std::string::npos && pos > 0) {
+            result = result.substr(0, pos);
+            lower = lower.substr(0, pos);
+        }
+    }
+
+    return trim_string(result);
+}
+
+// Clean street name - extract only the street part, not company names
+static std::string clean_street_name(const std::string& street) {
+    std::string result = street;
+
+    // Find the last occurrence of a street suffix
+    std::string lower = result;
+    for (auto& c : lower) c = std::tolower(static_cast<unsigned char>(c));
+
+    std::vector<std::string> suffixes = {
+        "straße", "strasse", "str.", "weg", "platz", "allee",
+        "ring", "gasse", "damm", "ufer", "chaussee"
+    };
+
+    size_t last_suffix_pos = std::string::npos;
+    size_t last_suffix_len = 0;
+
+    for (const auto& suffix : suffixes) {
+        size_t pos = lower.rfind(suffix);
+        if (pos != std::string::npos) {
+            if (last_suffix_pos == std::string::npos || pos > last_suffix_pos) {
+                last_suffix_pos = pos;
+                last_suffix_len = suffix.length();
+            }
+        }
+    }
+
+    if (last_suffix_pos != std::string::npos) {
+        // Find the start of this street name (go backwards from suffix)
+        size_t street_start = last_suffix_pos;
+
+        // Skip back over the street name word(s)
+        while (street_start > 0) {
+            char prev = result[street_start - 1];
+            // Stop at delimiters that separate company name from street
+            if (prev == ',' || prev == ';' || prev == '|' || prev == '\n') {
+                break;
+            }
+            // Stop at company indicators
+            if (street_start >= 4) {
+                std::string prev4 = lower.substr(street_start - 4, 4);
+                if (prev4 == "gmbh" || prev4 == " ag " || prev4 == " kg ") {
+                    break;
+                }
+            }
+            if (street_start >= 3) {
+                std::string prev3 = lower.substr(street_start - 3, 3);
+                if (prev3 == "mbh" || prev3 == " se") {
+                    break;
+                }
+            }
+            street_start--;
+        }
+
+        // Skip leading spaces/punctuation
+        while (street_start < result.length() &&
+               (result[street_start] == ' ' || result[street_start] == ',' ||
+                result[street_start] == ';')) {
+            street_start++;
+        }
+
+        result = result.substr(street_start, last_suffix_pos + last_suffix_len - street_start);
+    }
+
+    return trim_string(result);
 }
 
 static ParsedAddress parse_german_address(const std::string& text) {
@@ -339,81 +430,72 @@ static ParsedAddress parse_german_address(const std::string& text) {
     // First, strip HTML tags
     std::string cleaned = strip_html_tags(text);
 
-    // German address patterns:
-    // Pattern 1: "Streetname Nr, PLZ City" (e.g., "Siemensstr. 14, 76532 Baden-Baden")
-    // Pattern 2: "Streetname Nr PLZ City" (without comma)
-    // Pattern 3: "PLZ City, Streetname Nr" (reversed)
+    // Step 1: Find 5-digit German postal code (PLZ)
+    std::regex plz_pattern(R"((\d{5}))");
+    std::smatch plz_match;
 
-    // Regex for German street names (ends with straße, str., weg, platz, allee, etc.)
-    // Captures: street_name, street_nr, postal_code (5 digits), city
+    if (std::regex_search(cleaned, plz_match, plz_pattern)) {
+        // Verify it's not a phone number (check context)
+        size_t plz_pos = plz_match.position();
+        bool is_phone = false;
 
-    // Pattern 1: Street Nr, PLZ City
-    // Using broader character classes to avoid UTF-8 encoding issues across platforms
-    std::regex pattern1(
-        R"(([A-Za-z][A-Za-z\-\.\s]*(?:stra(?:ss|ß)e|str\.|weg|platz|allee|ring|gasse|damm|ufer|chaussee))\s*(\d+[a-zA-Z]?)\s*[,\s]+(\d{5})\s+([A-Za-z][A-Za-z\-\s]+))",
-        std::regex_constants::icase
-    );
-
-    // Pattern 2: PLZ City, Street Nr (reversed format)
-    std::regex pattern2(
-        R"((\d{5})\s+([A-Za-z][A-Za-z\-\s]+?)[,\s]+([A-Za-z][A-Za-z\-\.\s]*(?:stra(?:ss|ß)e|str\.|weg|platz|allee|ring|gasse|damm|ufer|chaussee))\s*(\d+[a-zA-Z]?))",
-        std::regex_constants::icase
-    );
-
-    // Pattern 3: Just PLZ and City (no street)
-    std::regex pattern3(
-        R"((\d{5})\s+([A-Za-z][A-Za-z\-\s]{2,20})(?:[,\s]|$))",
-        std::regex_constants::icase
-    );
-
-    std::smatch match;
-
-    // Try Pattern 1 first: Street Nr, PLZ City
-    if (std::regex_search(cleaned, match, pattern1)) {
-        addr.street_name = trim_string(match[1].str());
-        addr.street_nr = trim_string(match[2].str());
-        addr.postal_code = match[3].str();
-        addr.city = trim_string(match[4].str());
-
-        // Clean city - stop at common delimiters
-        size_t delim = addr.city.find_first_of(",|;");
-        if (delim != std::string::npos) {
-            addr.city = trim_string(addr.city.substr(0, delim));
-        }
-        // Remove country suffix
-        for (const auto& suffix : {" Deutschland", " Germany", " DE"}) {
-            if (addr.city.length() > strlen(suffix) &&
-                addr.city.substr(addr.city.length() - strlen(suffix)) == suffix) {
-                addr.city = trim_string(addr.city.substr(0, addr.city.length() - strlen(suffix)));
+        // Check if preceded by +, (, Tel, Fax
+        if (plz_pos > 0) {
+            char prev = cleaned[plz_pos - 1];
+            if (prev == '+' || prev == '(' || prev == '-') {
+                is_phone = true;
+            }
+            if (plz_pos >= 3) {
+                std::string prev3 = cleaned.substr(plz_pos - 3, 3);
+                for (auto& c : prev3) c = std::tolower(static_cast<unsigned char>(c));
+                if (prev3 == "tel" || prev3 == "fax" || prev3 == "+49") {
+                    is_phone = true;
+                }
             }
         }
-        return addr;
-    }
 
-    // Try Pattern 2: PLZ City, Street Nr
-    if (std::regex_search(cleaned, match, pattern2)) {
-        addr.postal_code = match[1].str();
-        addr.city = trim_string(match[2].str());
-        addr.street_name = trim_string(match[3].str());
-        addr.street_nr = trim_string(match[4].str());
-        return addr;
-    }
-
-    // Try Pattern 3: Just PLZ City
-    if (std::regex_search(cleaned, match, pattern3)) {
-        addr.postal_code = match[1].str();
-        addr.city = trim_string(match[2].str());
-
-        // Now try to find street separately
-        std::regex street_pattern(
-            R"(([A-Za-z][A-Za-z\-\.\s]*(?:stra(?:ss|ß)e|str\.|weg|platz|allee|ring|gasse|damm|ufer))\s*(\d+[a-zA-Z]?))",
-            std::regex_constants::icase
-        );
-        if (std::regex_search(cleaned, match, street_pattern)) {
-            addr.street_name = trim_string(match[1].str());
-            addr.street_nr = trim_string(match[2].str());
+        // Check if followed by more digits (phone number)
+        size_t after_plz = plz_pos + 5;
+        if (after_plz < cleaned.length() && std::isdigit(cleaned[after_plz])) {
+            is_phone = true;
         }
-        return addr;
+
+        if (!is_phone) {
+            addr.postal_code = plz_match[1].str();
+
+            // Step 2: Extract city (text after PLZ until delimiter)
+            size_t city_start = after_plz;
+            while (city_start < cleaned.length() &&
+                   (cleaned[city_start] == ' ' || cleaned[city_start] == ',')) {
+                city_start++;
+            }
+
+            size_t city_end = city_start;
+            while (city_end < cleaned.length()) {
+                char c = cleaned[city_end];
+                if (c == ',' || c == '\n' || c == '|' || c == ';' || c == '(') {
+                    break;
+                }
+                city_end++;
+            }
+
+            if (city_end > city_start) {
+                addr.city = clean_city_name(cleaned.substr(city_start, city_end - city_start));
+            }
+        }
+    }
+
+    // Step 3: Find street with number
+    // Pattern: StreetName + suffix + optional space + number
+    std::regex street_pattern(
+        R"(([A-Za-z][A-Za-z\-\.\s]*(?:stra(?:ss|ß)e|str\.|weg|platz|allee|ring|gasse|damm|ufer|chaussee))\s*(\d+[a-zA-Z]?))",
+        std::regex_constants::icase
+    );
+
+    std::smatch street_match;
+    if (std::regex_search(cleaned, street_match, street_pattern)) {
+        addr.street_name = clean_street_name(street_match[1].str());
+        addr.street_nr = trim_string(street_match[2].str());
     }
 
     return addr;
