@@ -32,7 +32,8 @@
       "Bash(cmake --build . --target stps_loadable_extension)",
       "Bash(git rebase:*)",
       "Bash(git push:*)",
-      "Bash(git stash:*)"
+      "Bash(git stash:*)",
+      "Bash(git mv:*)"
     ]
   }
 }

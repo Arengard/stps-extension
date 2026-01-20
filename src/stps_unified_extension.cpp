@@ -20,7 +20,9 @@
 #include "plz_validation.hpp"
 #include "address_lookup.hpp"
 #include "search_columns_function.hpp"
+#ifdef HAVE_CURL
 #include "ai_functions.hpp"
+#endif
 #include "account_validation.hpp"
 #include "smart_cast_scalar.hpp"
 #include "smart_cast_function.hpp"

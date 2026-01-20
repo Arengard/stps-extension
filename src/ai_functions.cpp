@@ -305,41 +305,148 @@ struct ParsedAddress {
     std::string street_nr;
 };
 
+// Strip HTML tags from text
+static std::string strip_html_tags(const std::string& input) {
+    std::string result;
+    result.reserve(input.length());
+    bool in_tag = false;
+
+    for (size_t i = 0; i < input.length(); i++) {
+        if (input[i] == '<') {
+            in_tag = true;
+        } else if (input[i] == '>') {
+            in_tag = false;
+        } else if (!in_tag) {
+            result += input[i];
+        }
+    }
+    return result;
+}
+
+// Clean extracted text: remove extra whitespace, phone numbers, etc.
+static std::string clean_address_field(const std::string& input) {
+    std::string result;
+    bool last_was_space = false;
+
+    for (char c : input) {
+        // Stop at common delimiters that indicate end of field
+        if (c == '\n' || c == '\r' || c == '\t') break;
+
+        // Convert multiple spaces to single space
+        if (c == ' ') {
+            if (!last_was_space && !result.empty()) {
+                result += c;
+                last_was_space = true;
+            }
+        } else {
+            result += c;
+            last_was_space = false;
+        }
+    }
+
+    // Trim trailing spaces
+    while (!result.empty() && result.back() == ' ') {
+        result.pop_back();
+    }
+
+    return result;
+}
+
+// Check if text contains phone/fax indicators
+static bool contains_phone_indicator(const std::string& text) {
+    std::string lower = text;
+    for (auto& c : lower) c = std::tolower(static_cast<unsigned char>(c));
+    return lower.find("tel") != std::string::npos ||
+           lower.find("fax") != std::string::npos ||
+           lower.find("phone") != std::string::npos ||
+           lower.find("(+") != std::string::npos ||
+           lower.find("telefon") != std::string::npos;
+}
+
 static ParsedAddress parse_german_address(const std::string& text) {
     ParsedAddress addr;
 
+    // First, strip HTML tags
+    std::string cleaned = strip_html_tags(text);
+
     // Find 5-digit German postal code (PLZ)
-    for (size_t i = 0; i + 4 < text.length(); i++) {
-        if (std::isdigit(text[i]) && std::isdigit(text[i+1]) &&
-            std::isdigit(text[i+2]) && std::isdigit(text[i+3]) &&
-            std::isdigit(text[i+4])) {
-            // Check it's not part of a longer number
-            bool valid = (i == 0 || !std::isdigit(text[i-1])) &&
-                        (i + 5 >= text.length() || !std::isdigit(text[i+5]));
+    for (size_t i = 0; i + 4 < cleaned.length(); i++) {
+        if (std::isdigit(cleaned[i]) && std::isdigit(cleaned[i+1]) &&
+            std::isdigit(cleaned[i+2]) && std::isdigit(cleaned[i+3]) &&
+            std::isdigit(cleaned[i+4])) {
+            // Check it's not part of a longer number (phone number, etc.)
+            bool valid = (i == 0 || !std::isdigit(cleaned[i-1])) &&
+                        (i + 5 >= cleaned.length() || !std::isdigit(cleaned[i+5]));
+
+            // Additional check: PLZ should start with 0-9 but German PLZ are 01-99xxx
+            // Skip if this looks like a phone number (preceded by + or followed by many digits)
+            if (valid && i >= 2) {
+                // Check for phone pattern before
+                if (cleaned[i-1] == '+' || cleaned[i-1] == '(' ||
+                    (i >= 3 && cleaned.substr(i-3, 3) == "Tel")) {
+                    continue;
+                }
+            }
+
             if (valid) {
-                addr.postal_code = text.substr(i, 5);
+                addr.postal_code = cleaned.substr(i, 5);
 
                 // City is usually right after the postal code
                 size_t city_start = i + 5;
-                while (city_start < text.length() && (text[city_start] == ' ' || text[city_start] == ',')) {
+                while (city_start < cleaned.length() && (cleaned[city_start] == ' ' || cleaned[city_start] == ',')) {
                     city_start++;
                 }
+
+                // Find end of city name - stop at comma, newline, or indicators of other content
                 size_t city_end = city_start;
-                while (city_end < text.length() && text[city_end] != ',' && text[city_end] != '\n' &&
-                       text[city_end] != '*' && text[city_end] != ')') {
+                while (city_end < cleaned.length()) {
+                    char c = cleaned[city_end];
+                    // Stop at obvious delimiters
+                    if (c == ',' || c == '\n' || c == '*' || c == ')' || c == '|' || c == ';') {
+                        break;
+                    }
+                    // Stop if we hit "Tel", "Fax", "Deutschland", etc.
+                    if (city_end + 3 <= cleaned.length()) {
+                        std::string next3 = cleaned.substr(city_end, 3);
+                        if (next3 == "Tel" || next3 == "Fax" || next3 == "Tel" || next3 == "(+4") {
+                            break;
+                        }
+                    }
+                    if (city_end + 11 <= cleaned.length() && cleaned.substr(city_end, 11) == "Deutschland") {
+                        break;
+                    }
                     city_end++;
                 }
+
                 if (city_end > city_start) {
-                    addr.city = text.substr(city_start, city_end - city_start);
-                    // Trim trailing spaces and "Germany"
-                    while (!addr.city.empty() && (addr.city.back() == ' ' || addr.city.back() == '*')) {
-                        addr.city.pop_back();
+                    addr.city = cleaned.substr(city_start, city_end - city_start);
+                    addr.city = clean_address_field(addr.city);
+
+                    // Remove common suffixes
+                    std::vector<std::string> suffixes = {" Germany", " Deutschland", " DE", " GmbH"};
+                    for (const auto& suffix : suffixes) {
+                        if (addr.city.length() > suffix.length()) {
+                            std::string city_lower = addr.city;
+                            for (auto& c : city_lower) c = std::tolower(static_cast<unsigned char>(c));
+                            std::string suffix_lower = suffix;
+                            for (auto& c : suffix_lower) c = std::tolower(static_cast<unsigned char>(c));
+
+                            if (city_lower.substr(city_lower.length() - suffix_lower.length()) == suffix_lower) {
+                                addr.city = addr.city.substr(0, addr.city.length() - suffix.length());
+                                addr.city = clean_address_field(addr.city);
+                            }
+                        }
                     }
-                    // Remove " Germany" suffix if present
-                    if (addr.city.length() > 8 && addr.city.substr(addr.city.length() - 7) == "Germany") {
-                        addr.city = addr.city.substr(0, addr.city.length() - 7);
-                        while (!addr.city.empty() && (addr.city.back() == ' ' || addr.city.back() == ',')) {
-                            addr.city.pop_back();
+
+                    // If city contains phone indicator, truncate there
+                    if (contains_phone_indicator(addr.city)) {
+                        std::string lower_city = addr.city;
+                        for (auto& c : lower_city) c = std::tolower(static_cast<unsigned char>(c));
+                        size_t tel_pos = lower_city.find("tel");
+                        if (tel_pos == std::string::npos) tel_pos = lower_city.find("(+");
+                        if (tel_pos != std::string::npos && tel_pos > 0) {
+                            addr.city = addr.city.substr(0, tel_pos);
+                            addr.city = clean_address_field(addr.city);
                         }
                     }
                 }
@@ -352,7 +459,7 @@ static ParsedAddress parse_german_address(const std::string& text) {
     // Common patterns: "Straße", "Str.", "straße", "weg", "platz", "allee", "ring", "gasse"
     std::vector<std::string> street_suffixes = {"straße", "strasse", "str.", "weg", "platz", "allee", "ring", "gasse", "damm", "ufer"};
 
-    std::string lower_text = text;
+    std::string lower_text = cleaned;
     for (auto& c : lower_text) c = std::tolower(static_cast<unsigned char>(c));
 
     for (const auto& suffix : street_suffixes) {
@@ -360,33 +467,52 @@ static ParsedAddress parse_german_address(const std::string& text) {
         if (pos != std::string::npos) {
             // Find start of street name (go back to find beginning of word)
             size_t street_start = pos;
-            while (street_start > 0 && text[street_start - 1] != '\n' && text[street_start - 1] != ',' &&
-                text[street_start - 1] != '*' && text[street_start - 1] != '(') {
+            while (street_start > 0 && cleaned[street_start - 1] != '\n' && cleaned[street_start - 1] != ',' &&
+                cleaned[street_start - 1] != '*' && cleaned[street_start - 1] != '(' && cleaned[street_start - 1] != '|') {
                 street_start--;
             }
-            // Skip leading ** if markdown
-            while (street_start < text.length() && text[street_start] == '*') {
+            // Skip leading spaces and special chars
+            while (street_start < cleaned.length() && (cleaned[street_start] == '*' || cleaned[street_start] == ' ')) {
                 street_start++;
             }
 
             size_t street_end = pos + suffix.length();
-            addr.street_name = text.substr(street_start, street_end - street_start);
+            std::string raw_street = cleaned.substr(street_start, street_end - street_start);
+
+            // Clean up street name - remove company names before street
+            // Pattern: if street name contains "GmbH", "AG", etc., take only from there
+            std::vector<std::string> company_indicators = {"GmbH", "AG ", "mbH ", "KG ", "OHG "};
+            for (const auto& ind : company_indicators) {
+                size_t ind_pos = raw_street.find(ind);
+                if (ind_pos != std::string::npos) {
+                    // Street name starts after company indicator
+                    size_t new_start = ind_pos + ind.length();
+                    while (new_start < raw_street.length() && (raw_street[new_start] == ' ' || raw_street[new_start] == ',')) {
+                        new_start++;
+                    }
+                    if (new_start < raw_street.length()) {
+                        raw_street = raw_street.substr(new_start);
+                    }
+                }
+            }
+
+            addr.street_name = clean_address_field(raw_street);
 
             // Find street number after the street name
             size_t nr_start = street_end;
-            while (nr_start < text.length() && (text[nr_start] == ' ' || text[nr_start] == '.')) {
+            while (nr_start < cleaned.length() && (cleaned[nr_start] == ' ' || cleaned[nr_start] == '.')) {
                 nr_start++;
             }
             size_t nr_end = nr_start;
-            while (nr_end < text.length() && (std::isdigit(text[nr_end]) || std::isalpha(text[nr_end]))) {
+            while (nr_end < cleaned.length() && (std::isdigit(cleaned[nr_end]) || std::isalpha(cleaned[nr_end]))) {
                 // Allow letter suffix like "12a" but stop at comma/space after number
-                if (std::isalpha(text[nr_end]) && nr_end > nr_start && !std::isdigit(text[nr_end-1])) {
+                if (std::isalpha(cleaned[nr_end]) && nr_end > nr_start && !std::isdigit(cleaned[nr_end-1])) {
                     break;
                 }
                 nr_end++;
             }
             if (nr_end > nr_start) {
-                addr.street_nr = text.substr(nr_start, nr_end - nr_start);
+                addr.street_nr = cleaned.substr(nr_start, nr_end - nr_start);
                 // Trim trailing non-digits except single letter suffix
                 while (addr.street_nr.length() > 1 && !std::isdigit(addr.street_nr.back()) &&
                        !std::isdigit(addr.street_nr[addr.street_nr.length()-2])) {

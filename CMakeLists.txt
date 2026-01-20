@@ -6,8 +6,14 @@ set(TARGET_NAME stps)
 project(${TARGET_NAME})
 include_directories(src/include)
 
-# Find libcurl
-find_package(CURL REQUIRED)
+# Find libcurl (optional - AI functions won't work without it)
+find_package(CURL QUIET)
+if(CURL_FOUND)
+    message(STATUS "libcurl found - AI functions will be enabled")
+    add_compile_definitions(HAVE_CURL)
+else()
+    message(WARNING "libcurl not found - AI functions will be disabled. To enable: install vcpkg and run 'vcpkg install curl:x64-windows'")
+endif()
 
 set(EXTENSION_SOURCES
     src/stps_unified_extension.cpp
@@ -63,9 +69,13 @@ target_include_directories(${TARGET_NAME}_extension PRIVATE ${ZLIB_INCLUDE_DIRS}
 target_link_libraries(${TARGET_NAME}_loadable_extension ${ZLIB_LIBRARIES})
 target_link_libraries(${TARGET_NAME}_extension ${ZLIB_LIBRARIES})
 
-# Link libcurl
-target_link_libraries(${TARGET_NAME}_loadable_extension CURL::libcurl)
-target_link_libraries(${TARGET_NAME}_extension CURL::libcurl)
+# Link libcurl if available
+if(CURL_FOUND)
+    target_link_libraries(${TARGET_NAME}_loadable_extension CURL::libcurl)
+    target_link_libraries(${TARGET_NAME}_extension CURL::libcurl)
+    target_include_directories(${TARGET_NAME}_loadable_extension PRIVATE ${CURL_INCLUDE_DIRS})
+    target_include_directories(${TARGET_NAME}_extension PRIVATE ${CURL_INCLUDE_DIRS})
+endif()
 
 # Add the static extension to DuckDB's export set to resolve linking
 if(TARGET ${TARGET_NAME}_extension)
