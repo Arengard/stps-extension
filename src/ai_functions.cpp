@@ -525,6 +525,145 @@ static std::string execute_brave_search(const std::string& query) {
     return format_search_results(response);
 }
 
+// Structure to hold parsed address from Brave Local Search
+struct BraveLocalAddress {
+    std::string city;
+    std::string postal_code;
+    std::string street_name;
+    std::string street_nr;
+    bool found;
+};
+
+// Parse German street address like "Brauerstraße 12" into street_name and street_nr
+static void parse_street_address(const std::string& street_full, std::string& street_name, std::string& street_nr) {
+    street_name.clear();
+    street_nr.clear();
+
+    if (street_full.empty()) return;
+
+    // Find last space followed by number
+    size_t last_space = std::string::npos;
+    for (size_t i = street_full.length() - 1; i > 0; i--) {
+        if (street_full[i] == ' ' && i + 1 < street_full.length() && std::isdigit(street_full[i + 1])) {
+            last_space = i;
+            break;
+        }
+    }
+
+    if (last_space != std::string::npos) {
+        street_name = street_full.substr(0, last_space);
+        street_nr = street_full.substr(last_space + 1);
+    } else {
+        street_name = street_full;
+    }
+}
+
+// Execute Brave Local Search API for business address lookup
+// Returns structured address data directly from Brave's POI/locations data
+static BraveLocalAddress execute_brave_local_search(const std::string& company_name) {
+    BraveLocalAddress result = {"", "", "", "", false};
+
+    std::string api_key = GetBraveApiKey();
+    if (api_key.empty()) {
+        return result;
+    }
+
+    // Build optimized search query for German business addresses
+    std::string query = company_name + " Adresse Deutschland";
+    std::string encoded_query = url_encode(query);
+
+    // Use Brave web search with result_filter=locations to get POI data
+    // Also request extra_snippets for more address details
+    std::string url = "https://api.search.brave.com/res/v1/web/search?q=" + encoded_query +
+                      "&count=10&result_filter=locations,web&extra_snippets=true";
+
+    CurlHeaders headers;
+    headers.append("Accept: application/json");
+    headers.append("X-Subscription-Token: " + api_key);
+
+    long http_code = 0;
+    std::string response = curl_get(url, headers, &http_code);
+
+    if (response.find("ERROR:") == 0 || response.empty()) {
+        return result;
+    }
+
+    // First try: Look for "locations" object with structured address data
+    // Brave returns: "locations": {"results": [{"address": {...}, "postal_code": "...", ...}]}
+    size_t locations_pos = response.find("\"locations\"");
+    if (locations_pos != std::string::npos) {
+        size_t results_pos = response.find("\"results\"", locations_pos);
+        if (results_pos != std::string::npos) {
+            // Find first location result
+            size_t obj_start = response.find('{', results_pos + 10);
+            if (obj_start != std::string::npos) {
+                // Find matching closing brace
+                int brace_count = 1;
+                size_t obj_end = obj_start + 1;
+                while (obj_end < response.length() && brace_count > 0) {
+                    if (response[obj_end] == '{') brace_count++;
+                    else if (response[obj_end] == '}') brace_count--;
+                    obj_end++;
+                }
+
+                std::string location_obj = response.substr(obj_start, obj_end - obj_start);
+
+                // Extract address fields from location object
+                // Brave Local returns: city, postal_code, street_address or address_line
+                std::string city = extract_json_content(location_obj, "city");
+                std::string postal = extract_json_content(location_obj, "postal_code");
+                std::string street = extract_json_content(location_obj, "street_address");
+                if (street.empty()) {
+                    street = extract_json_content(location_obj, "address_line");
+                }
+
+                if (!city.empty() || !postal.empty() || !street.empty()) {
+                    result.city = city;
+                    result.postal_code = postal;
+                    parse_street_address(street, result.street_name, result.street_nr);
+                    result.found = true;
+                    return result;
+                }
+            }
+        }
+    }
+
+    // Second try: Parse from web results - look for German address patterns
+    // Pattern: "Street Nr, PLZ City" or "PLZ City, Street Nr"
+    size_t web_pos = response.find("\"web\"");
+    if (web_pos != std::string::npos) {
+        size_t results_pos = response.find("\"results\"", web_pos);
+        if (results_pos != std::string::npos) {
+            // Search through web results for address patterns
+            size_t search_start = results_pos;
+
+            // Look for 5-digit German postal code pattern
+            for (int attempt = 0; attempt < 10 && search_start < response.length(); attempt++) {
+                // Find description or snippet text
+                size_t desc_pos = response.find("\"description\"", search_start);
+                if (desc_pos == std::string::npos) break;
+
+                std::string desc = extract_json_content(response.substr(desc_pos), "description");
+                if (!desc.empty()) {
+                    // Use existing parse_german_address function
+                    ParsedAddress parsed = parse_german_address(desc);
+                    if (!parsed.city.empty() || !parsed.postal_code.empty()) {
+                        result.city = parsed.city;
+                        result.postal_code = parsed.postal_code;
+                        result.street_name = parsed.street_name;
+                        result.street_nr = parsed.street_nr;
+                        result.found = true;
+                        return result;
+                    }
+                }
+                search_start = desc_pos + 15;
+            }
+        }
+    }
+
+    return result;
+}
+
 // Format Google Custom Search API results into a readable string
 static std::string format_google_search_results(const std::string& json_response) {
     std::ostringstream formatted;
@@ -1060,44 +1199,57 @@ static void StpsAskAIAddressFunction(DataChunk &args, ExpressionState &state, Ve
         string_t company_name_str = FlatVector::GetData<string_t>(company_name_vec)[i];
         std::string company_name = company_name_str.GetString();
 
-        // Include JSON format instructions in the prompt so tools stay enabled
-        // (passing empty custom_system_message keeps tools_enabled = true)
-        std::string prompt = "Search for the official business address of \"" + company_name +
-            "\" in Germany. After finding the address, respond with ONLY this JSON format, no other text:\n"
-            "{\"city\":\"<city name>\",\"postal_code\":\"<5 digit PLZ>\",\"street_name\":\"<street name>\",\"street_nr\":\"<house number>\"}";
+        std::string city, postal_code, street_name, street_nr;
+        bool has_data = false;
 
-        // Call API with empty system message to keep web search tools enabled
-        std::string response = call_anthropic_api(
-            company_name,
-            prompt,
-            model,
-            800,
-            ""  // Empty = tools enabled for web search
-        );
-
-        if (response.find("ERROR:") == 0 || response.empty()) {
-            result_validity.SetInvalid(i);
-            continue;
+        // STEP 1: Try direct Brave Local Search first (faster, no Claude API cost)
+        if (!GetBraveApiKey().empty()) {
+            BraveLocalAddress local_result = execute_brave_local_search(company_name);
+            if (local_result.found) {
+                city = local_result.city;
+                postal_code = local_result.postal_code;
+                street_name = local_result.street_name;
+                street_nr = local_result.street_nr;
+                has_data = !city.empty() || !postal_code.empty() ||
+                           !street_name.empty() || !street_nr.empty();
+            }
         }
 
-        // Extract structured fields directly from JSON response
-        std::string city = extract_json_content(response, "city");
-        std::string postal_code = extract_json_content(response, "postal_code");
-        std::string street_name = extract_json_content(response, "street_name");
-        std::string street_nr = extract_json_content(response, "street_nr");
+        // STEP 2: Fall back to Claude AI with web search if direct search failed
+        if (!has_data && !GetAnthropicApiKey().empty()) {
+            std::string prompt = "Search for the official business address of \"" + company_name +
+                "\" in Germany. After finding the address, respond with ONLY this JSON format, no other text:\n"
+                "{\"city\":\"<city name>\",\"postal_code\":\"<5 digit PLZ>\",\"street_name\":\"<street name>\",\"street_nr\":\"<house number>\"}";
 
-        bool has_data = !city.empty() || !postal_code.empty() ||
-                        !street_name.empty() || !street_nr.empty();
+            std::string response = call_anthropic_api(
+                company_name,
+                prompt,
+                model,
+                800,
+                ""  // Empty = tools enabled for web search
+            );
 
-        // Fallback: if JSON extraction failed, try parsing address from plain text
-        if (!has_data) {
-            ParsedAddress parsed = parse_german_address(response);
-            city = parsed.city;
-            postal_code = parsed.postal_code;
-            street_name = parsed.street_name;
-            street_nr = parsed.street_nr;
-            has_data = !city.empty() || !postal_code.empty() ||
-                       !street_name.empty() || !street_nr.empty();
+            if (response.find("ERROR:") != 0 && !response.empty()) {
+                // Try JSON extraction first
+                city = extract_json_content(response, "city");
+                postal_code = extract_json_content(response, "postal_code");
+                street_name = extract_json_content(response, "street_name");
+                street_nr = extract_json_content(response, "street_nr");
+
+                has_data = !city.empty() || !postal_code.empty() ||
+                           !street_name.empty() || !street_nr.empty();
+
+                // If JSON extraction failed, try parsing address from plain text
+                if (!has_data) {
+                    ParsedAddress parsed = parse_german_address(response);
+                    city = parsed.city;
+                    postal_code = parsed.postal_code;
+                    street_name = parsed.street_name;
+                    street_nr = parsed.street_nr;
+                    has_data = !city.empty() || !postal_code.empty() ||
+                               !street_name.empty() || !street_nr.empty();
+                }
+            }
         }
 
         if (!has_data) {
