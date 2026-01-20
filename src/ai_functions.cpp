@@ -1274,6 +1274,7 @@ static void StpsGetSearchProviderFunction(DataChunk &args, ExpressionState &stat
 // ============================================================================
 
 static void StpsAskAIGenderFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+
     auto count = args.size();
     auto &name_vec = args.data[0];
 
@@ -1283,18 +1284,27 @@ static void StpsAskAIGenderFunction(DataChunk &args, ExpressionState &state, Vec
         model = model_str.GetString();
     }
 
-    // System message forces Claude to respond with just male or female
+    // Strong deterministic system instruction
     const std::string system_message =
         "INSTRUCTIONS:\n"
-        "- You must classify first names by gender.\n"
-        "- You MUST respond with EXACTLY one word.\n"
-        "- Allowed responses are ONLY: male or female.\n"
+        "- You classify first names by gender.\n"
+        "- You MUST respond with EXACTLY ONE WORD.\n"
+        "- Allowed responses are ONLY: male or female\n"
         "- Never add punctuation.\n"
         "- Never add explanations.\n"
-        "- If uncertain, you MUST still pick the most likely option.\n"
-        "- Do NOT ever respond with 'unknown'.";
-    
+        "- Never say unknown.\n"
+        "- If uncertain, choose the most likely option.";
+
+    // Simple deterministic fallback dictionary
+    static std::unordered_map<std::string, std::string> common_names = {
+        {"john", "male"}, {"michael", "male"}, {"david", "male"},
+        {"james", "male"}, {"robert", "male"}, {"william", "male"},
+        {"mary", "female"}, {"jennifer", "female"}, {"linda", "female"},
+        {"susan", "female"}, {"patricia", "female"}, {"elizabeth", "female"}
+    };
+
     for (idx_t i = 0; i < count; i++) {
+
         if (FlatVector::IsNull(name_vec, i)) {
             FlatVector::SetNull(result, i, true);
             continue;
@@ -1303,57 +1313,88 @@ static void StpsAskAIGenderFunction(DataChunk &args, ExpressionState &state, Vec
         string_t name_str = FlatVector::GetData<string_t>(name_vec)[i];
         std::string name = name_str.GetString();
 
-        // Trim and extract first token as first name
+        // Trim whitespace
         auto start = name.find_first_not_of(" \t\n\r");
         if (start == std::string::npos) {
             FlatVector::SetNull(result, i, true);
             continue;
         }
+
         auto end = name.find_last_not_of(" \t\n\r");
         name = name.substr(start, end - start + 1);
+
+        // Take only first token (first name)
         auto space = name.find(' ');
         if (space != std::string::npos) {
             name = name.substr(0, space);
         }
 
-        // Simple prompt asking Claude directly
-        std::string prompt = "What is the gender of the name '" + name + "'? Answer only: male or female";
+        // Convert to lowercase for fallback check
+        std::string lower_name = name;
+        std::transform(lower_name.begin(), lower_name.end(), lower_name.begin(), ::tolower);
 
-        std::string response = call_anthropic_api(name, prompt, model, 0, system_message);
+        // LOCAL FALLBACK BEFORE CALLING AI
+        auto it = common_names.find(lower_name);
+        if (it != common_names.end()) {
+            FlatVector::GetData<string_t>(result)[i] =
+                StringVector::AddString(result, it->second);
+            FlatVector::SetNull(result, i, false);
+            continue;
+        }
+
+        // Deterministic prompt
+        std::string prompt =
+            "Classify the gender of this first name: '" + name + "'";
+
+        // IMPORTANT: temperature should be 0 (deterministic) and low token limit
+        std::string response = call_anthropic_api(
+            prompt,
+            system_message,
+            model,
+            5   // max tokens only
+        );
 
         if (response.find("ERROR:") == 0) {
-            // Return the error message so user knows what went wrong
-            FlatVector::GetData<string_t>(result)[i] = StringVector::AddString(result, response);
+            FlatVector::GetData<string_t>(result)[i] =
+                StringVector::AddString(result, response);
             FlatVector::SetNull(result, i, false);
             continue;
         }
 
         if (response.empty()) {
-            FlatVector::GetData<string_t>(result)[i] = StringVector::AddString(result, "unknown");
+            FlatVector::GetData<string_t>(result)[i] =
+                StringVector::AddString(result, "unknown");
             FlatVector::SetNull(result, i, false);
             continue;
         }
 
-        // Convert to lowercase and trim
+        // Normalize response
         std::string lower = response;
         for (auto &c : lower) c = std::tolower(static_cast<unsigned char>(c));
 
-        start = lower.find_first_not_of(" \t\n\r\"");
-        end = lower.find_last_not_of(" \t\n\r\".");
+        start = lower.find_first_not_of(" \t\n\r\"'");
+        end = lower.find_last_not_of(" \t\n\r\"'.");
         if (start != std::string::npos && end != std::string::npos && end >= start) {
             lower = lower.substr(start, end - start + 1);
         }
 
         std::string gender = "unknown";
 
-        // Check for female first (since "male" is contained in "female")
-        if (lower.find("female") != std::string::npos) {
+        if (lower == "female") {
+            gender = "female";
+        } else if (lower == "male") {
+            gender = "male";
+        }
+        // Extra safety parsing
+        else if (lower.find("female") != std::string::npos) {
             gender = "female";
         } else if (lower.find("male") != std::string::npos) {
             gender = "male";
         }
 
-        FlatVector::GetData<string_t>(result)[i] = StringVector::AddString(result, gender);
+        FlatVector::GetData<string_t>(result)[i] =
+            StringVector::AddString(result, gender);
+
         FlatVector::SetNull(result, i, false);
     }
 }
