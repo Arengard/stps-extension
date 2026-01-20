@@ -1285,8 +1285,15 @@ static void StpsAskAIGenderFunction(DataChunk &args, ExpressionState &state, Vec
 
     // System message forces Claude to respond with just male or female
     const std::string system_message =
-        "You are a gender classification assistant. Given a first name, respond with ONLY the word 'male' or 'female'. Nothing else. No explanation.";
-
+        "INSTRUCTIONS:\n"
+        "- You must classify first names by gender.\n"
+        "- You MUST respond with EXACTLY one word.\n"
+        "- Allowed responses are ONLY: male or female.\n"
+        "- Never add punctuation.\n"
+        "- Never add explanations.\n"
+        "- If uncertain, you MUST still pick the most likely option.\n"
+        "- Do NOT ever respond with 'unknown'.";
+    
     for (idx_t i = 0; i < count; i++) {
         if (FlatVector::IsNull(name_vec, i)) {
             FlatVector::SetNull(result, i, true);
@@ -1312,7 +1319,7 @@ static void StpsAskAIGenderFunction(DataChunk &args, ExpressionState &state, Vec
         // Simple prompt asking Claude directly
         std::string prompt = "What is the gender of the name '" + name + "'? Answer only: male or female";
 
-        std::string response = call_anthropic_api(name, prompt, model, 50, system_message);
+        std::string response = call_anthropic_api(name, prompt, model, 0, system_message);
 
         if (response.find("ERROR:") == 0) {
             // Return the error message so user knows what went wrong
