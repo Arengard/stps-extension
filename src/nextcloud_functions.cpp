@@ -15,13 +15,13 @@ struct NextcloudBindData : public TableFunctionData {
     std::string url;
     std::string username;
     std::string password;
-    std::vector<std::string> extra_headers;
+    vector<std::string> extra_headers; // use duckdb::vector for TableFunction compatibility
 };
 
 struct NextcloudGlobalState : public GlobalTableFunctionState {
-    std::vector<std::vector<Value>> rows;
-    std::vector<std::string> column_names;
-    std::vector<LogicalType> column_types;
+    vector<vector<Value>> rows;
+    vector<std::string> column_names;
+    vector<LogicalType> column_types;
     idx_t current_row = 0;
     std::string error_message;
 };
@@ -45,7 +45,7 @@ static std::string Base64Encode(const std::string &input) {
 }
 
 static unique_ptr<FunctionData> NextcloudBind(ClientContext &context, TableFunctionBindInput &input,
-                                             std::vector<LogicalType> &return_types, std::vector<std::string> &names) {
+                                             vector<LogicalType> &return_types, vector<string> &names) {
     auto result = make_uniq<NextcloudBindData>();
     if (input.inputs.empty()) {
         throw BinderException("next_cloud requires url");
@@ -119,9 +119,9 @@ static unique_ptr<GlobalTableFunctionState> NextcloudInit(ClientContext &context
     }
 
     // Attempt CSV/TSV parsing
-    std::vector<std::string> col_names;
-    std::vector<LogicalType> col_types;
-    std::vector<std::vector<Value>> rows;
+    vector<string> col_names;
+    vector<LogicalType> col_types;
+    vector<vector<Value>> rows;
     ParseCSVContent(body, col_names, col_types, rows);
 
     if (!col_names.empty()) {
