@@ -270,7 +270,7 @@ static unique_ptr<FunctionData> SevenZipBind(ClientContext &context, TableFuncti
     }
 
     // Parse CSV to determine schema
-    std::vector<string> col_names;
+    std::vector<std::string> col_names;
     std::vector<LogicalType> col_types;
     std::vector<std::vector<Value>> temp_rows;
     ParseCSVContent(content, col_names, col_types, temp_rows);
@@ -279,8 +279,15 @@ static unique_ptr<FunctionData> SevenZipBind(ClientContext &context, TableFuncti
         names = {"content"};
         return_types = {LogicalType::VARCHAR};
     } else {
-        names = col_names;
-        return_types = col_types;
+        // Copy element by element to avoid std::vector -> duckdb::vector assignment issues
+        names.clear();
+        for (const auto &n : col_names) {
+            names.push_back(n);
+        }
+        return_types.clear();
+        for (const auto &t : col_types) {
+            return_types.push_back(t);
+        }
     }
 
     return result;
