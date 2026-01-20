@@ -299,7 +299,7 @@ bool BlzLutLoader::ParseFormat20(const std::vector<uint8_t>& buffer) {
 
         // Build BLZ → method map
         blz_to_method_.clear();
-        size_t valid_entries = std::min(blz_list.size(), method_data.size());
+        size_t valid_entries = (std::min)(blz_list.size(), method_data.size());
 
         for (size_t i = 0; i < valid_entries; i++) {
             uint32_t blz = blz_list[i];

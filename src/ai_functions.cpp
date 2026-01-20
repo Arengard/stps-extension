@@ -8,6 +8,7 @@
 #include <cctype>
 #include <iomanip>
 #include <mutex>
+#include <regex>
 #include "curl_utils.hpp"
 
 #ifdef _WIN32
@@ -298,7 +299,6 @@ static std::string extract_json_content(const std::string& json, const std::stri
 // German Address Parser - extracts address components from text using regex
 // ============================================================================
 
-#include <regex>
 
 struct ParsedAddress {
     std::string city;
@@ -348,20 +348,21 @@ static ParsedAddress parse_german_address(const std::string& text) {
     // Captures: street_name, street_nr, postal_code (5 digits), city
 
     // Pattern 1: Street Nr, PLZ City
+    // Using broader character classes to avoid UTF-8 encoding issues across platforms
     std::regex pattern1(
-        R"(([A-ZÄÖÜa-zäöüß][A-ZÄÖÜa-zäöüß\-\.\s]*(?:straße|strasse|str\.|weg|platz|allee|ring|gasse|damm|ufer|chaussee))\s*(\d+[a-zA-Z]?)\s*[,\s]+(\d{5})\s+([A-ZÄÖÜa-zäöüß][A-ZÄÖÜa-zäöüß\-\s]+))",
+        R"(([A-Za-z][A-Za-z\-\.\s]*(?:stra(?:ss|ß)e|str\.|weg|platz|allee|ring|gasse|damm|ufer|chaussee))\s*(\d+[a-zA-Z]?)\s*[,\s]+(\d{5})\s+([A-Za-z][A-Za-z\-\s]+))",
         std::regex_constants::icase
     );
 
     // Pattern 2: PLZ City, Street Nr (reversed format)
     std::regex pattern2(
-        R"((\d{5})\s+([A-ZÄÖÜa-zäöüß][A-ZÄÖÜa-zäöüß\-\s]+?)[,\s]+([A-ZÄÖÜa-zäöüß][A-ZÄÖÜa-zäöüß\-\.\s]*(?:straße|strasse|str\.|weg|platz|allee|ring|gasse|damm|ufer|chaussee))\s*(\d+[a-zA-Z]?))",
+        R"((\d{5})\s+([A-Za-z][A-Za-z\-\s]+?)[,\s]+([A-Za-z][A-Za-z\-\.\s]*(?:stra(?:ss|ß)e|str\.|weg|platz|allee|ring|gasse|damm|ufer|chaussee))\s*(\d+[a-zA-Z]?))",
         std::regex_constants::icase
     );
 
     // Pattern 3: Just PLZ and City (no street)
     std::regex pattern3(
-        R"((\d{5})\s+([A-ZÄÖÜa-zäöüß][A-ZÄÖÜa-zäöüß\-\s]{2,20})(?:[,\s]|$))",
+        R"((\d{5})\s+([A-Za-z][A-Za-z\-\s]{2,20})(?:[,\s]|$))",
         std::regex_constants::icase
     );
 
@@ -405,7 +406,7 @@ static ParsedAddress parse_german_address(const std::string& text) {
 
         // Now try to find street separately
         std::regex street_pattern(
-            R"(([A-ZÄÖÜa-zäöüß][A-ZÄÖÜa-zäöüß\-\.\s]*(?:straße|strasse|str\.|weg|platz|allee|ring|gasse|damm|ufer))\s*(\d+[a-zA-Z]?))",
+            R"(([A-Za-z][A-Za-z\-\.\s]*(?:stra(?:ss|ß)e|str\.|weg|platz|allee|ring|gasse|damm|ufer))\s*(\d+[a-zA-Z]?))",
             std::regex_constants::icase
         );
         if (std::regex_search(cleaned, match, street_pattern)) {

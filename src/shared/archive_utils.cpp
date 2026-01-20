@@ -33,7 +33,8 @@ bool IsBinaryFormat(const std::string &filename) {
 
 bool LooksLikeBinary(const std::string &content) {
     if (content.empty()) return false;
-    size_t check_size = std::min(content.size(), (size_t)1000);
+    // Use parentheses around std::min to prevent Windows macro conflict
+    size_t check_size = (std::min)(content.size(), static_cast<size_t>(1000));
     int non_printable = 0;
     for (size_t i = 0; i < check_size; i++) {
         unsigned char c = static_cast<unsigned char>(content[i]);
