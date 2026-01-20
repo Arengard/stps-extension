@@ -1377,6 +1377,92 @@ static void StpsAskAIAddressFunction(DataChunk &args, ExpressionState &state, Ve
     }
 }
 
+// ============================================================================
+// Gender detection from first name
+// ============================================================================
+
+static void StpsAskAIGenderFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+    auto count = args.size();
+    auto &name_vec = args.data[0];
+
+    string model = GetAnthropicModel();
+    if (args.ColumnCount() >= 2 && !FlatVector::IsNull(args.data[1], 0)) {
+        string_t model_str = FlatVector::GetData<string_t>(args.data[1])[0];
+        model = model_str.GetString();
+    }
+
+    // System message for gender detection - no web search needed
+    const std::string system_message =
+        "You are a gender classification assistant. Given a first name, determine the most likely gender. "
+        "Respond with ONLY one of these values: 'male', 'female', or 'unknown'. "
+        "Do not include any explanation or additional text.";
+
+    for (idx_t i = 0; i < count; i++) {
+        if (FlatVector::IsNull(name_vec, i)) {
+            FlatVector::SetNull(result, i, true);
+            continue;
+        }
+
+        string_t name_str = FlatVector::GetData<string_t>(name_vec)[i];
+        std::string name = name_str.GetString();
+
+        // Trim the name
+        size_t start = name.find_first_not_of(" \t\n\r");
+        size_t end = name.find_last_not_of(" \t\n\r");
+        if (start == std::string::npos) {
+            FlatVector::SetNull(result, i, true);
+            continue;
+        }
+        name = name.substr(start, end - start + 1);
+
+        // Extract first name only (in case full name is provided)
+        size_t space_pos = name.find(' ');
+        if (space_pos != std::string::npos) {
+            name = name.substr(0, space_pos);
+        }
+
+        std::string prompt = "What is the gender of the first name: " + name;
+
+        // Call API with custom system message (no web search needed for names)
+        std::string response = call_anthropic_api(
+            name,
+            prompt,
+            model,
+            50,  // Very short response expected
+            system_message
+        );
+
+        if (response.find("ERROR:") == 0 || response.empty()) {
+            FlatVector::GetData<string_t>(result)[i] = StringVector::AddString(result, "unknown");
+            FlatVector::SetNull(result, i, false);
+            continue;
+        }
+
+        // Normalize response to lowercase and extract gender
+        std::string lower_response = response;
+        for (auto& c : lower_response) c = std::tolower(static_cast<unsigned char>(c));
+
+        std::string gender = "unknown";
+        if (lower_response.find("female") != std::string::npos ||
+            lower_response.find("weiblich") != std::string::npos ||
+            lower_response.find("woman") != std::string::npos ||
+            lower_response.find("girl") != std::string::npos) {
+            gender = "female";
+        } else if (lower_response.find("male") != std::string::npos ||
+                   lower_response.find("männlich") != std::string::npos ||
+                   lower_response.find("man") != std::string::npos ||
+                   lower_response.find("boy") != std::string::npos) {
+            // Check it's not "female" (which contains "male")
+            if (lower_response.find("female") == std::string::npos) {
+                gender = "male";
+            }
+        }
+
+        FlatVector::GetData<string_t>(result)[i] = StringVector::AddString(result, gender);
+        FlatVector::SetNull(result, i, false);
+    }
+}
+
 void RegisterAIFunctions(ExtensionLoader& loader) {
     // Register stps_ask_ai function
     ScalarFunctionSet ask_ai_set("stps_ask_ai");
@@ -1502,6 +1588,25 @@ void RegisterAIFunctions(ExtensionLoader& loader) {
         StpsGetSearchProviderFunction
     ));
     loader.RegisterFunction(get_search_provider_set);
+
+    // Register stps_ask_ai_gender function
+    ScalarFunctionSet ask_ai_gender_set("stps_ask_ai_gender");
+
+    // stps_ask_ai_gender(name VARCHAR) -> VARCHAR ('male', 'female', 'unknown')
+    ask_ai_gender_set.AddFunction(ScalarFunction(
+        {LogicalType::VARCHAR},
+        LogicalType::VARCHAR,
+        StpsAskAIGenderFunction
+    ));
+
+    // stps_ask_ai_gender(name VARCHAR, model VARCHAR) -> VARCHAR
+    ask_ai_gender_set.AddFunction(ScalarFunction(
+        {LogicalType::VARCHAR, LogicalType::VARCHAR},
+        LogicalType::VARCHAR,
+        StpsAskAIGenderFunction
+    ));
+
+    loader.RegisterFunction(ask_ai_gender_set);
 }
 
 } // namespace stps
