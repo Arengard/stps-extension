@@ -1310,11 +1310,18 @@ static void StpsAskAIGenderFunction(DataChunk &args, ExpressionState &state, Vec
         }
 
         // Simple prompt asking Claude directly
-        std::string prompt = "Is the name '" + name + "' male or female?";
+        std::string prompt = "What is the gender of the name '" + name + "'? Answer only: male or female";
 
-        std::string response = call_anthropic_api(name, prompt, model, 10, system_message);
+        std::string response = call_anthropic_api(name, prompt, model, 50, system_message);
 
-        if (response.find("ERROR:") == 0 || response.empty()) {
+        if (response.find("ERROR:") == 0) {
+            // Return the error message so user knows what went wrong
+            FlatVector::GetData<string_t>(result)[i] = StringVector::AddString(result, response);
+            FlatVector::SetNull(result, i, false);
+            continue;
+        }
+
+        if (response.empty()) {
             FlatVector::GetData<string_t>(result)[i] = StringVector::AddString(result, "unknown");
             FlatVector::SetNull(result, i, false);
             continue;

@@ -19,9 +19,9 @@ struct NextcloudBindData : public TableFunctionData {
 };
 
 struct NextcloudGlobalState : public GlobalTableFunctionState {
-    vector<vector<Value>> rows;
-    vector<std::string> column_names;
-    vector<LogicalType> column_types;
+    std::vector<std::vector<Value>> rows;
+    std::vector<std::string> column_names;
+    std::vector<LogicalType> column_types;
     idx_t current_row = 0;
     std::string error_message;
 };
@@ -118,30 +118,10 @@ static unique_ptr<GlobalTableFunctionState> NextcloudInit(ClientContext &context
         return state;
     }
 
-    // Attempt CSV/TSV parsing using std::vector to match ParseCSVContent signature
-    std::vector<std::string> col_names_std;
-    std::vector<LogicalType> col_types_std;
-    std::vector<std::vector<Value>> rows_std;
-    ParseCSVContent(body, col_names_std, col_types_std, rows_std);
+    // Attempt CSV/TSV parsing
+    ParseCSVContent(body, state->column_names, state->column_types, state->rows);
 
-    if (!col_names_std.empty()) {
-        // Copy element-by-element to avoid std::vector -> duckdb::vector assignment issues
-        state->column_names.clear();
-        for (auto &n : col_names_std) {
-            state->column_names.push_back(n);
-        }
-        state->column_types.clear();
-        for (auto &t : col_types_std) {
-            state->column_types.push_back(t);
-        }
-        state->rows.clear();
-        for (auto &r : rows_std) {
-            vector<Value> row;
-            for (auto &v : r) {
-                row.push_back(v);
-            }
-            state->rows.push_back(std::move(row));
-        }
+    if (!state->column_names.empty()) {
         return state;
     }
 

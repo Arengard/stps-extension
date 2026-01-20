@@ -134,9 +134,9 @@ struct SevenZipBindData : public TableFunctionData {
 };
 
 struct SevenZipGlobalState : public GlobalTableFunctionState {
-    vector<string> column_names;
-    vector<LogicalType> column_types;
-    vector<vector<Value>> rows;
+    std::vector<std::string> column_names;
+    std::vector<LogicalType> column_types;
+    std::vector<std::vector<Value>> rows;
     idx_t current_row = 0;
     string error_message;
 };
