@@ -29,6 +29,9 @@ static std::mutex ai_config_mutex;
 static std::string anthropic_api_key;
 static std::string anthropic_model = "claude-sonnet-4-5-20250929";  // Default model (Claude Sonnet 4.5)
 static std::string brave_api_key;
+static std::string google_api_key;
+static std::string google_cse_id;  // Google Custom Search Engine ID
+static std::string search_provider = "brave";  // Default: "brave" or "google"
 
 void SetAnthropicApiKey(const std::string& key) {
     std::lock_guard<std::mutex> lock(ai_config_mutex);
@@ -43,6 +46,41 @@ void SetAnthropicModel(const std::string& model) {
 void SetBraveApiKey(const std::string& key) {
     std::lock_guard<std::mutex> lock(ai_config_mutex);
     brave_api_key = key;
+}
+
+void SetGoogleApiKey(const std::string& key) {
+    std::lock_guard<std::mutex> lock(ai_config_mutex);
+    google_api_key = key;
+}
+
+void SetGoogleCseId(const std::string& id) {
+    std::lock_guard<std::mutex> lock(ai_config_mutex);
+    google_cse_id = id;
+}
+
+void SetSearchProvider(const std::string& provider) {
+    std::lock_guard<std::mutex> lock(ai_config_mutex);
+    // Normalize to lowercase
+    std::string p = provider;
+    for (auto& c : p) c = std::tolower(static_cast<unsigned char>(c));
+    if (p == "google" || p == "brave") {
+        search_provider = p;
+    }
+}
+
+std::string GetSearchProvider() {
+    std::lock_guard<std::mutex> lock(ai_config_mutex);
+    return search_provider;
+}
+
+std::string GetGoogleApiKey() {
+    std::lock_guard<std::mutex> lock(ai_config_mutex);
+    return google_api_key;
+}
+
+std::string GetGoogleCseId() {
+    std::lock_guard<std::mutex> lock(ai_config_mutex);
+    return google_cse_id;
 }
 
 std::string GetAnthropicModel() {
@@ -487,6 +525,152 @@ static std::string execute_brave_search(const std::string& query) {
     return format_search_results(response);
 }
 
+// Format Google Custom Search API results into a readable string
+static std::string format_google_search_results(const std::string& json_response) {
+    std::ostringstream formatted;
+
+    // Look for "items":[...] pattern (Google CSE uses "items" not "results")
+    size_t items_pos = json_response.find("\"items\"");
+    if (items_pos == std::string::npos) {
+        return "No search results found.";
+    }
+
+    // Find the opening bracket of items array
+    size_t array_start = json_response.find('[', items_pos);
+    if (array_start == std::string::npos) {
+        return "No search results found.";
+    }
+
+    formatted << "Search Results:\n\n";
+
+    size_t pos = array_start + 1;
+    int result_num = 1;
+
+    while (pos < json_response.length() && result_num <= 5) {
+        // Find next result object
+        size_t obj_start = json_response.find('{', pos);
+        if (obj_start == std::string::npos) break;
+
+        // Find matching closing brace (handle nested objects)
+        int brace_count = 1;
+        size_t obj_end = obj_start + 1;
+        while (obj_end < json_response.length() && brace_count > 0) {
+            if (json_response[obj_end] == '{') brace_count++;
+            else if (json_response[obj_end] == '}') brace_count--;
+            obj_end++;
+        }
+        if (brace_count != 0) break;
+
+        std::string result_obj = json_response.substr(obj_start, obj_end - obj_start);
+
+        // Extract title, link (url), snippet (description) - Google uses different field names
+        std::string title = extract_json_content(result_obj, "title");
+        std::string url = extract_json_content(result_obj, "link");
+        std::string description = extract_json_content(result_obj, "snippet");
+
+        if (!title.empty() && !url.empty()) {
+            formatted << result_num << ". " << title << "\n";
+            formatted << "   URL: " << url << "\n";
+            if (!description.empty()) {
+                formatted << "   " << description << "\n";
+            }
+            formatted << "\n";
+            result_num++;
+        }
+
+        pos = obj_end;
+
+        // Check if we've reached the end of the array
+        size_t next_comma = json_response.find(',', pos);
+        size_t array_end = json_response.find(']', pos);
+        if (next_comma == std::string::npos || (array_end != std::string::npos && array_end < next_comma)) {
+            break;
+        }
+    }
+
+    if (result_num == 1) {
+        return "No search results found.";
+    }
+
+    return formatted.str();
+}
+
+// Execute a Google Custom Search API query
+static std::string execute_google_search(const std::string& query) {
+    std::string api_key = GetGoogleApiKey();
+    std::string cse_id = GetGoogleCseId();
+
+    if (api_key.empty()) {
+        return "ERROR: Google API key not configured. Use stps_set_google_api_key() first.";
+    }
+    if (cse_id.empty()) {
+        return "ERROR: Google CSE ID not configured. Use stps_set_google_cse_id() first.";
+    }
+
+    // Build Google Custom Search API URL
+    // https://www.googleapis.com/customsearch/v1?key=API_KEY&cx=CSE_ID&q=QUERY
+    std::string encoded_query = url_encode(query);
+    std::string url = "https://www.googleapis.com/customsearch/v1?key=" + api_key +
+                      "&cx=" + cse_id +
+                      "&q=" + encoded_query +
+                      "&num=5";
+
+    // Set up headers
+    CurlHeaders headers;
+    headers.append("Accept: application/json");
+
+    // Make the request
+    long http_code = 0;
+    std::string response = curl_get(url, headers, &http_code);
+
+    // Check for errors
+    if (response.find("ERROR:") == 0) {
+        return "Search failed: " + response;
+    }
+
+    // Check for API error in response
+    std::string error_msg = extract_json_content(response, "message");
+    if (!error_msg.empty() && response.find("\"error\"") != std::string::npos) {
+        return "ERROR: Google API error: " + error_msg;
+    }
+
+    // Format and return results
+    return format_google_search_results(response);
+}
+
+// Unified web search function - uses configured provider
+static std::string execute_web_search(const std::string& query) {
+    std::string provider = GetSearchProvider();
+
+    if (provider == "google") {
+        // Check if Google is configured
+        if (!GetGoogleApiKey().empty() && !GetGoogleCseId().empty()) {
+            return execute_google_search(query);
+        }
+        // Fall back to Brave if Google not configured
+        if (!GetBraveApiKey().empty()) {
+            return execute_brave_search(query);
+        }
+        return "ERROR: Google search not configured and no fallback available.";
+    } else {
+        // Default: Brave
+        if (!GetBraveApiKey().empty()) {
+            return execute_brave_search(query);
+        }
+        // Fall back to Google if Brave not configured
+        if (!GetGoogleApiKey().empty() && !GetGoogleCseId().empty()) {
+            return execute_google_search(query);
+        }
+        return "ERROR: Brave search not configured and no fallback available.";
+    }
+}
+
+// Check if any search provider is available
+static bool is_search_available() {
+    return !GetBraveApiKey().empty() ||
+           (!GetGoogleApiKey().empty() && !GetGoogleCseId().empty());
+}
+
 // ============================================================================
 // Anthropic API call
 // ============================================================================
@@ -500,8 +684,8 @@ static std::string call_anthropic_api(const std::string& context, const std::str
         return "ERROR: Anthropic API key not configured. Use stps_set_api_key() or set ANTHROPIC_API_KEY environment variable.";
     }
 
-    // Check if we should enable tools (only if no custom system message - custom means structured task)
-    bool tools_enabled = !GetBraveApiKey().empty() && custom_system_message.empty();
+    // Check if we should enable tools (only if no custom system message and search is available)
+    bool tools_enabled = is_search_available() && custom_system_message.empty();
 
     // Build JSON request payload for Anthropic Messages API
     std::string system_message;
@@ -616,8 +800,8 @@ static std::string call_anthropic_api(const std::string& context, const std::str
         return "ERROR: Unexpected tool request";
     }
 
-    // Execute the search
-    std::string search_results = execute_brave_search(search_query);
+    // Execute the search using configured provider
+    std::string search_results = execute_web_search(search_query);
 
     bool search_failed = search_results.find("ERROR:") == 0 || search_results.find("Search failed") == 0;
 
@@ -786,6 +970,62 @@ static void StpsSetBraveApiKeyFunction(DataChunk &args, ExpressionState &state, 
 static void StpsGetModelFunction(DataChunk &args, ExpressionState &state, Vector &result) {
     std::string model = GetAnthropicModel();
     FlatVector::GetData<string_t>(result)[0] = StringVector::AddString(result, model);
+    FlatVector::SetNull(result, 0, false);
+}
+
+static void StpsSetGoogleApiKeyFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+    auto &key_vec = args.data[0];
+
+    if (!FlatVector::IsNull(key_vec, 0)) {
+        string_t key_str = FlatVector::GetData<string_t>(key_vec)[0];
+        std::string key = key_str.GetString();
+        SetGoogleApiKey(key);
+
+        FlatVector::GetData<string_t>(result)[0] = StringVector::AddString(result, "Google API key configured successfully");
+        FlatVector::SetNull(result, 0, false);
+    } else {
+        FlatVector::GetData<string_t>(result)[0] = StringVector::AddString(result, "ERROR: API key cannot be NULL");
+        FlatVector::SetNull(result, 0, false);
+    }
+}
+
+static void StpsSetGoogleCseIdFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+    auto &id_vec = args.data[0];
+
+    if (!FlatVector::IsNull(id_vec, 0)) {
+        string_t id_str = FlatVector::GetData<string_t>(id_vec)[0];
+        std::string id = id_str.GetString();
+        SetGoogleCseId(id);
+
+        FlatVector::GetData<string_t>(result)[0] = StringVector::AddString(result, "Google CSE ID configured successfully");
+        FlatVector::SetNull(result, 0, false);
+    } else {
+        FlatVector::GetData<string_t>(result)[0] = StringVector::AddString(result, "ERROR: CSE ID cannot be NULL");
+        FlatVector::SetNull(result, 0, false);
+    }
+}
+
+static void StpsSetSearchProviderFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+    auto &provider_vec = args.data[0];
+
+    if (!FlatVector::IsNull(provider_vec, 0)) {
+        string_t provider_str = FlatVector::GetData<string_t>(provider_vec)[0];
+        std::string provider = provider_str.GetString();
+        SetSearchProvider(provider);
+
+        std::string current = GetSearchProvider();
+        std::string msg = "Search provider set to: " + current;
+        FlatVector::GetData<string_t>(result)[0] = StringVector::AddString(result, msg);
+        FlatVector::SetNull(result, 0, false);
+    } else {
+        FlatVector::GetData<string_t>(result)[0] = StringVector::AddString(result, "ERROR: Provider cannot be NULL (use 'brave' or 'google')");
+        FlatVector::SetNull(result, 0, false);
+    }
+}
+
+static void StpsGetSearchProviderFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+    std::string provider = GetSearchProvider();
+    FlatVector::GetData<string_t>(result)[0] = StringVector::AddString(result, provider);
     FlatVector::SetNull(result, 0, false);
 }
 
@@ -973,6 +1213,42 @@ void RegisterAIFunctions(ExtensionLoader& loader) {
         StpsSetBraveApiKeyFunction
     ));
     loader.RegisterFunction(set_brave_key_set);
+
+    // Register stps_set_google_api_key function
+    ScalarFunctionSet set_google_key_set("stps_set_google_api_key");
+    set_google_key_set.AddFunction(ScalarFunction(
+        {LogicalType::VARCHAR},
+        LogicalType::VARCHAR,
+        StpsSetGoogleApiKeyFunction
+    ));
+    loader.RegisterFunction(set_google_key_set);
+
+    // Register stps_set_google_cse_id function
+    ScalarFunctionSet set_google_cse_set("stps_set_google_cse_id");
+    set_google_cse_set.AddFunction(ScalarFunction(
+        {LogicalType::VARCHAR},
+        LogicalType::VARCHAR,
+        StpsSetGoogleCseIdFunction
+    ));
+    loader.RegisterFunction(set_google_cse_set);
+
+    // Register stps_set_search_provider function
+    ScalarFunctionSet set_search_provider_set("stps_set_search_provider");
+    set_search_provider_set.AddFunction(ScalarFunction(
+        {LogicalType::VARCHAR},
+        LogicalType::VARCHAR,
+        StpsSetSearchProviderFunction
+    ));
+    loader.RegisterFunction(set_search_provider_set);
+
+    // Register stps_get_search_provider function
+    ScalarFunctionSet get_search_provider_set("stps_get_search_provider");
+    get_search_provider_set.AddFunction(ScalarFunction(
+        {},
+        LogicalType::VARCHAR,
+        StpsGetSearchProviderFunction
+    ));
+    loader.RegisterFunction(get_search_provider_set);
 }
 
 } // namespace stps
