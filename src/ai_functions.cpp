@@ -257,7 +257,7 @@ static std::string extract_json_content(const std::string& json, const std::stri
 }
 
 // ============================================================================
-// German Address Parser - extracts address components from text
+// Address structure - used by tool-based address extraction
 // ============================================================================
 
 struct ParsedAddress {
@@ -266,101 +266,6 @@ struct ParsedAddress {
     std::string street_name;
     std::string street_nr;
 };
-
-static ParsedAddress parse_german_address(const std::string& text) {
-    ParsedAddress addr;
-
-    // Find 5-digit German postal code (PLZ)
-    for (size_t i = 0; i + 4 < text.length(); i++) {
-        if (std::isdigit(text[i]) && std::isdigit(text[i+1]) &&
-            std::isdigit(text[i+2]) && std::isdigit(text[i+3]) &&
-            std::isdigit(text[i+4])) {
-            // Check it's not part of a longer number
-            bool valid = (i == 0 || !std::isdigit(text[i-1])) &&
-                        (i + 5 >= text.length() || !std::isdigit(text[i+5]));
-            if (valid) {
-                addr.postal_code = text.substr(i, 5);
-
-                // City is usually right after the postal code
-                size_t city_start = i + 5;
-                while (city_start < text.length() && (text[city_start] == ' ' || text[city_start] == ',')) {
-                    city_start++;
-                }
-                size_t city_end = city_start;
-                while (city_end < text.length() && text[city_end] != ',' && text[city_end] != '\n' &&
-                       text[city_end] != '*' && text[city_end] != ')') {
-                    city_end++;
-                }
-                if (city_end > city_start) {
-                    addr.city = text.substr(city_start, city_end - city_start);
-                    // Trim trailing spaces and "Germany"
-                    while (!addr.city.empty() && (addr.city.back() == ' ' || addr.city.back() == '*')) {
-                        addr.city.pop_back();
-                    }
-                    // Remove " Germany" suffix if present
-                    if (addr.city.length() > 8 && addr.city.substr(addr.city.length() - 7) == "Germany") {
-                        addr.city = addr.city.substr(0, addr.city.length() - 7);
-                        while (!addr.city.empty() && (addr.city.back() == ' ' || addr.city.back() == ',')) {
-                            addr.city.pop_back();
-                        }
-                    }
-                }
-                break;
-            }
-        }
-    }
-
-    // Find street pattern: word(s) ending in typical German street suffixes followed by number
-    // Common patterns: "Straße", "Str.", "straße", "weg", "platz", "allee", "ring", "gasse"
-    std::vector<std::string> street_suffixes = {"straße", "strasse", "str.", "weg", "platz", "allee", "ring", "gasse", "damm", "ufer"};
-
-    std::string lower_text = text;
-    for (auto& c : lower_text) c = std::tolower(static_cast<unsigned char>(c));
-
-    for (const auto& suffix : street_suffixes) {
-        size_t pos = lower_text.find(suffix);
-        if (pos != std::string::npos) {
-            // Find start of street name (go back to find beginning of word)
-            size_t street_start = pos;
-            while (street_start > 0 && text[street_start - 1] != '\n' && text[street_start - 1] != ',' &&
-                text[street_start - 1] != '*' && text[street_start - 1] != '(') {
-                street_start--;
-            }
-            // Skip leading ** if markdown
-            while (street_start < text.length() && text[street_start] == '*') {
-                street_start++;
-            }
-
-            size_t street_end = pos + suffix.length();
-            addr.street_name = text.substr(street_start, street_end - street_start);
-
-            // Find street number after the street name
-            size_t nr_start = street_end;
-            while (nr_start < text.length() && (text[nr_start] == ' ' || text[nr_start] == '.')) {
-                nr_start++;
-            }
-            size_t nr_end = nr_start;
-            while (nr_end < text.length() && (std::isdigit(text[nr_end]) || std::isalpha(text[nr_end]))) {
-                // Allow letter suffix like "12a" but stop at comma/space after number
-                if (std::isalpha(text[nr_end]) && nr_end > nr_start && !std::isdigit(text[nr_end-1])) {
-                    break;
-                }
-                nr_end++;
-            }
-            if (nr_end > nr_start) {
-                addr.street_nr = text.substr(nr_start, nr_end - nr_start);
-                // Trim trailing non-digits except single letter suffix
-                while (addr.street_nr.length() > 1 && !std::isdigit(addr.street_nr.back()) &&
-                       !std::isdigit(addr.street_nr[addr.street_nr.length()-2])) {
-                    addr.street_nr.pop_back();
-                }
-            }
-            break;
-        }
-    }
-
-    return addr;
-}
 
 // ============================================================================
 // Web Search Support
@@ -790,8 +695,177 @@ static void StpsGetModelFunction(DataChunk &args, ExpressionState &state, Vector
 }
 
 // ============================================================================
-// Address-specific AI function with structured output
+// Address-specific AI function with structured output using tool calling
 // ============================================================================
+
+// Specialized API call for address lookup using tool calling
+static ParsedAddress call_anthropic_api_for_address(const std::string& company_name, const std::string& model) {
+    ParsedAddress addr;
+    std::string api_key = GetAnthropicApiKey();
+
+    if (api_key.empty()) {
+        return addr; // Return empty address on error
+    }
+
+    std::string brave_key = GetBraveApiKey();
+    bool has_brave = !brave_key.empty();
+
+    // Build system message
+    std::string system_message = "You are a helpful assistant that searches for business addresses. "
+                                "Use web_search to find the company's address, then use report_address to provide the structured data.";
+
+    std::string user_message = "Find the business address for: " + escape_json_string(company_name);
+
+    // Build tools array with both web_search and report_address
+    std::string tools_json = "\"tools\":[";
+
+    // Add web_search tool if Brave API is available
+    if (has_brave) {
+        tools_json += "{"
+            "\"name\":\"web_search\","
+            "\"description\":\"Search the web for current information about businesses and addresses\","
+            "\"input_schema\":{"
+                "\"type\":\"object\","
+                "\"properties\":{"
+                    "\"query\":{\"type\":\"string\",\"description\":\"Search query\"}"
+                "},"
+                "\"required\":[\"query\"]"
+            "}"
+        "},";
+    }
+
+    // Add report_address tool
+    tools_json += "{"
+        "\"name\":\"report_address\","
+        "\"description\":\"Report the structured address data for a business\","
+        "\"input_schema\":{"
+            "\"type\":\"object\","
+            "\"properties\":{"
+                "\"city\":{\"type\":\"string\",\"description\":\"City name\"},"
+                "\"postal_code\":{\"type\":\"string\",\"description\":\"Postal code (5 digits for Germany)\"},"
+                "\"street_name\":{\"type\":\"string\",\"description\":\"Street name\"},"
+                "\"street_nr\":{\"type\":\"string\",\"description\":\"Street number\"}"
+            "},"
+            "\"required\":[\"city\",\"postal_code\",\"street_name\",\"street_nr\"]"
+        "}"
+    "}],";
+
+    // First API call
+    std::string json_payload = "{"
+        "\"model\":\"" + model + "\","
+        "\"max_tokens\":1000,"
+        + tools_json +
+        "\"system\":\"" + system_message + "\","
+        "\"messages\":["
+            "{\"role\":\"user\",\"content\":\"" + user_message + "\"}"
+        "],"
+        "\"temperature\":0.7"
+    "}";
+
+    CurlHeaders headers;
+    headers.append("Content-Type: application/json");
+    headers.append("x-api-key: " + api_key);
+    headers.append("anthropic-version: 2023-06-01");
+
+    long http_code = 0;
+    std::string response = curl_post_json(
+        "https://api.anthropic.com/v1/messages",
+        json_payload,
+        headers,
+        &http_code
+    );
+
+    if (response.find("ERROR:") == 0) {
+        return addr;
+    }
+
+    // Handle multi-turn tool calling (up to 5 turns to handle web_search -> report_address)
+    std::string messages_history = "{\"role\":\"user\",\"content\":\"" + user_message + "\"}";
+
+    for (int turn = 0; turn < 5; turn++) {
+        std::string stop_reason = extract_json_content(response, "stop_reason");
+
+        if (stop_reason != "tool_use") {
+            // No tool use, we're done but didn't get structured data
+            break;
+        }
+
+        // Find tool use in content array
+        size_t tool_use_pos = response.find("\"type\":\"tool_use\"");
+        if (tool_use_pos == std::string::npos) {
+            break;
+        }
+
+        std::string tool_id = extract_json_content(response.substr(tool_use_pos, 500), "id");
+        std::string tool_name = extract_json_content(response.substr(tool_use_pos, 500), "name");
+
+        // Find the input object
+        size_t input_start = response.find("\"input\"", tool_use_pos);
+
+        if (tool_name == "report_address") {
+            // Extract address fields from the tool call parameters
+            addr.city = extract_json_content(response.substr(input_start, 1000), "city");
+            addr.postal_code = extract_json_content(response.substr(input_start, 1000), "postal_code");
+            addr.street_name = extract_json_content(response.substr(input_start, 1000), "street_name");
+            addr.street_nr = extract_json_content(response.substr(input_start, 1000), "street_nr");
+
+            // Successfully got address, we're done
+            return addr;
+
+        } else if (tool_name == "web_search" && has_brave) {
+            // Execute web search
+            std::string search_query = extract_json_content(response.substr(input_start, 500), "query");
+            if (search_query.empty()) {
+                break;
+            }
+
+            std::string search_results = execute_brave_search(search_query);
+            bool search_failed = search_results.find("ERROR:") == 0 || search_results.find("Search failed") == 0;
+
+            std::string tool_result_content = search_failed
+                ? "Search unavailable. Please answer from your knowledge."
+                : search_results;
+
+            // Build assistant message with tool use
+            messages_history += ","
+                "{\"role\":\"assistant\",\"content\":["
+                    "{\"type\":\"tool_use\",\"id\":\"" + tool_id + "\",\"name\":\"web_search\","
+                    "\"input\":{\"query\":\"" + escape_json_string(search_query) + "\"}}"
+                "]},"
+                "{\"role\":\"user\",\"content\":["
+                    "{\"type\":\"tool_result\",\"tool_use_id\":\"" + tool_id + "\","
+                    "\"content\":\"" + escape_json_string(tool_result_content) + "\""
+                    + (search_failed ? ",\"is_error\":true" : "") + "}"
+                "]}";
+
+            // Make next API call with updated conversation
+            json_payload = "{"
+                "\"model\":\"" + model + "\","
+                "\"max_tokens\":1000,"
+                + tools_json +
+                "\"system\":\"" + system_message + "\","
+                "\"messages\":[" + messages_history + "],"
+                "\"temperature\":0.3"
+            "}";
+
+            response = curl_post_json(
+                "https://api.anthropic.com/v1/messages",
+                json_payload,
+                headers,
+                &http_code
+            );
+
+            if (response.find("ERROR:") == 0) {
+                break;
+            }
+        } else {
+            // Unknown tool or unexpected state
+            break;
+        }
+    }
+
+    return addr;
+}
 
 static void StpsAskAIAddressFunction(DataChunk &args, ExpressionState &state, Vector &result) {
     auto count = args.size();
@@ -822,18 +896,8 @@ static void StpsAskAIAddressFunction(DataChunk &args, ExpressionState &state, Ve
         string_t company_name_str = FlatVector::GetData<string_t>(company_name_vec)[i];
         std::string company_name = company_name_str.GetString();
 
-        // SAME call as stps_ask_ai(company_name, 'Search for the business address')
-        std::string prompt = "Search for the business address";
-        std::string response = call_anthropic_api(company_name, prompt, model, 1000, "");
-
-        // Check for errors
-        if (response.find("ERROR:") == 0 || response.empty()) {
-            result_validity.SetInvalid(i);
-            continue;
-        }
-
-        // Parse the address from response text
-        ParsedAddress addr = parse_german_address(response);
+        // Call Claude API with tool calling to get structured address
+        ParsedAddress addr = call_anthropic_api_for_address(company_name, model);
 
         // Check if we got at least some data
         bool has_any_data = !addr.city.empty() || !addr.postal_code.empty() ||
