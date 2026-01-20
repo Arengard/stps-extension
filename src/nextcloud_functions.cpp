@@ -118,16 +118,16 @@ static unique_ptr<GlobalTableFunctionState> NextcloudInit(ClientContext &context
         return state;
     }
 
-    // Attempt CSV/TSV parsing
-    vector<string> col_names;
-    vector<LogicalType> col_types;
-    vector<vector<Value>> rows;
-    ParseCSVContent(body, col_names, col_types, rows);
+    // Attempt CSV/TSV parsing using std::vector to match ParseCSVContent signature
+    std::vector<std::string> col_names_std;
+    std::vector<LogicalType> col_types_std;
+    std::vector<std::vector<Value>> rows_std;
+    ParseCSVContent(body, col_names_std, col_types_std, rows_std);
 
-    if (!col_names.empty()) {
-        state->column_names = col_names;
-        state->column_types = col_types;
-        state->rows = std::move(rows);
+    if (!col_names_std.empty()) {
+        state->column_names = col_names_std;
+        state->column_types = col_types_std;
+        state->rows.assign(rows_std.begin(), rows_std.end());
         return state;
     }
 
