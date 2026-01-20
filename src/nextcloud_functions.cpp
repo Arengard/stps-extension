@@ -155,6 +155,12 @@ static void NextcloudScan(ClientContext &context, TableFunctionInput &data_p, Da
 
 void RegisterNextcloudFunctions(ExtensionLoader &loader) {
     TableFunction func("next_cloud", {LogicalType::VARCHAR}, NextcloudScan, NextcloudBind, NextcloudInit);
+
+    // Register named parameters
+    func.named_parameters["username"] = LogicalType::VARCHAR;
+    func.named_parameters["password"] = LogicalType::VARCHAR;
+    func.named_parameters["headers"] = LogicalType::VARCHAR;
+
     loader.RegisterFunction(func);
 }
 
