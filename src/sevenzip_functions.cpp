@@ -246,6 +246,9 @@ static unique_ptr<FunctionData> SevenZipBind(ClientContext &context, TableFuncti
     res = Sz7z_Extract(&archive, file_index, &outBuf, &outSize);
     if (res != SZ_OK) {
         Sz7z_Close(&archive);
+        if (res == SZ_ERROR_DATA) {
+            throw IOException("7z extraction failed: unsupported/complex archive or exceeds safety limits (256MB compressed / 512MB uncompressed).");
+        }
         throw IOException("Failed to extract file from 7z archive: " + result->inner_filename);
     }
 
@@ -405,7 +408,11 @@ static unique_ptr<GlobalTableFunctionState> SevenZipInit(ClientContext &context,
     res = Sz7z_Extract(&archive, file_index, &outBuf, &outSize);
     if (res != SZ_OK) {
         Sz7z_Close(&archive);
-        result->error_message = "Failed to extract file from 7z archive";
+        if (res == SZ_ERROR_DATA) {
+            result->error_message = "7z extraction failed: unsupported/complex archive or exceeds safety limits (256MB compressed / 512MB uncompressed).";
+        } else {
+            result->error_message = "Failed to extract file from 7z archive";
+        }
         return result;
     }
 

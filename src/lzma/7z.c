@@ -1448,11 +1448,18 @@ SRes Sz7z_Extract(CSz7zArchive *archive, UInt32 fileIndex,
         }
     }
 
-    /* If no pack info, try to calculate from file positions */
+    /* If no pack info, try to calculate from archive size minus header */
     if (packSize == 0)
     {
-        /* Fallback: estimate from archive size minus header */
         packSize = archive->archiveSize - packOffset;
+    }
+
+    /* Hard safety limits to avoid OOM / crashes on malformed archives */
+    const UInt64 MAX_PACKED_SIZE = (UInt64)256 * 1024 * 1024;   /* 256 MB */
+    const UInt64 MAX_UNPACKED_SIZE = (UInt64)512 * 1024 * 1024; /* 512 MB */
+    if (packSize == 0 || packSize > MAX_PACKED_SIZE)
+    {
+        return SZ_ERROR_DATA;
     }
 
     /* Seek to packed data */
@@ -1479,16 +1486,9 @@ SRes Sz7z_Extract(CSz7zArchive *archive, UInt32 fileIndex,
             totalUnpackSize += archive->files[i].UnpackSize;
     }
 
-    if (totalUnpackSize == 0)
+    if (totalUnpackSize == 0 || totalUnpackSize > MAX_UNPACKED_SIZE)
     {
         archive->alloc->Free(archive->alloc, packedData);
-        /* Check if this specific file has size */
-        if (fileInfo->UnpackSize > 0)
-        {
-            /* File has size but totalUnpackSize is 0 - something wrong with parsing */
-            return SZ_ERROR_DATA;
-        }
-        /* Actually an empty archive */
         return SZ_ERROR_DATA;
     }
 
