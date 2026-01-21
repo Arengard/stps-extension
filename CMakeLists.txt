@@ -53,10 +53,6 @@ set(EXTENSION_SOURCES
     # ZIP archive reading functions (using miniz)
     src/zip_functions.cpp
     src/miniz/miniz.c
-    # 7-Zip archive reading functions (using LZMA SDK)
-    src/sevenzip_functions.cpp
-    src/lzma/7z.c
-    src/lzma/LzmaDec.c
     # Nextcloud/WebDAV fetcher
     src/nextcloud_functions.cpp
 )
@@ -77,19 +73,6 @@ if(CURL_FOUND)
     target_link_libraries(${TARGET_NAME}_extension CURL::libcurl)
     target_include_directories(${TARGET_NAME}_loadable_extension PRIVATE ${CURL_INCLUDE_DIRS})
     target_include_directories(${TARGET_NAME}_extension PRIVATE ${CURL_INCLUDE_DIRS})
-endif()
-
-# Link libarchive for 7z/tar/rar archive support
-find_package(LibArchive QUIET)
-if(LibArchive_FOUND)
-    message(STATUS "libarchive found - 7z archive functions will use libarchive")
-    add_compile_definitions(HAVE_LIBARCHIVE)
-    target_link_libraries(${TARGET_NAME}_loadable_extension LibArchive::LibArchive)
-    target_link_libraries(${TARGET_NAME}_extension LibArchive::LibArchive)
-    target_include_directories(${TARGET_NAME}_loadable_extension PRIVATE ${LibArchive_INCLUDE_DIRS})
-    target_include_directories(${TARGET_NAME}_extension PRIVATE ${LibArchive_INCLUDE_DIRS})
-else()
-    message(WARNING "libarchive not found - 7z functions will use fallback LZMA implementation")
 endif()
 
 # Add the static extension to DuckDB's export set to resolve linking

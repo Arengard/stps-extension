@@ -29,7 +29,6 @@
 #include "stps_lambda_function.hpp"
 #include "blz_lut_loader.hpp"
 #include "zip_functions.hpp"
-#include "sevenzip_functions.hpp"
 #include "nextcloud_functions.hpp"
 // #include "fill_functions.hpp"  // Temporarily disabled
 
@@ -37,7 +36,6 @@ namespace duckdb {
 namespace stps {
     void RegisterFilesystemFunctions(ExtensionLoader &loader);
     void RegisterZipFunctions(ExtensionLoader &loader);
-    void Register7zipFunctions(ExtensionLoader &loader);
 }
 
 class StpsExtension : public Extension {
@@ -78,9 +76,6 @@ public:
 
         // Register ZIP archive functions
         stps::RegisterZipFunctions(loader);
-
-        // Register 7-Zip archive functions
-        stps::Register7zipFunctions(loader);
 
         // Register Nextcloud/WebDAV function
         stps::RegisterNextcloudFunctions(loader);
