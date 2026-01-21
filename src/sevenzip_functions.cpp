@@ -233,7 +233,7 @@ struct SevenZipBindData : public TableFunctionData {
 };
 
 struct SevenZipGlobalState : public GlobalTableFunctionState {
-    vector<vector<Value>> rows;
+    std::vector<std::vector<Value>> rows;
     idx_t current_row = 0;
     string error_message;
 };
