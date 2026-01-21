@@ -118,6 +118,52 @@ static std::string GetCurlErrorDetails(const std::string &error) {
     return error;
 }
 
+static bool IsHexChar(char c) {
+    return (c >= '0' && c <= '9') ||
+           (c >= 'a' && c <= 'f') ||
+           (c >= 'A' && c <= 'F');
+}
+
+static std::string PercentEncodePath(const std::string &path) {
+    static const char hex[] = "0123456789ABCDEF";
+    std::string encoded;
+    encoded.reserve(path.size());
+
+    for (size_t i = 0; i < path.size(); i++) {
+        unsigned char c = static_cast<unsigned char>(path[i]);
+        if (c == '%' && i + 2 < path.size() && IsHexChar(path[i + 1]) && IsHexChar(path[i + 2])) {
+            encoded.append(path, i, 3);
+            i += 2;
+            continue;
+        }
+        if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+            (c >= '0' && c <= '9') || c == '-' || c == '_' ||
+            c == '.' || c == '~' || c == '/') {
+            encoded.push_back(static_cast<char>(c));
+        } else {
+            encoded.push_back('%');
+            encoded.push_back(hex[(c >> 4) & 0x0F]);
+            encoded.push_back(hex[c & 0x0F]);
+        }
+    }
+    return encoded;
+}
+
+static std::string NormalizeRequestUrl(const std::string &url) {
+    size_t scheme_pos = url.find("://");
+    if (scheme_pos == std::string::npos) {
+        return PercentEncodePath(url);
+    }
+    size_t host_start = scheme_pos + 3;
+    size_t path_start = url.find('/', host_start);
+    if (path_start == std::string::npos) {
+        return url;
+    }
+    std::string prefix = url.substr(0, path_start);
+    std::string path = url.substr(path_start);
+    return prefix + PercentEncodePath(path);
+}
+
 static unique_ptr<FunctionData> NextcloudBind(ClientContext &context, TableFunctionBindInput &input,
                                              vector<LogicalType> &return_types, vector<string> &names) {
     auto result = make_uniq<NextcloudBindData>();
@@ -161,7 +207,8 @@ static unique_ptr<FunctionData> NextcloudBind(ClientContext &context, TableFunct
 
     // Fetch data immediately in bind phase for schema detection
     long http_code = 0;
-    std::string body = curl_get(result->url, headers, &http_code);
+    std::string request_url = NormalizeRequestUrl(result->url);
+    std::string body = curl_get(request_url, headers, &http_code);
 
     // Handle curl errors immediately
     if (body.find("ERROR:") == 0) {
