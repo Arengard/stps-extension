@@ -5,6 +5,10 @@
 #include "duckdb/parser/parsed_data/create_table_function_info.hpp"
 #include "duckdb/main/extension/extension_loader.hpp"
 #include "duckdb/main/client_context.hpp"
+#include "duckdb/common/file_system.hpp"
+#include "duckdb/main/database.hpp"
+#include "duckdb/main/connection.hpp"
+#include "duckdb/main/query_result.hpp"
 #include <fstream>
 #include <algorithm>
 #include <sstream>
@@ -25,10 +29,14 @@ struct NextcloudBindData : public TableFunctionData {
     std::string file_extension;
     std::string temp_file_path;
     bool is_binary = false;
+    bool needs_temp_file = false;  // Only for formats that absolutely require file access
 
     // Schema detected in bind
-    std::vector<std::string> column_names;
-    std::vector<LogicalType> column_types;
+    vector<std::string> column_names;
+    vector<LogicalType> column_types;
+
+    // For binary formats: store the materialized result
+    vector<vector<Value>> materialized_rows;
 };
 
 struct NextcloudGlobalState : public GlobalTableFunctionState {
@@ -176,12 +184,13 @@ static unique_ptr<FunctionData> NextcloudBind(ClientContext &context, TableFunct
     std::transform(result->file_extension.begin(), result->file_extension.end(),
                    result->file_extension.begin(), ::tolower);
 
-    // Handle binary formats
+    // Handle binary formats (parquet, arrow, feather)
     if (result->file_extension == "parquet" || result->file_extension == "arrow" ||
         result->file_extension == "feather") {
         result->is_binary = true;
+        result->needs_temp_file = true;
 
-        // Write to temp file
+        // Write to temp file for DuckDB's parquet reader
         result->temp_file_path = GenerateTempFilename(result->file_extension);
         std::ofstream out(result->temp_file_path, std::ios::binary);
         if (!out) {
@@ -194,16 +203,74 @@ static unique_ptr<FunctionData> NextcloudBind(ClientContext &context, TableFunct
         result->fetched_body.clear();
         result->fetched_body.shrink_to_fit();
 
-        // Return metadata columns
-        names = {"temp_path", "file_type", "row_count", "query"};
-        return_types = {LogicalType::VARCHAR, LogicalType::VARCHAR,
-                       LogicalType::BIGINT, LogicalType::VARCHAR};
+        // Use DuckDB to read the parquet and get schema
+        try {
+            auto &db = DatabaseInstance::GetDatabase(context);
+            Connection conn(db);
+
+            // Get schema from parquet file
+            std::string query = "SELECT * FROM read_parquet('" + result->temp_file_path + "') LIMIT 0";
+            auto schema_result = conn.Query(query);
+
+            if (schema_result->HasError()) {
+                throw IOException("Failed to read parquet schema: " + schema_result->GetError());
+            }
+
+            // Extract column names and types
+            for (idx_t i = 0; i < schema_result->ColumnCount(); i++) {
+                result->column_names.push_back(schema_result->ColumnName(i));
+                result->column_types.push_back(schema_result->GetTypes()[i]);
+            }
+
+            // Now read all data and materialize
+            query = "SELECT * FROM read_parquet('" + result->temp_file_path + "')";
+            auto data_result = conn.Query(query);
+
+            if (data_result->HasError()) {
+                throw IOException("Failed to read parquet data: " + data_result->GetError());
+            }
+
+            // Materialize all rows
+            while (true) {
+                auto chunk = data_result->Fetch();
+                if (!chunk || chunk->size() == 0) break;
+
+                for (idx_t row = 0; row < chunk->size(); row++) {
+                    vector<Value> row_values;
+                    for (idx_t col = 0; col < chunk->ColumnCount(); col++) {
+                        row_values.push_back(chunk->GetValue(col, row));
+                    }
+                    result->materialized_rows.push_back(std::move(row_values));
+                }
+            }
+
+            // Clean up temp file
+            std::remove(result->temp_file_path.c_str());
+            result->temp_file_path.clear();
+
+        } catch (std::exception &e) {
+            // Clean up on error
+            if (!result->temp_file_path.empty()) {
+                std::remove(result->temp_file_path.c_str());
+            }
+            throw IOException("Failed to process parquet file: " + std::string(e.what()));
+        }
+
+        // Set return schema
+        for (const auto &name : result->column_names) {
+            names.push_back(name);
+        }
+        for (const auto &type : result->column_types) {
+            return_types.push_back(type);
+        }
+
         return result;
     }
 
     // Handle Excel files
     if (result->file_extension == "xlsx" || result->file_extension == "xls") {
         result->is_binary = true;
+        result->needs_temp_file = true;
 
         result->temp_file_path = GenerateTempFilename(result->file_extension);
         std::ofstream out(result->temp_file_path, std::ios::binary);
@@ -216,8 +283,73 @@ static unique_ptr<FunctionData> NextcloudBind(ClientContext &context, TableFunct
         result->fetched_body.clear();
         result->fetched_body.shrink_to_fit();
 
-        names = {"temp_path", "file_type", "query"};
-        return_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR};
+        // Try to read Excel using spatial extension
+        try {
+            auto &db = DatabaseInstance::GetDatabase(context);
+            Connection conn(db);
+
+            // Install and load spatial extension if needed
+            conn.Query("INSTALL spatial");
+            conn.Query("LOAD spatial");
+
+            // Get schema from Excel file
+            std::string query = "SELECT * FROM st_read('" + result->temp_file_path + "') LIMIT 0";
+            auto schema_result = conn.Query(query);
+
+            if (schema_result->HasError()) {
+                // Spatial extension not available - fall back to metadata return
+                names = {"temp_path", "file_type", "query"};
+                return_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR};
+                return result;
+            }
+
+            // Extract column names and types
+            for (idx_t i = 0; i < schema_result->ColumnCount(); i++) {
+                result->column_names.push_back(schema_result->ColumnName(i));
+                result->column_types.push_back(schema_result->GetTypes()[i]);
+            }
+
+            // Now read all data and materialize
+            query = "SELECT * FROM st_read('" + result->temp_file_path + "')";
+            auto data_result = conn.Query(query);
+
+            if (data_result->HasError()) {
+                throw IOException("Failed to read Excel data: " + data_result->GetError());
+            }
+
+            // Materialize all rows
+            while (true) {
+                auto chunk = data_result->Fetch();
+                if (!chunk || chunk->size() == 0) break;
+
+                for (idx_t row = 0; row < chunk->size(); row++) {
+                    vector<Value> row_values;
+                    for (idx_t col = 0; col < chunk->ColumnCount(); col++) {
+                        row_values.push_back(chunk->GetValue(col, row));
+                    }
+                    result->materialized_rows.push_back(std::move(row_values));
+                }
+            }
+
+            // Clean up temp file
+            std::remove(result->temp_file_path.c_str());
+            result->temp_file_path.clear();
+
+        } catch (std::exception &e) {
+            // Spatial extension failed - fall back to metadata return
+            names = {"temp_path", "file_type", "query"};
+            return_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR};
+            return result;
+        }
+
+        // Set return schema from Excel
+        for (const auto &name : result->column_names) {
+            names.push_back(name);
+        }
+        for (const auto &type : result->column_types) {
+            return_types.push_back(type);
+        }
+
         return result;
     }
 
@@ -248,20 +380,25 @@ static unique_ptr<GlobalTableFunctionState> NextcloudInit(ClientContext &context
     auto &bind = input.bind_data->Cast<NextcloudBindData>();
     auto state = make_uniq<NextcloudGlobalState>();
 
-    // Handle binary formats - just return metadata row
-    if (bind.is_binary) {
-        if (bind.file_extension == "parquet" || bind.file_extension == "arrow" ||
-            bind.file_extension == "feather") {
-            std::string query = "SELECT * FROM read_parquet('" + bind.temp_file_path + "')";
-            // Try to get row count
-            int64_t row_count = -1; // Unknown
-            state->rows.push_back({
-                Value(bind.temp_file_path),
-                Value(bind.file_extension),
-                Value::BIGINT(row_count),
-                Value(query)
-            });
-        } else if (bind.file_extension == "xlsx" || bind.file_extension == "xls") {
+    // Handle parquet/arrow/feather - use materialized rows from bind
+    if (bind.is_binary && (bind.file_extension == "parquet" || bind.file_extension == "arrow" ||
+                           bind.file_extension == "feather")) {
+        // Data was already materialized in Bind phase
+        for (auto &row : bind.materialized_rows) {
+            state->rows.push_back(row);
+        }
+        return state;
+    }
+
+    // Handle Excel files
+    if (bind.is_binary && (bind.file_extension == "xlsx" || bind.file_extension == "xls")) {
+        // Check if data was materialized (spatial extension worked)
+        if (!bind.materialized_rows.empty()) {
+            for (auto &row : bind.materialized_rows) {
+                state->rows.push_back(row);
+            }
+        } else {
+            // Fallback: return metadata for manual query
             std::string query = "INSTALL spatial; LOAD spatial; SELECT * FROM st_read('" +
                                bind.temp_file_path + "')";
             state->rows.push_back({
