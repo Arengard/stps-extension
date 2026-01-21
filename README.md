@@ -837,6 +837,15 @@ Fetch a file directly over WebDAV and auto-handle by suffix:
 -- Public CSV
 SELECT * FROM next_cloud('https://daten.example.cloud/path/file.csv');
 
+-- CSV (already worked)
+SELECT * FROM next_cloud('https://your-server/path/file.csv', username:='user', password:='pass');
+
+-- Parquet (now returns actual data!)
+SELECT * FROM next_cloud('https://your-server/path/file.parquet', username:='user', password:='pass');
+
+-- Excel (returns actual data if spatial extension is available)
+SELECT * FROM next_cloud('https://your-server/path/file.xlsx', username:='user', password:='pass');
+
 -- Basic auth
 SELECT *
 FROM next_cloud(
