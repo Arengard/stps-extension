@@ -1,7 +1,8 @@
 {
         "dependencies": [
                 "zlib",
-                "curl"
+                "curl",
+                "libarchive"
         ],
         "vcpkg-configuration": {
                 "overlay-ports": [

@@ -3,8 +3,8 @@
     "allow": [
       "Skill(superpowers:brainstorming)",
       "Bash(make test_smart_cast:*)",
-      "Bash(cmd //c \"quick-rebuild.bat\")",
-      "Bash(cmd //c \"C:\\\\stps-extension\\\\quick-rebuild.bat\")",
+      "Bash(cmd /c \"quick-rebuild.bat\")",
+      "Bash(cmd /c \"C:\\\\stps-extension\\\\quick-rebuild.bat\")",
       "Bash(git add:*)",
       "Bash(git commit:*)",
       "Bash(git push)",
