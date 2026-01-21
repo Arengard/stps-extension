@@ -218,9 +218,9 @@ static unique_ptr<FunctionData> NextcloudBind(ClientContext &context, TableFunct
 
             // Extract column names and types
             for (idx_t i = 0; i < schema_result->ColumnCount(); i++) {
-                result->column_names.push_back(schema_result->ColumnName(i));
-                result->column_types.push_back(schema_result->types[i]);
-            }
+            result->column_names.push_back(schema_result->ColumnName(i));
+            result->column_types.push_back(schema_result->types[i]); // ✅ updated
+    }
 
             // Now read all data and materialize
             query = "SELECT * FROM read_parquet('" + result->temp_file_path + "')";
