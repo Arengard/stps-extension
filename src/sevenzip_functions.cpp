@@ -223,9 +223,9 @@ struct SevenZipBindData : public TableFunctionData {
     string inner_filename;
     bool is_binary_mode = false;
 
-    // Schema from bind phase
-    vector<std::string> column_names;
-    vector<LogicalType> column_types;
+    // Schema from bind phase (use std::vector for ParseCSVContent compatibility)
+    std::vector<std::string> column_names;
+    std::vector<LogicalType> column_types;
 
     // Content extracted in bind phase
     std::string extracted_content;
