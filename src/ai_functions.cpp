@@ -1346,12 +1346,13 @@ static void StpsAskAIGenderFunction(DataChunk &args, ExpressionState &state, Vec
         std::string prompt =
             "Classify the gender of this first name: '" + name + "'";
 
-        // IMPORTANT: temperature should be 0 (deterministic) and low token limit
+        // IMPORTANT: temperature should be 0 (deterministic) and reasonable token limit
         std::string response = call_anthropic_api(
             prompt,
             system_message,
             model,
-            5   // max tokens only
+            256   // max tokens - enough for single word response
+
         );
 
         if (response.find("ERROR:") == 0) {
