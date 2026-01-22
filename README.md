@@ -638,6 +638,44 @@ SELECT * FROM stps_drop_null_columns('test');
 -- Returns: only columns 'a' and 'c'
 ```
 
+#### `stps_drop_duplicates(table_name VARCHAR, columns? LIST) → TABLE`
+Remove duplicate rows from a table. Similar to pandas `drop_duplicates()`.
+```sql
+-- Remove all duplicate rows (checks all columns)
+SELECT * FROM stps_drop_duplicates('customers');
+
+-- Remove duplicates based on specific columns (keeps first occurrence)
+SELECT * FROM stps_drop_duplicates('customers', ['email']);
+
+-- Using named parameter
+SELECT * FROM stps_drop_duplicates('orders', columns := ['customer_id', 'product_id']);
+```
+
+**Parameters:**
+- `table_name` - Table to deduplicate
+- `columns` (optional) - List of columns to check for duplicates. If omitted, all columns are checked.
+
+**Returns:** Table with unique rows only (first occurrence per group is kept).
+
+#### `stps_show_duplicates(table_name VARCHAR, columns? LIST) → TABLE`
+Show only the duplicate rows from a table. Useful for data quality checks.
+```sql
+-- Find all duplicate rows (checks all columns)
+SELECT * FROM stps_show_duplicates('customers');
+
+-- Find rows with duplicate emails
+SELECT * FROM stps_show_duplicates('customers', ['email']);
+
+-- Find duplicate orders
+SELECT * FROM stps_show_duplicates('orders', columns := ['customer_id', 'order_date']);
+```
+
+**Parameters:**
+- `table_name` - Table to check for duplicates
+- `columns` (optional) - List of columns to check for duplicates. If omitted, all columns are checked.
+
+**Returns:** All rows that have at least one duplicate (all occurrences are returned).
+
 ---
 
 ### 🔧 Advanced Functions
