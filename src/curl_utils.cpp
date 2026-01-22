@@ -18,6 +18,9 @@ static bool FileExists(const std::string& path) {
 
 // Configure SSL options for curl handle
 static void ConfigureSSL(CURL* curl) {
+    // Force TLS 1.2 or higher (required by modern APIs like Anthropic)
+    curl_easy_setopt(curl, CURLOPT_SSLVERSION, CURL_SSLVERSION_TLSv1_2);
+
 #ifdef _WIN32
     // With Schannel backend (Windows native TLS), certificates are handled by Windows
     // automatically using the system certificate store. No CA bundle file needed.
@@ -25,10 +28,6 @@ static void ConfigureSSL(CURL* curl) {
     // Disable certificate revocation check (often fails in corporate environments
     // due to firewall/proxy issues with OCSP/CRL endpoints)
     curl_easy_setopt(curl, CURLOPT_SSL_OPTIONS, CURLSSLOPT_NO_REVOKE);
-
-    // Enable SSL verification - Schannel uses Windows certificate store
-    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
-    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
 
     // If user specifies a custom CA bundle via environment, use it
     // This is a fallback for special cases (e.g., corporate proxy with custom CA)
@@ -39,12 +38,11 @@ static void ConfigureSSL(CURL* curl) {
     if (env_ca && FileExists(env_ca)) {
         curl_easy_setopt(curl, CURLOPT_CAINFO, env_ca);
     }
+#endif
 
-#else
-    // Non-Windows: system CA store is usually configured correctly
+    // Enable SSL verification
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
-#endif
 }
 
 // ============================================================================
