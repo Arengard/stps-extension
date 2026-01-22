@@ -1,5 +1,6 @@
 #include "curl_utils.hpp"
 #include <sstream>
+#include <fstream>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -8,12 +9,41 @@
 namespace duckdb {
 namespace stps {
 
+// Check if a file exists
+static bool FileExists(const std::string& path) {
+    std::ifstream f(path);
+    return f.good();
+}
+
 // Configure SSL options for curl handle
 static void ConfigureSSL(CURL* curl) {
 #ifdef _WIN32
-    // On Windows, use the native Windows SSL/TLS (Schannel) with system certificate store
-    curl_easy_setopt(curl, CURLOPT_SSL_OPTIONS, CURLSSLOPT_NATIVE_CA);
+    // On Windows with vcpkg curl (OpenSSL backend), we need to handle SSL carefully
+    // Try multiple approaches for maximum compatibility
+
+    // Option 1: Try to use Windows native CA store (works if curl built with Schannel)
+    curl_easy_setopt(curl, CURLOPT_SSL_OPTIONS, CURLSSLOPT_NATIVE_CA | CURLSSLOPT_NO_REVOKE);
+
+    // Option 2: Try common CA bundle locations for OpenSSL-based curl
+    static const char* ca_paths[] = {
+        "C:\\vcpkg\\installed\\x64-windows\\share\\curl\\curl-ca-bundle.crt",
+        "C:\\Program Files\\Git\\mingw64\\ssl\\certs\\ca-bundle.crt",
+        "C:\\Program Files\\Git\\usr\\ssl\\certs\\ca-bundle.crt",
+        "C:\\msys64\\mingw64\\ssl\\certs\\ca-bundle.crt",
+        nullptr
+    };
+
+    for (int i = 0; ca_paths[i] != nullptr; i++) {
+        if (FileExists(ca_paths[i])) {
+            curl_easy_setopt(curl, CURLOPT_CAINFO, ca_paths[i]);
+            break;
+        }
+    }
+
+    // Disable revocation check (often fails in corporate environments with proxies)
+    curl_easy_setopt(curl, CURLOPT_SSL_OPTIONS, CURLSSLOPT_NO_REVOKE);
 #endif
+
     // Enable SSL verification
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
