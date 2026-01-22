@@ -1,49 +1,8 @@
 #include "curl_utils.hpp"
 #include <sstream>
-#include <fstream>
-#include <cstdlib>
-
-#ifdef _WIN32
-#include <windows.h>
-#endif
 
 namespace duckdb {
 namespace stps {
-
-// Check if a file exists
-static bool FileExists(const std::string& path) {
-    std::ifstream f(path);
-    return f.good();
-}
-
-// Configure SSL options for curl handle
-static void ConfigureSSL(CURL* curl) {
-    // Force TLS 1.2 or higher (required by modern APIs like Anthropic)
-    curl_easy_setopt(curl, CURLOPT_SSLVERSION, CURL_SSLVERSION_TLSv1_2);
-
-#ifdef _WIN32
-    // With Schannel backend (Windows native TLS), certificates are handled by Windows
-    // automatically using the system certificate store. No CA bundle file needed.
-
-    // Disable certificate revocation check (often fails in corporate environments
-    // due to firewall/proxy issues with OCSP/CRL endpoints)
-    curl_easy_setopt(curl, CURLOPT_SSL_OPTIONS, CURLSSLOPT_NO_REVOKE);
-
-    // If user specifies a custom CA bundle via environment, use it
-    // This is a fallback for special cases (e.g., corporate proxy with custom CA)
-    const char* env_ca = std::getenv("CURL_CA_BUNDLE");
-    if (!env_ca) {
-        env_ca = std::getenv("SSL_CERT_FILE");
-    }
-    if (env_ca && FileExists(env_ca)) {
-        curl_easy_setopt(curl, CURLOPT_CAINFO, env_ca);
-    }
-#endif
-
-    // Enable SSL verification
-    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
-    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
-}
 
 // ============================================================================
 // CurlHandle
@@ -103,9 +62,6 @@ std::string curl_post_json(const std::string& url,
     curl_easy_setopt(handle.handle(), CURLOPT_TIMEOUT, 90L);
     curl_easy_setopt(handle.handle(), CURLOPT_FOLLOWLOCATION, 1L);
 
-    // Configure SSL
-    ConfigureSSL(handle.handle());
-
     // Perform request
     CURLcode res = curl_easy_perform(handle.handle());
 
@@ -149,9 +105,6 @@ std::string curl_get(const std::string& url,
     curl_easy_setopt(handle.handle(), CURLOPT_WRITEDATA, &response);
     curl_easy_setopt(handle.handle(), CURLOPT_TIMEOUT, 30L);  // 30s timeout for searches
     curl_easy_setopt(handle.handle(), CURLOPT_FOLLOWLOCATION, 1L);
-
-    // Configure SSL
-    ConfigureSSL(handle.handle());
 
     // Perform request
     CURLcode res = curl_easy_perform(handle.handle());
