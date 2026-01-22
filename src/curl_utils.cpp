@@ -1,8 +1,23 @@
 #include "curl_utils.hpp"
 #include <sstream>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 namespace duckdb {
 namespace stps {
+
+// Configure SSL options for curl handle
+static void ConfigureSSL(CURL* curl) {
+#ifdef _WIN32
+    // On Windows, use the native Windows SSL/TLS (Schannel) with system certificate store
+    curl_easy_setopt(curl, CURLOPT_SSL_OPTIONS, CURLSSLOPT_NATIVE_CA);
+#endif
+    // Enable SSL verification
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
+}
 
 // ============================================================================
 // CurlHandle
@@ -62,6 +77,9 @@ std::string curl_post_json(const std::string& url,
     curl_easy_setopt(handle.handle(), CURLOPT_TIMEOUT, 90L);
     curl_easy_setopt(handle.handle(), CURLOPT_FOLLOWLOCATION, 1L);
 
+    // Configure SSL
+    ConfigureSSL(handle.handle());
+
     // Perform request
     CURLcode res = curl_easy_perform(handle.handle());
 
@@ -105,6 +123,9 @@ std::string curl_get(const std::string& url,
     curl_easy_setopt(handle.handle(), CURLOPT_WRITEDATA, &response);
     curl_easy_setopt(handle.handle(), CURLOPT_TIMEOUT, 30L);  // 30s timeout for searches
     curl_easy_setopt(handle.handle(), CURLOPT_FOLLOWLOCATION, 1L);
+
+    // Configure SSL
+    ConfigureSSL(handle.handle());
 
     // Perform request
     CURLcode res = curl_easy_perform(handle.handle());
