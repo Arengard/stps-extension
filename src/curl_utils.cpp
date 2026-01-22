@@ -1,6 +1,7 @@
 #include "curl_utils.hpp"
 #include <sstream>
 #include <fstream>
+#include <cstdlib>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -18,28 +19,70 @@ static bool FileExists(const std::string& path) {
 // Configure SSL options for curl handle
 static void ConfigureSSL(CURL* curl) {
 #ifdef _WIN32
-    // On Windows with vcpkg curl (OpenSSL backend), we need to handle SSL carefully
-    // Try multiple approaches for maximum compatibility
+    // On Windows with vcpkg curl (OpenSSL backend), we need to find a CA bundle
+    // vcpkg's OpenSSL-based curl doesn't use Windows certificate store by default
 
-    // Option 1: Try to use Windows native CA store (works if curl built with Schannel)
-    curl_easy_setopt(curl, CURLOPT_SSL_OPTIONS, CURLSSLOPT_NATIVE_CA | CURLSSLOPT_NO_REVOKE);
+    // Disable certificate revocation check (often fails in corporate environments)
+    curl_easy_setopt(curl, CURLOPT_SSL_OPTIONS, CURLSSLOPT_NO_REVOKE);
 
-    // Option 2: Try common CA bundle locations for OpenSSL-based curl
+    // Search for CA bundle in common locations
+    // Note: Order matters - check most likely locations first
     static const char* ca_paths[] = {
+        // vcpkg locations
         "C:\\vcpkg\\installed\\x64-windows\\share\\curl\\curl-ca-bundle.crt",
+        "C:\\vcpkg\\packages\\curl_x64-windows\\share\\curl\\curl-ca-bundle.crt",
+        // Git for Windows (Program Files)
+        "C:\\Program Files\\Git\\mingw64\\etc\\ssl\\certs\\ca-bundle.crt",
         "C:\\Program Files\\Git\\mingw64\\ssl\\certs\\ca-bundle.crt",
         "C:\\Program Files\\Git\\usr\\ssl\\certs\\ca-bundle.crt",
+        "C:\\Program Files (x86)\\Git\\mingw64\\etc\\ssl\\certs\\ca-bundle.crt",
+        // MSYS2
+        "C:\\msys64\\mingw64\\etc\\ssl\\certs\\ca-bundle.crt",
         "C:\\msys64\\mingw64\\ssl\\certs\\ca-bundle.crt",
+        // Chocolatey
+        "C:\\ProgramData\\chocolatey\\lib\\curl\\tools\\curl-ca-bundle.crt",
+        // Mozilla bundle in common locations
+        "C:\\Windows\\System32\\curl-ca-bundle.crt",
         nullptr
     };
 
+    // Also check user-specific scoop installation
+    std::string scoop_ca_path;
+    const char* userprofile = std::getenv("USERPROFILE");
+    if (userprofile) {
+        // Scoop installs Git with CA bundle
+        scoop_ca_path = std::string(userprofile) + "\\scoop\\apps\\git\\current\\mingw64\\etc\\ssl\\certs\\ca-bundle.crt";
+        if (FileExists(scoop_ca_path)) {
+            curl_easy_setopt(curl, CURLOPT_CAINFO, scoop_ca_path.c_str());
+            curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
+            curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
+            return;  // Found CA bundle, we're done
+        }
+    }
+
+    bool found_ca = false;
     for (int i = 0; ca_paths[i] != nullptr; i++) {
         if (FileExists(ca_paths[i])) {
             curl_easy_setopt(curl, CURLOPT_CAINFO, ca_paths[i]);
+            found_ca = true;
             break;
         }
     }
-    // Note: CURLSSLOPT_NATIVE_CA | CURLSSLOPT_NO_REVOKE already set above
+
+    // Check environment variable as fallback
+    if (!found_ca) {
+        const char* env_ca = std::getenv("CURL_CA_BUNDLE");
+        if (env_ca && FileExists(env_ca)) {
+            curl_easy_setopt(curl, CURLOPT_CAINFO, env_ca);
+            found_ca = true;
+        }
+    }
+
+    // If no CA bundle found, try Windows native (requires Schannel backend)
+    // This may or may not work depending on how curl was built
+    if (!found_ca) {
+        curl_easy_setopt(curl, CURLOPT_SSL_OPTIONS, CURLSSLOPT_NATIVE_CA | CURLSSLOPT_NO_REVOKE);
+    }
 #endif
 
     // Enable SSL verification
