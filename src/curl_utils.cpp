@@ -39,9 +39,7 @@ static void ConfigureSSL(CURL* curl) {
             break;
         }
     }
-
-    // Disable revocation check (often fails in corporate environments with proxies)
-    curl_easy_setopt(curl, CURLOPT_SSL_OPTIONS, CURLSSLOPT_NO_REVOKE);
+    // Note: CURLSSLOPT_NATIVE_CA | CURLSSLOPT_NO_REVOKE already set above
 #endif
 
     // Enable SSL verification
