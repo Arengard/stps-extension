@@ -21,6 +21,7 @@
 #include "plz_validation.hpp"
 #include "address_lookup.hpp"
 #include "search_columns_function.hpp"
+#include "search_database_function.hpp"
 #ifdef HAVE_CURL
 #include "ai_functions.hpp"
 #endif
@@ -86,6 +87,9 @@ public:
 
         // Register search columns function
         stps::RegisterSearchColumnsFunction(loader);
+
+        // Register search database function
+        stps::RegisterSearchDatabaseFunction(loader);
 
         // Register AI functions (Anthropic Claude integration)
         stps::RegisterAIFunctions(loader);
