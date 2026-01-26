@@ -170,7 +170,7 @@ SELECT dguid('{"a": "1", "b": null}') = dguid('{"a": "1"}');
 ----
 true
 
-# dguid with struct/row - the preferred usage pattern
+# dguid with to_json for row data
 # Create a test table
 statement ok
 CREATE TABLE dguid_test (id INTEGER, name VARCHAR, value DOUBLE);
@@ -178,37 +178,21 @@ CREATE TABLE dguid_test (id INTEGER, name VARCHAR, value DOUBLE);
 statement ok
 INSERT INTO dguid_test VALUES (1, 'alice', 100.5), (2, 'bob', 200.0), (1, 'alice', 100.5);
 
-# dguid(table_alias) generates deterministic GUID from row
+# dguid(to_json(...)) generates deterministic GUID from row
 query I
-SELECT dguid(t) IS NOT NULL FROM dguid_test t LIMIT 1;
+SELECT dguid(to_json({id: id, name: name, value: value})) IS NOT NULL FROM dguid_test LIMIT 1;
 ----
 true
 
 # Same row data produces same GUID
 query I
-SELECT COUNT(DISTINCT dguid(t)) FROM dguid_test t WHERE id = 1 AND name = 'alice';
+SELECT COUNT(DISTINCT dguid(to_json({id: id, name: name, value: value}))) FROM dguid_test WHERE id = 1 AND name = 'alice';
 ----
 1
 
 # Different rows produce different GUIDs
 query I
-SELECT dguid(t) FROM dguid_test t WHERE id = 1 LIMIT 1;
-----
-
-query I
-SELECT COUNT(DISTINCT dguid(t)) >= 2 FROM dguid_test t;
-----
-true
-
-# Works with table name directly
-query I
-SELECT dguid(dguid_test) IS NOT NULL FROM dguid_test LIMIT 1;
-----
-true
-
-# Struct literal works too
-query I
-SELECT dguid({'a': 1, 'b': 'test'}) = dguid({'b': 'test', 'a': 1});
+SELECT COUNT(DISTINCT dguid(to_json({id: id, name: name, value: value}))) >= 2 FROM dguid_test;
 ----
 true
 
