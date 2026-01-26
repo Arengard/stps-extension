@@ -3,10 +3,13 @@
 #include "duckdb/common/types/data_chunk.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 #include "duckdb/common/types/uuid.hpp"
+#include "yyjson.hpp"
 #include <random>
 #include <sstream>
 #include <iomanip>
 #include <cstring>
+#include <vector>
+#include <algorithm>
 
 namespace duckdb {
 namespace stps {
@@ -98,6 +101,91 @@ std::string stps_guid_to_path_impl(const std::string& guid) {
     return path;
 }
 
+// Extract all values from JSON in sorted key order for deterministic GUID generation
+static void extract_json_values_sorted(yyjson_val *val, std::vector<std::pair<std::string, std::string>> &values, const std::string &prefix = "") {
+    if (!val) return;
+
+    yyjson_type type = yyjson_get_type(val);
+
+    switch (type) {
+        case YYJSON_TYPE_OBJ: {
+            // Collect all key-value pairs
+            std::vector<std::pair<std::string, yyjson_val*>> pairs;
+            yyjson_obj_iter iter;
+            yyjson_obj_iter_init(val, &iter);
+            yyjson_val *key;
+            while ((key = yyjson_obj_iter_next(&iter))) {
+                yyjson_val *child = yyjson_obj_iter_get_val(key);
+                std::string key_str = yyjson_get_str(key);
+                pairs.push_back({key_str, child});
+            }
+            // Sort by key for deterministic order
+            std::sort(pairs.begin(), pairs.end(),
+                [](const auto &a, const auto &b) { return a.first < b.first; });
+
+            for (const auto &pair : pairs) {
+                std::string new_prefix = prefix.empty() ? pair.first : prefix + "." + pair.first;
+                extract_json_values_sorted(pair.second, values, new_prefix);
+            }
+            break;
+        }
+        case YYJSON_TYPE_ARR: {
+            size_t idx = 0;
+            yyjson_arr_iter iter;
+            yyjson_arr_iter_init(val, &iter);
+            yyjson_val *child;
+            while ((child = yyjson_arr_iter_next(&iter))) {
+                std::string new_prefix = prefix + "[" + std::to_string(idx++) + "]";
+                extract_json_values_sorted(child, values, new_prefix);
+            }
+            break;
+        }
+        case YYJSON_TYPE_STR:
+            values.push_back({prefix, yyjson_get_str(val)});
+            break;
+        case YYJSON_TYPE_NUM:
+            if (yyjson_is_int(val)) {
+                values.push_back({prefix, std::to_string(yyjson_get_int(val))});
+            } else if (yyjson_is_real(val)) {
+                values.push_back({prefix, std::to_string(yyjson_get_real(val))});
+            }
+            break;
+        case YYJSON_TYPE_BOOL:
+            values.push_back({prefix, yyjson_get_bool(val) ? "true" : "false"});
+            break;
+        case YYJSON_TYPE_NULL:
+            // Skip null values (like stps_get_guid does)
+            break;
+        default:
+            break;
+    }
+}
+
+// Generate deterministic GUID from JSON content
+static std::string generate_guid_from_json(const std::string &json_str) {
+    yyjson_doc *doc = yyjson_read(json_str.c_str(), json_str.length(), 0);
+    if (!doc) {
+        // If not valid JSON, just hash the string directly
+        return generate_uuid_v5(json_str);
+    }
+
+    yyjson_val *root = yyjson_doc_get_root(doc);
+    std::vector<std::pair<std::string, std::string>> values;
+    extract_json_values_sorted(root, values);
+    yyjson_doc_free(doc);
+
+    // Concatenate all values with separator (matching stps_get_guid style)
+    std::ostringstream combined;
+    bool first = true;
+    for (const auto &pair : values) {
+        if (!first) combined << "||";
+        combined << pair.second;
+        first = false;
+    }
+
+    return generate_uuid_v5(combined.str());
+}
+
 // DuckDB scalar function wrappers
 static void PgmUuidFunction(DataChunk &args, ExpressionState &state, Vector &result) {
     // Generate UUID v4 for each row
@@ -170,6 +258,80 @@ static void StpsGuidToPathFunctionUUID(DataChunk &args, ExpressionState &state, 
         });
 }
 
+// dguid(json) - Generate deterministic GUID from JSON (works with row_to_json)
+static void DguidFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+    UnaryExecutor::Execute<string_t, hugeint_t>(
+        args.data[0], result, args.size(),
+        [&](string_t input) {
+            std::string json_str = input.GetString();
+            std::string uuid_str = generate_guid_from_json(json_str);
+            return UUID::FromString(uuid_str);
+        });
+}
+
+// Helper to convert a Value to string for GUID generation
+static std::string value_to_string(const Value &val) {
+    if (val.IsNull()) {
+        return "";
+    }
+    return val.ToString();
+}
+
+// Helper to extract struct values in sorted field order
+static std::string extract_struct_values_sorted(const Value &struct_val) {
+    if (struct_val.IsNull()) {
+        return "";
+    }
+
+    auto &struct_children = StructValue::GetChildren(struct_val);
+    auto &struct_type = struct_val.type();
+    auto &child_types = StructType::GetChildTypes(struct_type);
+
+    // Collect field name -> value pairs
+    std::vector<std::pair<std::string, std::string>> pairs;
+    for (idx_t i = 0; i < child_types.size(); i++) {
+        const auto &field_name = child_types[i].first;
+        const auto &child_val = struct_children[i];
+        if (!child_val.IsNull()) {
+            pairs.push_back({field_name, value_to_string(child_val)});
+        }
+    }
+
+    // Sort by field name for deterministic order
+    std::sort(pairs.begin(), pairs.end(),
+        [](const auto &a, const auto &b) { return a.first < b.first; });
+
+    // Concatenate values
+    std::ostringstream combined;
+    bool first = true;
+    for (const auto &pair : pairs) {
+        if (!first) combined << "||";
+        combined << pair.second;
+        first = false;
+    }
+
+    return combined.str();
+}
+
+// dguid(struct) - Generate deterministic GUID from a row/struct
+static void DguidStructFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+    auto count = args.size();
+    auto &input_vector = args.data[0];
+    auto result_data = FlatVector::GetData<hugeint_t>(result);
+    auto &result_validity = FlatVector::Validity(result);
+
+    for (idx_t i = 0; i < count; i++) {
+        auto val = input_vector.GetValue(i);
+        if (val.IsNull()) {
+            result_validity.SetInvalid(i);
+        } else {
+            std::string combined = extract_struct_values_sorted(val);
+            std::string uuid_str = generate_uuid_v5(combined);
+            result_data[i] = UUID::FromString(uuid_str);
+        }
+    }
+}
+
 void RegisterUuidFunctions(ExtensionLoader &loader) {
     // stps_uuid() - Generate random UUID v4
     ScalarFunctionSet uuid_set("stps_uuid");
@@ -199,6 +361,19 @@ void RegisterUuidFunctions(ExtensionLoader &loader) {
     guid_to_path_set.AddFunction(ScalarFunction({LogicalType::VARCHAR}, LogicalType::VARCHAR,
                                                      StpsGuidToPathFunctionVarchar));
     loader.RegisterFunction(guid_to_path_set);
+
+    // dguid(row/struct) - Generate deterministic GUID from a row
+    // Usage: SELECT dguid(t), * FROM test t;
+    //        SELECT dguid(test), * FROM test;
+    ScalarFunctionSet dguid_set("dguid");
+    // Struct/row version - accepts any struct type
+    auto dguid_struct_func = ScalarFunction({LogicalType::ANY}, LogicalType::UUID, DguidStructFunction);
+    dguid_struct_func.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
+    dguid_set.AddFunction(dguid_struct_func);
+    // JSON/VARCHAR version for explicit JSON input
+    dguid_set.AddFunction(ScalarFunction({LogicalType::VARCHAR}, LogicalType::UUID, DguidFunction));
+    dguid_set.AddFunction(ScalarFunction({LogicalType::JSON}, LogicalType::UUID, DguidFunction));
+    loader.RegisterFunction(dguid_set);
 }
 
 } // namespace stps

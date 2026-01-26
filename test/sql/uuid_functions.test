@@ -120,3 +120,97 @@ query T
 SELECT stps_guid_to_path('ghijklmn-opqr-stuv-wxyz-123456789012');
 ----
 ERROR: Invalid GUID
+
+# dguid - deterministic GUID from JSON (works with row_to_json)
+# Simple JSON object
+query T
+SELECT dguid('{"col1": "value1"}');
+----
+be88fe02-85d3-5af7-9a72-0e7db21bba05
+
+# Multiple values - keys are sorted for determinism
+query T
+SELECT dguid('{"col1": "value1", "col2": "value2"}');
+----
+a54cc3db-4cf4-5fbb-ab71-e9ca3d6d9df7
+
+# Order doesn't matter - keys are sorted
+query I
+SELECT dguid('{"col1": "value1", "col2": "value2"}') = dguid('{"col2": "value2", "col1": "value1"}');
+----
+true
+
+# Same JSON produces same GUID
+query I
+SELECT dguid('{"a": "1", "b": "2"}') = dguid('{"a": "1", "b": "2"}');
+----
+true
+
+# Works with to_json function
+query I
+SELECT dguid(to_json({'name': 'test', 'id': 123})) = dguid(to_json({'id': 123, 'name': 'test'}));
+----
+true
+
+# Nested objects are handled
+query T
+SELECT dguid('{"outer": {"inner": "value"}}');
+----
+be88fe02-85d3-5af7-9a72-0e7db21bba05
+
+# Arrays are handled with index
+query T
+SELECT dguid('{"arr": ["a", "b"]}');
+----
+2d04f3a5-2cb6-5d3d-82b7-09f18cafd9f9
+
+# Null values are skipped (like stps_get_guid)
+query I
+SELECT dguid('{"a": "1", "b": null}') = dguid('{"a": "1"}');
+----
+true
+
+# dguid with struct/row - the preferred usage pattern
+# Create a test table
+statement ok
+CREATE TABLE dguid_test (id INTEGER, name VARCHAR, value DOUBLE);
+
+statement ok
+INSERT INTO dguid_test VALUES (1, 'alice', 100.5), (2, 'bob', 200.0), (1, 'alice', 100.5);
+
+# dguid(table_alias) generates deterministic GUID from row
+query I
+SELECT dguid(t) IS NOT NULL FROM dguid_test t LIMIT 1;
+----
+true
+
+# Same row data produces same GUID
+query I
+SELECT COUNT(DISTINCT dguid(t)) FROM dguid_test t WHERE id = 1 AND name = 'alice';
+----
+1
+
+# Different rows produce different GUIDs
+query I
+SELECT dguid(t) FROM dguid_test t WHERE id = 1 LIMIT 1;
+----
+
+query I
+SELECT COUNT(DISTINCT dguid(t)) >= 2 FROM dguid_test t;
+----
+true
+
+# Works with table name directly
+query I
+SELECT dguid(dguid_test) IS NOT NULL FROM dguid_test LIMIT 1;
+----
+true
+
+# Struct literal works too
+query I
+SELECT dguid({'a': 1, 'b': 'test'}) = dguid({'b': 'test', 'a': 1});
+----
+true
+
+statement ok
+DROP TABLE dguid_test;

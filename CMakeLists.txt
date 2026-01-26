@@ -5,6 +5,8 @@ set(TARGET_NAME stps)
 
 project(${TARGET_NAME})
 include_directories(src/include)
+# Include yyjson for JSON parsing in dguid function
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/duckdb/third_party/yyjson/include)
 
 # Find libcurl (optional - AI functions won't work without it)
 find_package(CURL QUIET)
@@ -61,6 +63,10 @@ set(EXTENSION_SOURCES
 
 build_static_extension(${TARGET_NAME} ${EXTENSION_SOURCES})
 build_loadable_extension(${TARGET_NAME} " " ${EXTENSION_SOURCES})
+
+# Link yyjson for JSON parsing in dguid function
+target_link_libraries(${TARGET_NAME}_loadable_extension duckdb_yyjson)
+target_link_libraries(${TARGET_NAME}_extension duckdb_yyjson)
 
 # Link zlib for BLZ LUT decompression
 find_package(ZLIB REQUIRED)
