@@ -108,7 +108,7 @@ static void extract_json_values_sorted(duckdb_yyjson::yyjson_val *val, std::vect
     duckdb_yyjson::yyjson_type type = duckdb_yyjson::yyjson_get_type(val);
 
     switch (type) {
-        case duckdb_yyjson::YYJSON_TYPE_OBJ: {
+        case YYJSON_TYPE_OBJ: {
             // Collect all key-value pairs
             std::vector<std::pair<std::string, duckdb_yyjson::yyjson_val*>> pairs;
             duckdb_yyjson::yyjson_obj_iter iter;
@@ -130,7 +130,7 @@ static void extract_json_values_sorted(duckdb_yyjson::yyjson_val *val, std::vect
             }
             break;
         }
-        case duckdb_yyjson::YYJSON_TYPE_ARR: {
+        case YYJSON_TYPE_ARR: {
             size_t idx = 0;
             duckdb_yyjson::yyjson_arr_iter iter;
             duckdb_yyjson::yyjson_arr_iter_init(val, &iter);
@@ -141,20 +141,20 @@ static void extract_json_values_sorted(duckdb_yyjson::yyjson_val *val, std::vect
             }
             break;
         }
-        case duckdb_yyjson::YYJSON_TYPE_STR:
+        case YYJSON_TYPE_STR:
             values.push_back({prefix, duckdb_yyjson::yyjson_get_str(val)});
             break;
-        case duckdb_yyjson::YYJSON_TYPE_NUM:
+        case YYJSON_TYPE_NUM:
             if (duckdb_yyjson::yyjson_is_int(val)) {
                 values.push_back({prefix, std::to_string(duckdb_yyjson::yyjson_get_int(val))});
             } else if (duckdb_yyjson::yyjson_is_real(val)) {
                 values.push_back({prefix, std::to_string(duckdb_yyjson::yyjson_get_real(val))});
             }
             break;
-        case duckdb_yyjson::YYJSON_TYPE_BOOL:
+        case YYJSON_TYPE_BOOL:
             values.push_back({prefix, duckdb_yyjson::yyjson_get_bool(val) ? "true" : "false"});
             break;
-        case duckdb_yyjson::YYJSON_TYPE_NULL:
+        case YYJSON_TYPE_NULL:
             // Skip null values (like stps_get_guid does)
             break;
         default:
@@ -305,7 +305,7 @@ void RegisterUuidFunctions(ExtensionLoader &loader) {
     //        SELECT dguid(to_json({col1: col1, col2: col2})), * FROM test;
     ScalarFunctionSet dguid_set("dguid");
     dguid_set.AddFunction(ScalarFunction({LogicalType::VARCHAR}, LogicalType::UUID, DguidFunction));
-    dguid_set.AddFunction(ScalarFunction({LogicalType::JSON}, LogicalType::UUID, DguidFunction));
+    dguid_set.AddFunction(ScalarFunction({LogicalType::JSON()}, LogicalType::UUID, DguidFunction));
     loader.RegisterFunction(dguid_set);
 }
 
