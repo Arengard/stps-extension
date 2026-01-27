@@ -39,6 +39,7 @@ set(EXTENSION_SOURCES
     src/address_lookup.cpp
     src/search_columns_function.cpp
     src/search_database_function.cpp
+    src/clean_database_function.cpp
     src/ai_functions.cpp
     src/curl_utils.cpp
     # src/fill_functions.cpp  # Temporarily disabled - DuckDB API changed

@@ -477,6 +477,29 @@ SELECT stps_guid_to_path('550e8400-e29b-41d4-a716-446655440000'::UUID) AS path;
 SELECT stps_guid_to_path('550e8400-e29b-41d4-a716-446655440000') AS path;
 ```
 
+#### `dguid(json JSON) → UUID`
+Generate deterministic UUID from JSON data. Useful for creating stable IDs from row data.
+```sql
+-- From JSON object (keys are sorted for deterministic output)
+SELECT dguid('{"name": "John", "id": 123}'::JSON) AS guid;
+-- Result: always same UUID for same JSON content
+
+-- Works with to_json() for row-based GUIDs
+SELECT dguid(to_json(t.*)) AS row_guid, * FROM my_table t;
+
+-- Create deterministic GUID from specific columns
+SELECT dguid(to_json({id: id, name: name})) AS guid FROM customers;
+
+-- Also accepts VARCHAR (parsed as JSON)
+SELECT dguid('{"a": 1, "b": 2}') AS guid;
+```
+
+**Key Features:**
+- Deterministic: same JSON content always produces same UUID
+- Key-order independent: `{"a":1,"b":2}` equals `{"b":2,"a":1}`
+- Handles nested objects and arrays
+- NULL values are ignored (like stps_get_guid)
+
 ---
 
 ### 🗃️ Archive Functions (ZIP & 7-Zip)
@@ -686,6 +709,30 @@ Apply lambda function to array elements.
 SELECT stps_lambda([1, 2, 3], 'x -> x * 2') AS doubled;
 -- Result: [2, 4, 6]
 ```
+
+#### `stps_clean_database() → TABLE`
+Drop all empty tables from the database. Returns list of dropped tables.
+```sql
+-- Drop all empty tables and see what was removed
+SELECT * FROM stps_clean_database();
+-- Returns: dropped_table (VARCHAR)
+
+-- Example output:
+-- dropped_table
+-- -------------
+-- temp_import
+-- old_backup
+-- empty_staging
+```
+
+**Use Cases:**
+- Clean up after ETL processes that create temporary tables
+- Remove empty staging tables
+- Database maintenance and housekeeping
+
+**Note:** This operation cannot be undone. Only tables with zero rows are dropped.
+
+---
 
 #### `stps_search_columns(table_name VARCHAR, pattern VARCHAR) → TABLE`
 Search for pattern matches in data values across all columns of a table.
