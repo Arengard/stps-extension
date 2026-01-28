@@ -104,8 +104,8 @@ jobs:
 
           echo "Testing extension with: $DUCKDB_EXE"
 
-          # Test loading the extension
-          "$DUCKDB_EXE" -c "INSTALL 'dist/stps.duckdb_extension'; LOAD stps; SELECT 'Extension loaded successfully' as status;" || {
+          # Test loading the extension (allow unsigned since this is a local build)
+          "$DUCKDB_EXE" -unsigned -c "INSTALL 'dist/stps.duckdb_extension'; LOAD stps; SELECT 'Extension loaded successfully' as status;" || {
             echo "❌ Extension failed to load"
             exit 1
           }

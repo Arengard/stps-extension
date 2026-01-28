@@ -26,9 +26,9 @@ fi
 echo "✅ Extension built successfully"
 echo "Extension file found: $EXTENSION_FILE"
 
-# Test loading the extension
+# Test loading the extension (allow unsigned since this is a local build)
 echo "Testing extension loading..."
-./build/debug/duckdb -c "
+./build/debug/duckdb -unsigned -c "
 INSTALL '$EXTENSION_FILE';
 LOAD stps;
 SELECT 'Extension loaded successfully!' as status;
