@@ -541,13 +541,56 @@ SELECT * FROM stps_view_7zip('data.7z');
 
 ### 📁 Filesystem Functions
 
-#### `stps_path(path VARCHAR) → TABLE`
-Recursively scan directory and return file paths.
+#### `stps_path(path VARCHAR [, named params]) → TABLE`
+Scan directory and return file information.
+
+**Returns:** `name`, `path`, `type`, `size`, `modified_time`, `extension`, `parent_directory`
+
+**Named Parameters:**
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `recursive` | BOOLEAN | false | Scan subdirectories |
+| `file_type` | VARCHAR | | Filter by extension (e.g. `'csv'`) |
+| `pattern` | VARCHAR | | Glob pattern for filenames |
+| `max_depth` | INTEGER | | Max recursion depth |
+| `include_hidden` | BOOLEAN | false | Include hidden files |
+
 ```sql
 SELECT * FROM stps_path('C:/data/');
--- Returns: full_path for each file
+-- Returns: name, path, type, size, modified_time, extension, parent_directory
 
-SELECT * FROM stps_path('/home/user/documents/');
+SELECT name, path, size FROM stps_path('.', recursive := true, file_type := 'csv');
+```
+
+#### `stps_scan(path VARCHAR [, named params]) → TABLE`
+Advanced directory scan with size, date, and content filtering.
+
+**Returns:** `name`, `path`, `type`, `size`, `modified_time`, `extension`, `parent_directory`
+
+**Named Parameters:**
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `recursive` | BOOLEAN | false | Scan subdirectories |
+| `file_type` | VARCHAR | | Filter by extension |
+| `pattern` | VARCHAR | | Glob pattern for filenames |
+| `max_depth` | INTEGER | | Max recursion depth |
+| `include_hidden` | BOOLEAN | false | Include hidden files |
+| `min_size` | BIGINT | | Minimum file size in bytes |
+| `max_size` | BIGINT | | Maximum file size in bytes |
+| `min_date` | BIGINT | | Minimum modified time (Unix timestamp) |
+| `max_date` | BIGINT | | Maximum modified time (Unix timestamp) |
+| `content_search` | VARCHAR | | Search inside file contents |
+
+```sql
+SELECT * FROM stps_scan('C:/data/');
+
+-- Find large CSV files
+SELECT name, path, size
+FROM stps_scan('.', recursive := true, file_type := 'csv', min_size := 1000000);
+
+-- Search file contents
+SELECT name, path
+FROM stps_scan('.', content_search := 'TODO', file_type := 'cpp');
 ```
 
 #### `stps_read_folders(path VARCHAR) → TABLE`
@@ -557,27 +600,21 @@ SELECT * FROM stps_read_folders('C:/data/');
 -- Returns: folder_name, full_path
 ```
 
-#### `stps_scan(path VARCHAR) → TABLE`
-Scan directory structure.
-```sql
-SELECT * FROM stps_scan('C:/data/');
-```
-
 #### `stps_copy_io(source VARCHAR, destination VARCHAR) → VARCHAR`
-Copy file.
+Copy file. Creates parent directories if needed.
 ```sql
 SELECT stps_copy_io('data.csv', 'backup/data.csv') AS result;
--- Result: 'SUCCESS' or error message
+-- Result: 'SUCCESS: Copied data.csv to backup/data.csv'
 ```
 
 #### `stps_move_io(source VARCHAR, destination VARCHAR) → VARCHAR`
-Move file.
+Move file. Creates parent directories if needed.
 ```sql
 SELECT stps_move_io('old_path.csv', 'new_path.csv') AS result;
 ```
 
 #### `stps_io_rename(old_path VARCHAR, new_path VARCHAR) → VARCHAR`
-Rename file.
+Rename file. Fails if destination already exists.
 ```sql
 SELECT stps_io_rename('old_name.csv', 'new_name.csv') AS result;
 ```
@@ -586,6 +623,25 @@ SELECT stps_io_rename('old_name.csv', 'new_name.csv') AS result;
 Delete file.
 ```sql
 SELECT stps_delete_io('temp_file.csv') AS result;
+```
+
+#### Combining scan + IO for batch operations
+
+Use `stps_scan` with IO functions to perform bulk file operations:
+
+```sql
+-- Batch rename: remove 'abc' from all filenames
+SELECT stps_io_rename(path, parent_directory || '/' || replace(name, 'abc', ''))
+FROM stps_scan('.')
+WHERE name LIKE '%abc%';
+
+-- Move all CSV files into a subfolder
+SELECT stps_move_io(path, 'csv_files/' || name)
+FROM stps_scan('.', file_type := 'csv');
+
+-- Copy large files to backup
+SELECT stps_copy_io(path, '/backup' || path)
+FROM stps_scan('.', recursive := true, min_size := 10000000);
 ```
 
 ---
