@@ -34,6 +34,7 @@ set(EXTENSION_SOURCES
     src/filesystem_functions.cpp
     src/drop_null_columns_function.cpp
     src/drop_duplicates_function.cpp
+    src/arrange_function.cpp
     src/street_split.cpp
     src/plz_validation.cpp
     src/address_lookup.cpp

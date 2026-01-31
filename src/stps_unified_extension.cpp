@@ -17,6 +17,7 @@
 #include "gobd_reader.hpp"
 #include "drop_null_columns_function.hpp"
 #include "drop_duplicates_function.hpp"
+#include "arrange_function.hpp"
 #include "street_split.hpp"
 #include "plz_validation.hpp"
 #include "address_lookup.hpp"
@@ -63,6 +64,9 @@ public:
 
         // Register drop duplicates function
         stps::RegisterDropDuplicatesFunction(loader);
+
+        // Register arrange function
+        stps::RegisterArrangeFunctions(loader);
 
         // Register street split function
         stps::RegisterStreetSplitFunctions(loader);

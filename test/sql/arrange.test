@@ -1,0 +1,68 @@
+# name: test/sql/arrange.test
+# description: Test stps_arrange table function
+# group: [stps]
+
+require stps
+
+# Setup test table
+statement ok
+CREATE TABLE test_arrange AS SELECT
+    1 as id,
+    'Alice' as name,
+    100 as balance,
+    'Berlin' as city,
+    'Main St' as street;
+
+statement ok
+INSERT INTO test_arrange VALUES (2, 'Bob', 200, 'Munich', 'Oak Ave');
+
+statement ok
+INSERT INTO test_arrange VALUES (3, 'Charlie', 300, 'Hamburg', 'Pine Rd');
+
+# Test 1: Basic reordering with one group (balance, id, name, city, street)
+query IITTT
+SELECT * FROM stps_arrange('test_arrange', '{"money": ["balance"]}');
+----
+100	1	Alice	Berlin	Main St
+200	2	Bob	Munich	Oak Ave
+300	3	Charlie	Hamburg	Pine Rd
+
+# Test 2: Multiple groups (balance, city, street, id, name)
+query ITTIT
+SELECT * FROM stps_arrange('test_arrange', '{"money": ["balance"], "location": ["city", "street"]}');
+----
+100	Berlin	Main St	1	Alice
+200	Munich	Oak Ave	2	Bob
+300	Hamburg	Pine Rd	3	Charlie
+
+# Test 3: Empty groups object - original column order preserved
+query ITITT
+SELECT * FROM stps_arrange('test_arrange', '{}');
+----
+1	Alice	100	Berlin	Main St
+2	Bob	200	Munich	Oak Ave
+3	Charlie	300	Hamburg	Pine Rd
+
+# Test 4: All columns specified in groups (city, street, balance, id, name)
+query TTIIT
+SELECT * FROM stps_arrange('test_arrange', '{"loc": ["city", "street"], "nums": ["balance", "id"], "person": ["name"]}');
+----
+Berlin	Main St	100	1	Alice
+Munich	Oak Ave	200	2	Bob
+Hamburg	Pine Rd	300	3	Charlie
+
+# Test 5: Column not found should error
+statement error
+SELECT * FROM stps_arrange('test_arrange', '{"x": ["nonexistent"]}');
+----
+stps_arrange: column 'nonexistent' (in group 'x') not found in table 'test_arrange'
+
+# Test 6: Duplicate column across groups should error
+statement error
+SELECT * FROM stps_arrange('test_arrange', '{"a": ["name"], "b": ["name"]}');
+----
+stps_arrange: column 'name' appears in multiple groups
+
+# Cleanup
+statement ok
+DROP TABLE test_arrange;
