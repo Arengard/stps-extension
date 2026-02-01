@@ -12,6 +12,7 @@ namespace stps {
 
 struct SearchDatabaseBindData : public TableFunctionData {
     string search_pattern;
+    vector<string> schema_names;
     vector<string> table_names;
     vector<vector<string>> table_columns; // columns for each table
 };
@@ -23,6 +24,7 @@ struct SearchDatabaseGlobalState : public GlobalTableFunctionState {
     unique_ptr<DataChunk> current_chunk;
     idx_t chunk_offset = 0;
     bool finished = false;
+    string current_schema_name;
     string current_table_name;
     string current_column_name;
 };
@@ -103,42 +105,48 @@ static unique_ptr<FunctionData> SearchDatabaseBind(ClientContext &context, Table
 
     result->search_pattern = input.inputs[0].GetValue<string>();
 
-    // Get all tables from the database
+    // Get all tables from the database across all schemas
     Connection conn(context.db->GetDatabase(context));
-    
-    // Query to get all tables (excluding system tables)
+
+    // Query to get all tables from all user schemas (excluding system schemas)
     auto tables_result = conn.Query(
-        "SELECT table_name FROM information_schema.tables "
-        "WHERE table_schema = 'main' AND table_type = 'BASE TABLE'"
+        "SELECT table_schema, table_name FROM information_schema.tables "
+        "WHERE table_type = 'BASE TABLE' "
+        "AND table_schema NOT IN ('information_schema', 'pg_catalog') "
+        "ORDER BY table_schema, table_name"
     );
 
     if (tables_result->HasError()) {
         throw BinderException("Failed to get tables: %s", tables_result->GetError().c_str());
     }
 
-    // Collect all table names
+    // Collect all schema + table names
     while (true) {
         auto chunk = tables_result->Fetch();
         if (!chunk || chunk->size() == 0) break;
-        
+
         for (idx_t row = 0; row < chunk->size(); row++) {
-            string table_name = chunk->data[0].GetValue(row).ToString();
+            string schema_name = chunk->data[0].GetValue(row).ToString();
+            string table_name = chunk->data[1].GetValue(row).ToString();
+            result->schema_names.push_back(schema_name);
             result->table_names.push_back(table_name);
         }
     }
 
     // For each table, get column names
-    for (const auto &table_name : result->table_names) {
+    for (idx_t i = 0; i < result->table_names.size(); i++) {
+        const auto &schema_name = result->schema_names[i];
+        const auto &table_name = result->table_names[i];
         string col_query = "SELECT column_name FROM information_schema.columns "
-                          "WHERE table_schema = 'main' AND table_name = '" + table_name + "'";
+                          "WHERE table_schema = '" + schema_name + "' AND table_name = '" + table_name + "'";
         auto cols_result = conn.Query(col_query);
-        
+
         vector<string> columns;
         if (!cols_result->HasError()) {
             while (true) {
                 auto chunk = cols_result->Fetch();
                 if (!chunk || chunk->size() == 0) break;
-                
+
                 for (idx_t row = 0; row < chunk->size(); row++) {
                     columns.push_back(chunk->data[0].GetValue(row).ToString());
                 }
@@ -147,16 +155,19 @@ static unique_ptr<FunctionData> SearchDatabaseBind(ClientContext &context, Table
         result->table_columns.push_back(columns);
     }
 
-    // Output schema: table_name, column_name, matched_value, row_data (JSON)
+    // Output schema: schema_name, table_name, column_name, matched_value, row_data (JSON)
+    return_types.push_back(LogicalType::VARCHAR);
+    names.push_back("schema_name");
+
     return_types.push_back(LogicalType::VARCHAR);
     names.push_back("table_name");
-    
+
     return_types.push_back(LogicalType::VARCHAR);
     names.push_back("column_name");
-    
+
     return_types.push_back(LogicalType::VARCHAR);
     names.push_back("matched_value");
-    
+
     return_types.push_back(LogicalType::VARCHAR);
     names.push_back("row_data");
 
@@ -177,6 +188,7 @@ static bool StartColumnQuery(ClientContext &context, SearchDatabaseGlobalState &
         return false;
     }
 
+    const string &schema_name = bind_data.schema_names[state.current_table_idx];
     const string &table_name = bind_data.table_names[state.current_table_idx];
     const vector<string> &columns = bind_data.table_columns[state.current_table_idx];
 
@@ -188,12 +200,13 @@ static bool StartColumnQuery(ClientContext &context, SearchDatabaseGlobalState &
     }
 
     const string &column_name = columns[state.current_col_idx];
+    state.current_schema_name = schema_name;
     state.current_table_name = table_name;
     state.current_column_name = column_name;
 
-    // Build query to search this specific column
-    string sql = "SELECT * FROM " + EscapeIdentifier(table_name) + 
-                 " WHERE LOWER(CAST(" + EscapeIdentifier(column_name) + 
+    // Build query to search this specific column (schema-qualified)
+    string sql = "SELECT * FROM " + EscapeIdentifier(schema_name) + "." + EscapeIdentifier(table_name) +
+                 " WHERE LOWER(CAST(" + EscapeIdentifier(column_name) +
                  " AS VARCHAR)) LIKE LOWER(?)";
 
     Connection conn(context.db->GetDatabase(context));
@@ -279,15 +292,17 @@ static void SearchDatabaseFunction(ClientContext &context, TableFunctionInput &d
             }
             
             // Set output values
+            // schema_name
+            output.data[0].SetValue(output_idx, Value(state.current_schema_name));
             // table_name
-            output.data[0].SetValue(output_idx, Value(state.current_table_name));
+            output.data[1].SetValue(output_idx, Value(state.current_table_name));
             // column_name
-            output.data[1].SetValue(output_idx, Value(state.current_column_name));
+            output.data[2].SetValue(output_idx, Value(state.current_column_name));
             // matched_value
-            output.data[2].SetValue(output_idx, Value(matched_val.ToString()));
+            output.data[3].SetValue(output_idx, Value(matched_val.ToString()));
             // row_data (JSON)
             string row_json = RowToJson(*state.current_chunk, row, columns);
-            output.data[3].SetValue(output_idx, Value(row_json));
+            output.data[4].SetValue(output_idx, Value(row_json));
             
             output_idx++;
             state.chunk_offset++;

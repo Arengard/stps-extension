@@ -790,6 +790,49 @@ SELECT * FROM stps_clean_database();
 
 ---
 
+#### `stps_search_database(pattern VARCHAR) → TABLE`
+Search the entire database for a value across **all schemas, all tables, and all columns**. Returns every match with full row context as JSON.
+
+```sql
+-- Search all schemas and tables for a value
+SELECT * FROM stps_search_database('%97462234%');
+-- Returns: schema_name, table_name, column_name, matched_value, row_data (JSON)
+
+-- Filter results to a specific schema
+SELECT * FROM stps_search_database('%97462234%') WHERE schema_name = 'staging';
+
+-- Search only in the main schema
+SELECT * FROM stps_search_database('%Hoeger%') WHERE schema_name = 'main';
+
+-- Find which tables contain a specific ID across all schemas
+SELECT DISTINCT schema_name, table_name
+FROM stps_search_database('%INV-2024-001%');
+
+-- Get full row context for matches
+SELECT schema_name, table_name, column_name, row_data
+FROM stps_search_database('%john.doe@%');
+```
+
+**Parameters:**
+- `pattern` - SQL LIKE pattern (% = any chars, _ = single char)
+
+**Returns:**
+| Column | Type | Description |
+|--------|------|-------------|
+| `schema_name` | VARCHAR | Schema where the match was found |
+| `table_name` | VARCHAR | Table where the match was found |
+| `column_name` | VARCHAR | Column that contained the match |
+| `matched_value` | VARCHAR | The actual matched value |
+| `row_data` | VARCHAR | Full row as JSON for context |
+
+**Behavior:**
+- Searches across **all schemas** (excludes only `information_schema` and `pg_catalog`)
+- Searches every column in every table (casts all types to VARCHAR)
+- Case-insensitive matching
+- Pattern uses SQL LIKE syntax
+
+---
+
 #### `stps_search_columns(table_name VARCHAR, pattern VARCHAR) → TABLE`
 Search for pattern matches in data values across all columns of a table.
 
