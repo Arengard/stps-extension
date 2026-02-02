@@ -883,6 +883,57 @@ WHERE table_name = 'my_table' AND column_name LIKE '%date%';
 
 ---
 
+#### `stps_inso_account(source_table VARCHAR, bank_account := BIGINT) → TABLE`
+
+Map commercial bookings (handelsrechtliche Buchungen) to insolvency chart of accounts (Einnahme-/Ausgaberechnung). Filters transactions touching the specified bank account and adds the mapped EA-Konto.
+
+```sql
+-- Map all bank account 180000 transactions to insolvency accounts
+SELECT * FROM stps_inso_account('rl.buchungen', bank_account=180000);
+
+-- Show only the mapping summary
+SELECT DISTINCT counter_kontoart, ea_konto, ea_kontobezeichnung, mapping_source
+FROM stps_inso_account('rl.buchungen', bank_account=180000)
+ORDER BY counter_kontoart;
+
+-- Sum by EA-Konto
+SELECT ea_konto, ea_kontobezeichnung, SUM(umsatz) as total
+FROM stps_inso_account('rl.buchungen', bank_account=180000)
+WHERE ea_konto IS NOT NULL
+GROUP BY ea_konto, ea_kontobezeichnung
+ORDER BY ea_konto;
+```
+
+**Parameters:**
+- `source_table` - Fully qualified table name containing bookings (e.g. `'rl.buchungen'`)
+- `bank_account` (named, required) - The bank account number to filter on (e.g. `180000`)
+
+**Returns:** All original columns from the source table, plus:
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `counter_konto` | BIGINT | Account number on the non-bank side of the transaction |
+| `counter_kontobezeichnung` | VARCHAR | Name of the counter-account |
+| `counter_kontoart` | VARCHAR | Type of the counter-account (D, K, Aufwand, Erloes, Sachkonto, Geldkonto) |
+| `ea_konto` | VARCHAR | Mapped insolvency EA-Konto number |
+| `ea_kontobezeichnung` | VARCHAR | Name from inso_kontenrahmen |
+| `mapping_source` | VARCHAR | How the mapping was determined |
+
+**Mapping Rules:**
+- **Debitor (D)** → `8200` (Forderungseinzug aus L.u.L.)
+- **Erloes** → `8200` (Forderungseinzug aus L.u.L.)
+- **Kreditor (K)** → Finds the Aufwand account with highest total for that Kreditor, then maps that Aufwand to Ausgabekonten
+- **Aufwand** → Best match in Ausgabekonten by name similarity and account prefix; falls back to `4900` (Sonstige betriebliche Aufwendungen)
+- **Sachkonto (14xxxx Vorsteuer)** → `1780` (Umsatzsteuerzahlungen)
+- **Sachkonto (other)** → Best-effort name match to inso_kontenrahmen, or NULL
+- **Geldkonto** → `1360`
+
+**Requirements:**
+- Source table must have columns: `decKontoNr`, `kontobezeichnung`, `kontoart`, `decGegenkontoNr`, `gegenkontobezeichnung`, `gegenkontoart`, `umsatz`
+- Tables `konto` and `inso_kontenrahmen` must exist in the same schema as the source table
+
+---
+
 ## 🚀 Common Use Cases
 
 ### Data Cleaning Pipeline

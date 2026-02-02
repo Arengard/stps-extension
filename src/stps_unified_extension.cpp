@@ -24,6 +24,7 @@
 #include "search_columns_function.hpp"
 #include "search_database_function.hpp"
 #include "clean_database_function.hpp"
+#include "inso_account_function.hpp"
 #ifdef HAVE_CURL
 #include "ai_functions.hpp"
 #endif
@@ -98,6 +99,9 @@ public:
 
         // Register clean database function
         stps::RegisterCleanDatabaseFunction(loader);
+
+        // Register insolvency account mapping function
+        stps::RegisterInsoAccountFunction(loader);
 
         // Register AI functions (Anthropic Claude integration)
         stps::RegisterAIFunctions(loader);
