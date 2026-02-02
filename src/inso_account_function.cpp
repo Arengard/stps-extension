@@ -140,11 +140,189 @@ static string EscapeTableRef(const string &table_name) {
     return EscapeId(table_name);
 }
 
+// ============================================================================
+// Tier 1: SKR03/04 account range -> EA account candidates
+// Maps the first 3 digits of commercial Aufwand accounts to EA-Konto(s)
+// ============================================================================
+struct RangeMapping {
+    int range_start;  // first 3 digits * 1000 (e.g. 530 -> 530000)
+    int range_end;    // exclusive upper bound
+    const char *ea_konto;
+    const char *ea_bezeichnung;
+};
+
+static const RangeMapping RANGE_MAPPINGS[] = {
+    // Wareneinkauf
+    {530000, 540000, "3220", "Wareneingang - 7% Ust"},
+    {540000, 550000, "3200", "Wareneingang - 19% Ust"},
+    // Personal
+    {600000, 610000, "4100", "Loehne und Gehaelter"},
+    {610000, 613000, "4130", "Gesetzliche Sozialaufwendungen"},
+    {613000, 620000, "4100", "Loehne und Gehaelter"},
+    // Abschreibungen (no direct EA equivalent -> 4900)
+    {620000, 630000, "4900", "Sonstige betriebliche Aufwendungen"},
+    // Raumkosten / Betriebskosten
+    {630000, 633000, "4200", "Raumkosten"},
+    {633000, 640000, "4903", "Fremdleistungen und Fremdarbeiten"},
+    // Steuern, Versicherungen, Beitraege
+    {640000, 650000, "4360", "Versicherungen - allgemein"},
+    // Vertrieb, Bewirtung, Reisekosten
+    {650000, 660000, "4980", "Sonstiger Betriebsbedarf"},
+    {660000, 670000, "4600", "Werbekosten"},
+    // Provisionen, Gebuehren -> Nebenkosten Geldverkehr
+    {670000, 680000, "4970", "Nebenkosten des Geldverkehr"},
+    // Verschiedene betriebliche Aufwendungen
+    {680000, 682000, "4920", "Telekommunikationskosten"},
+    {682000, 685000, "4900", "Sonstige betriebliche Aufwendungen"},
+    {685000, 686000, "4980", "Sonstiger Betriebsbedarf"},
+    {686000, 690000, "4900", "Sonstige betriebliche Aufwendungen"},
+    // Zinsen
+    {700000, 710000, "2100", "Zinsen und aehnliche Aufwendungen"},
+};
+static const int NUM_RANGE_MAPPINGS = sizeof(RANGE_MAPPINGS) / sizeof(RANGE_MAPPINGS[0]);
+
+// ============================================================================
+// Tier 2: Keyword/synonym table
+// Maps German accounting keywords to specific EA accounts
+// ============================================================================
+struct KeywordMapping {
+    const char *keyword;       // keyword to search for in the account name (lowercase)
+    const char *ea_konto;
+    const char *ea_bezeichnung;
+};
+
+static const KeywordMapping KEYWORD_MAPPINGS[] = {
+    // Provisionen / Geldverkehr
+    {"provisionen", "4970", "Nebenkosten des Geldverkehr"},
+    {"kreditkartenprovision", "4970", "Nebenkosten des Geldverkehr"},
+    {"bankgebuehr", "4970", "Nebenkosten des Geldverkehr"},
+    {"geldverkehr", "4970", "Nebenkosten des Geldverkehr"},
+    // Reinigung
+    {"waeschereinigung", "4250", "Reinigung"},
+    {"reinigung", "4250", "Reinigung"},
+    // Telekommunikation / Internet
+    {"internet", "4920", "Telekommunikationskosten"},
+    {"telekommunikation", "4920", "Telekommunikationskosten"},
+    {"telefon", "4920", "Telekommunikationskosten"},
+    // Buerobedarf / Drucksachen
+    {"drucksachen", "4930", "Buerobedarf"},
+    {"buerobedarf", "4930", "Buerobedarf"},
+    {"buero", "4930", "Buerobedarf"},
+    // Fremdleistungen
+    {"fachkraefte", "4903", "Fremdleistungen und Fremdarbeiten"},
+    {"fremdleistung", "4903", "Fremdleistungen und Fremdarbeiten"},
+    {"externe", "4903", "Fremdleistungen und Fremdarbeiten"},
+    // Mahnkosten / Rechtsverfolgung
+    {"mahnkosten", "4951", "Nebenkosten der Rechtsverfolgung"},
+    {"mahngebuehr", "4951", "Nebenkosten der Rechtsverfolgung"},
+    {"inkasso", "4951", "Nebenkosten der Rechtsverfolgung"},
+    // Gaestebedarf / Betriebsbedarf
+    {"gaestebedarf", "4980", "Sonstiger Betriebsbedarf"},
+    {"werkzeug", "4980", "Sonstiger Betriebsbedarf"},
+    {"kleinmaterial", "4980", "Sonstiger Betriebsbedarf"},
+    {"ersatzbeschaffung", "4980", "Sonstiger Betriebsbedarf"},
+    // Geldabholung / Geldtransport
+    {"geldabholung", "4970", "Nebenkosten des Geldverkehr"},
+    {"wechselgeld", "4970", "Nebenkosten des Geldverkehr"},
+    // Miete / Pacht
+    {"miete", "4210", "Miete und Pacht"},
+    {"pacht", "4210", "Miete und Pacht"},
+    // Gas, Strom, Wasser
+    {"strom", "4240", "Gas, Strom, Wasser"},
+    {"gas", "4240", "Gas, Strom, Wasser"},
+    {"wasser", "4240", "Gas, Strom, Wasser"},
+    {"fernwaerme", "4240", "Gas, Strom, Wasser"},
+    {"heizung", "4240", "Gas, Strom, Wasser"},
+    // Versicherungen
+    {"versicherung", "4360", "Versicherungen - allgemein"},
+    // Berufsgenossenschaft
+    {"berufsgenossenschaft", "4138", "Beitraege zur Berufsgenossenschaft"},
+    // Abfallbeseitigung
+    {"abfall", "4969", "Aufwand Abraum-/Abfallbeseitigung"},
+    {"entsorgung", "4969", "Aufwand Abraum-/Abfallbeseitigung"},
+    // Reparatur / Instandhaltung
+    {"reparatur", "4800", "Reparatur/Instandh. Anlagen u. Maschinen"},
+    {"instandhaltung", "4800", "Reparatur/Instandh. Anlagen u. Maschinen"},
+    {"wartung", "4806", "Wartungskosten fuer Hard- und Software"},
+    // Leasing
+    {"leasing", "4810", "Mietleasing"},
+    // Rechts- und Beratungskosten
+    {"rechtsberatung", "4950", "Rechts- und Beratungskosten (Sonderaufgaben)"},
+    {"beratung", "4950", "Rechts- und Beratungskosten (Sonderaufgaben)"},
+    {"steuerberatung", "4955", "Buchfuehrungskosten"},
+    {"buchfuehrung", "4955", "Buchfuehrungskosten"},
+    // Reisekosten
+    {"reisekosten", "4660", "Reisekosten"},
+    // Fahrzeug
+    {"fahrzeug", "4500", "Fahrzeugkosten"},
+    {"kfz", "4500", "Fahrzeugkosten"},
+    // Porto
+    {"porto", "4910", "Porto"},
+    // Kundenbindung / Werbung
+    {"kundenbindung", "4600", "Werbekosten"},
+    {"werbung", "4600", "Werbekosten"},
+};
+static const int NUM_KEYWORD_MAPPINGS = sizeof(KEYWORD_MAPPINGS) / sizeof(KEYWORD_MAPPINGS[0]);
+
+// Helper: normalize German umlauts for keyword matching
+static string NormalizeUmlauts(const string &s) {
+    string result;
+    result.reserve(s.size());
+    for (size_t i = 0; i < s.size(); i++) {
+        unsigned char c = static_cast<unsigned char>(s[i]);
+        // UTF-8 two-byte sequences for German umlauts
+        if (c == 0xC3 && i + 1 < s.size()) {
+            unsigned char next = static_cast<unsigned char>(s[i + 1]);
+            if (next == 0xA4 || next == 0x84) { result += "ae"; i++; continue; } // ae/Ae
+            if (next == 0xB6 || next == 0x96) { result += "oe"; i++; continue; } // oe/Oe
+            if (next == 0xBC || next == 0x9C) { result += "ue"; i++; continue; } // ue/Ue
+            if (next == 0x9F)                 { result += "ss"; i++; continue; } // ss
+        }
+        result += std::tolower(c);
+    }
+    return result;
+}
+
 // Find best matching Ausgabekonten entry for an Aufwand account
+// Uses 3-tier matching: (1) account range, (2) keyword/synonym, (3) name similarity
 static std::pair<string, string> FindBestAusgabeMatch(
     int64_t aufwand_konto, const string &aufwand_bezeichnung,
     const vector<InsoKontoEntry> &inso_entries) {
 
+    // ---- Tier 1: Account range mapping ----
+    // Use the raw account number (e.g. 677013) to find the range
+    for (int i = 0; i < NUM_RANGE_MAPPINGS; i++) {
+        if ((int)aufwand_konto >= RANGE_MAPPINGS[i].range_start &&
+            (int)aufwand_konto < RANGE_MAPPINGS[i].range_end) {
+            // Found a range match - but check if Tier 2 can refine it
+            string range_ea = RANGE_MAPPINGS[i].ea_konto;
+            string range_bez = RANGE_MAPPINGS[i].ea_bezeichnung;
+
+            // ---- Tier 2: Keyword refinement within the range ----
+            string normalized_name = NormalizeUmlauts(ToLowerInso(aufwand_bezeichnung));
+            for (int k = 0; k < NUM_KEYWORD_MAPPINGS; k++) {
+                if (normalized_name.find(KEYWORD_MAPPINGS[k].keyword) != string::npos) {
+                    // Keyword match overrides the range default
+                    return {KEYWORD_MAPPINGS[k].ea_konto, KEYWORD_MAPPINGS[k].ea_bezeichnung};
+                }
+            }
+
+            // No keyword refinement, use range default
+            return {range_ea, range_bez};
+        }
+    }
+
+    // ---- Tier 2 standalone: keyword matching (for accounts outside known ranges) ----
+    {
+        string normalized_name = NormalizeUmlauts(ToLowerInso(aufwand_bezeichnung));
+        for (int k = 0; k < NUM_KEYWORD_MAPPINGS; k++) {
+            if (normalized_name.find(KEYWORD_MAPPINGS[k].keyword) != string::npos) {
+                return {KEYWORD_MAPPINGS[k].ea_konto, KEYWORD_MAPPINGS[k].ea_bezeichnung};
+            }
+        }
+    }
+
+    // ---- Tier 3: Name similarity (original algorithm) ----
     string best_ea;
     string best_bezeichnung;
     double best_score = -1.0;
@@ -157,8 +335,6 @@ static std::pair<string, string> FindBestAusgabeMatch(
         double score = 0.0;
 
         string ea_nr = entry.decEAKontoNr;
-
-        // Remove trailing non-numeric chars (e.g. "4782XX")
         string ea_numeric;
         for (char c : ea_nr) {
             if (std::isdigit(static_cast<unsigned char>(c))) {
@@ -168,7 +344,6 @@ static std::pair<string, string> FindBestAusgabeMatch(
             }
         }
 
-        // Prefix matching: give a bonus for shared leading digits
         int prefix_match = 0;
         int max_check = std::min({(int)aufwand_str.size(), (int)ea_numeric.size(), 4});
         for (int i = 0; i < max_check; i++) {
@@ -180,7 +355,6 @@ static std::pair<string, string> FindBestAusgabeMatch(
         }
         score += prefix_match * 2.0;
 
-        // Name similarity
         double name_score = NameSimilarity(aufwand_bezeichnung, entry.kontobezeichnung);
         score += name_score * 10.0;
 
@@ -191,11 +365,7 @@ static std::pair<string, string> FindBestAusgabeMatch(
         }
     }
 
-    // Require a minimum score to avoid garbage matches.
-    // A name_score of ~0.2 plus no prefix match gives score ~2.0
-    // Require at least one meaningful word match (score > 2.0) or a prefix match
     if (best_score < 2.0) {
-        // Fallback to 4900 "Sonstige betriebliche Aufwendungen" for unmatched Aufwand
         return {"4900", "Sonstige betriebliche Aufwendungen"};
     }
 
