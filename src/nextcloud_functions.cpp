@@ -659,6 +659,76 @@ static const char* PROPFIND_BODY =
     "<d:prop><d:resourcetype/></d:prop>"
     "</d:propfind>";
 
+// Check if a file type requires binary reading (not CSV parsing)
+static bool IsBinaryFileType(const std::string &file_type) {
+    return file_type == "xlsx" || file_type == "xls" ||
+           file_type == "parquet" || file_type == "arrow" || file_type == "feather";
+}
+
+// Read a binary file (xlsx/parquet/etc.) via DuckDB into column names, types, and rows.
+// Writes content to a temp file, queries it with DuckDB, then cleans up.
+// Returns true on success, false on failure.
+static bool ReadBinaryFileContent(ClientContext &context, const std::string &body, const std::string &file_type,
+                                  std::vector<std::string> &col_names, std::vector<LogicalType> &col_types,
+                                  std::vector<std::vector<Value>> &rows) {
+    std::string temp_path = GenerateTempFilename(file_type);
+    std::ofstream out(temp_path, std::ios::binary);
+    if (!out) return false;
+    out.write(body.data(), body.size());
+    out.close();
+
+    try {
+        auto &db = DatabaseInstance::GetDatabase(context);
+        Connection conn(db);
+
+        std::string read_func;
+        if (file_type == "xlsx" || file_type == "xls") {
+            conn.Query("INSTALL spatial");
+            conn.Query("LOAD spatial");
+            read_func = "st_read";
+        } else {
+            read_func = "read_parquet";
+        }
+
+        // Get schema
+        auto schema_result = conn.Query("SELECT * FROM " + read_func + "('" + temp_path + "') LIMIT 0");
+        if (schema_result->HasError()) {
+            std::remove(temp_path.c_str());
+            return false;
+        }
+
+        for (idx_t i = 0; i < schema_result->ColumnCount(); i++) {
+            col_names.push_back(schema_result->ColumnName(i));
+            col_types.push_back(schema_result->types[i]);
+        }
+
+        // Read all data
+        auto data_result = conn.Query("SELECT * FROM " + read_func + "('" + temp_path + "')");
+        if (data_result->HasError()) {
+            std::remove(temp_path.c_str());
+            return false;
+        }
+
+        while (true) {
+            auto chunk = data_result->Fetch();
+            if (!chunk || chunk->size() == 0) break;
+            for (idx_t row = 0; row < chunk->size(); row++) {
+                vector<Value> row_values;
+                for (idx_t col = 0; col < chunk->ColumnCount(); col++) {
+                    row_values.push_back(chunk->GetValue(col, row));
+                }
+                rows.push_back(std::move(row_values));
+            }
+        }
+
+        std::remove(temp_path.c_str());
+        return true;
+    } catch (...) {
+        std::remove(temp_path.c_str());
+        return false;
+    }
+}
+
 static unique_ptr<FunctionData> NextcloudFolderBind(ClientContext &context, TableFunctionBindInput &input,
                                                      vector<LogicalType> &return_types, vector<string> &names) {
     auto result = make_uniq<NextcloudFolderBindData>();
@@ -816,7 +886,15 @@ static unique_ptr<FunctionData> NextcloudFolderBind(ClientContext &context, Tabl
         std::vector<std::string> col_names;
         std::vector<LogicalType> col_types;
         std::vector<std::vector<Value>> rows;
-        ParseCSVContent(body, col_names, col_types, rows);
+
+        if (IsBinaryFileType(result->file_type)) {
+            if (!ReadBinaryFileContent(context, body, result->file_type, col_names, col_types, rows)) {
+                throw IOException("Could not read binary file: " + result->files[0].file_name +
+                                  " (for xlsx/xls, the spatial extension must be installed)");
+            }
+        } else {
+            ParseCSVContent(body, col_names, col_types, rows);
+        }
 
         if (col_names.empty()) {
             throw IOException("Could not detect schema from first file: " + result->files[0].file_name);
@@ -888,7 +966,14 @@ static unique_ptr<GlobalTableFunctionState> NextcloudFolderInit(ClientContext &c
         std::vector<std::string> col_names;
         std::vector<LogicalType> col_types;
         std::vector<std::vector<Value>> rows;
-        ParseCSVContent(body, col_names, col_types, rows);
+
+        if (IsBinaryFileType(bind.file_type)) {
+            if (!ReadBinaryFileContent(context, body, bind.file_type, col_names, col_types, rows)) {
+                continue;  // Skip files that fail to parse
+            }
+        } else {
+            ParseCSVContent(body, col_names, col_types, rows);
+        }
 
         // Skip files with different column count (schema mismatch)
         if (col_names.size() != bind.first_file_col_count) {
