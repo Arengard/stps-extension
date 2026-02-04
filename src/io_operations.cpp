@@ -212,6 +212,29 @@ std::string stps_delete_file_impl(const std::string& path) {
     }
 }
 
+// Helper function to create folder with error handling
+std::string stps_create_folders_impl(const std::string& path) {
+    try {
+        if (path.empty()) {
+            return "ERROR: Empty folder path";
+        }
+
+        // Check if directory already exists
+        if (directory_exists(path)) {
+            return "WARNING: Folder already exists: " + path;
+        }
+
+        // Create the directory (and all parents)
+        if (!create_directories(path)) {
+            return "ERROR: Cannot create folder: " + path;
+        }
+
+        return "SUCCESS: Created folder: " + path;
+    } catch (const std::exception& e) {
+        return "ERROR: " + std::string(e.what());
+    }
+}
+
 // DuckDB scalar function wrappers
 static void StpsCopyIoFunction(DataChunk &args, ExpressionState &state, Vector &result) {
     BinaryExecutor::Execute<string_t, string_t, string_t>(
@@ -245,6 +268,16 @@ static void StpsDeleteIoFunction(DataChunk &args, ExpressionState &state, Vector
         });
 }
 
+static void StpsCreateFoldersIoFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+    UnaryExecutor::Execute<string_t, string_t>(
+        args.data[0], result, args.size(),
+        [&](string_t path) {
+            std::string path_str = path.GetString();
+            std::string result_msg = stps_create_folders_impl(path_str);
+            return StringVector::AddString(result, result_msg);
+        });
+}
+
 static void StpsRenameIoFunction(DataChunk &args, ExpressionState &state, Vector &result) {
     BinaryExecutor::Execute<string_t, string_t, string_t>(
         args.data[0], args.data[1], result, args.size(),
@@ -274,6 +307,12 @@ void RegisterIoOperationFunctions(ExtensionLoader &loader) {
     delete_io_set.AddFunction(ScalarFunction({LogicalType::VARCHAR},
                                              LogicalType::VARCHAR, StpsDeleteIoFunction));
     loader.RegisterFunction(delete_io_set);
+
+    // stps_create_folders_io(folder_path)
+    ScalarFunctionSet create_folders_io_set("stps_create_folders_io");
+    create_folders_io_set.AddFunction(ScalarFunction({LogicalType::VARCHAR},
+                                                     LogicalType::VARCHAR, StpsCreateFoldersIoFunction));
+    loader.RegisterFunction(create_folders_io_set);
 
     // stps_io_rename(old_name, new_name)
     ScalarFunctionSet rename_io_set("stps_io_rename");

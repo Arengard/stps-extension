@@ -625,6 +625,25 @@ Delete file.
 SELECT stps_delete_io('temp_file.csv') AS result;
 ```
 
+#### `stps_create_folders_io(folder_path VARCHAR) → VARCHAR`
+Create a folder (and all parent directories recursively). Returns WARNING if folder already exists.
+```sql
+SELECT stps_create_folders_io('C:/data/new_folder') AS result;
+-- Result: 'SUCCESS: Created folder: C:/data/new_folder'
+-- If exists: 'WARNING: Folder already exists: C:/data/new_folder'
+```
+
+**Batch folder creation from data:**
+```sql
+-- Create folders from Excel data
+WITH data AS (
+    SELECT stps_to_snake_case(concat_ws(' ', kz, gesellschaft)) AS ordner_name
+    FROM read_xlsx('companies.xlsx', all_varchar := true)
+)
+SELECT stps_create_folders_io('C:/output/' || ordner_name) AS result
+FROM data;
+```
+
 #### Combining scan + IO for batch operations
 
 Use `stps_scan` with IO functions to perform bulk file operations:
