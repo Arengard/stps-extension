@@ -15,21 +15,43 @@
 namespace duckdb {
 namespace stps {
 
+#ifdef _WIN32
+// Convert UTF-8 string to UTF-16 wide string for Windows Unicode APIs
+static std::wstring Utf8ToWide(const std::string& str) {
+    if (str.empty()) return std::wstring();
+    int size_needed = MultiByteToWideChar(CP_UTF8, 0, str.c_str(), (int)str.size(), nullptr, 0);
+    std::wstring result(size_needed, 0);
+    MultiByteToWideChar(CP_UTF8, 0, str.c_str(), (int)str.size(), &result[0], size_needed);
+    return result;
+}
+#endif
+
 // Check if file exists
 bool file_exists(const std::string& path) {
+#ifdef _WIN32
+    std::wstring wpath = Utf8ToWide(path);
+    struct _stat buffer;
+    return (_wstat(wpath.c_str(), &buffer) == 0);
+#else
     struct stat buffer;
     return (stat(path.c_str(), &buffer) == 0);
+#endif
 }
 
 // Check if directory exists
 bool directory_exists(const std::string& path) {
+#ifdef _WIN32
+    std::wstring wpath = Utf8ToWide(path);
+    struct _stat buffer;
+    if (_wstat(wpath.c_str(), &buffer) != 0) {
+        return false;
+    }
+    return (buffer.st_mode & _S_IFDIR) != 0;
+#else
     struct stat buffer;
     if (stat(path.c_str(), &buffer) != 0) {
         return false;
     }
-#ifdef _WIN32
-    return (buffer.st_mode & _S_IFDIR) != 0;
-#else
     return S_ISDIR(buffer.st_mode);
 #endif
 }
@@ -63,7 +85,8 @@ bool create_directories(const std::string& path) {
 
     // Create this directory
     #ifdef _WIN32
-    return CreateDirectoryA(path.c_str(), nullptr) != 0 || GetLastError() == ERROR_ALREADY_EXISTS;
+    std::wstring wpath = Utf8ToWide(path);
+    return CreateDirectoryW(wpath.c_str(), nullptr) != 0 || GetLastError() == ERROR_ALREADY_EXISTS;
     #else
     return mkdir(path.c_str(), 0755) == 0 || errno == EEXIST;
     #endif
@@ -137,12 +160,17 @@ std::string stps_move_file_impl(const std::string& source, const std::string& de
         #ifdef _WIN32
         // On Windows, remove destination first if it exists
         if (file_exists(destination)) {
-            if (!DeleteFileA(destination.c_str())) {
+            std::wstring wdest = Utf8ToWide(destination);
+            if (!DeleteFileW(wdest.c_str())) {
                 return "ERROR: Cannot remove existing destination file: " + destination;
             }
         }
-        if (!MoveFileA(source.c_str(), destination.c_str())) {
-            return "ERROR: Cannot move file from " + source + " to " + destination;
+        {
+            std::wstring wsrc = Utf8ToWide(source);
+            std::wstring wdest = Utf8ToWide(destination);
+            if (!MoveFileW(wsrc.c_str(), wdest.c_str())) {
+                return "ERROR: Cannot move file from " + source + " to " + destination;
+            }
         }
         #else
         // On Unix-like systems, rename handles overwrite
@@ -172,8 +200,12 @@ std::string stps_rename_file_impl(const std::string& old_name, const std::string
 
         // Try to rename the file
         #ifdef _WIN32
-        if (!MoveFileA(old_name.c_str(), new_name.c_str())) {
-            return "ERROR: Cannot rename file from " + old_name + " to " + new_name;
+        {
+            std::wstring wold = Utf8ToWide(old_name);
+            std::wstring wnew = Utf8ToWide(new_name);
+            if (!MoveFileW(wold.c_str(), wnew.c_str())) {
+                return "ERROR: Cannot rename file from " + old_name + " to " + new_name;
+            }
         }
         #else
         if (rename(old_name.c_str(), new_name.c_str()) != 0) {
@@ -197,8 +229,11 @@ std::string stps_delete_file_impl(const std::string& path) {
 
         // Try to delete the file
         #ifdef _WIN32
-        if (!DeleteFileA(path.c_str())) {
-            return "ERROR: Cannot delete file: " + path;
+        {
+            std::wstring wpath = Utf8ToWide(path);
+            if (!DeleteFileW(wpath.c_str())) {
+                return "ERROR: Cannot delete file: " + path;
+            }
         }
         #else
         if (unlink(path.c_str()) != 0) {
