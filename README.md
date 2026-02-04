@@ -1124,6 +1124,53 @@ Notes:
 - `headers` lets you pass bearer tokens, extra headers, etc. (one header per line).
 - Temp files are created under the extension temp directory; follow the returned `usage_hint` to load them.
 
+### `next_cloud_folder(parent_url VARCHAR, child_folder := VARCHAR, file_type := VARCHAR, username := VARCHAR, password := VARCHAR)` → TABLE
+
+Scan a Nextcloud/WebDAV parent folder, enter each company subfolder's `child_folder`, read all matching files, and return a unified table with metadata columns.
+
+The function uses WebDAV PROPFIND to discover subfolders and files. Column names from CSV files are normalized to snake_case.
+
+**Returns:** `parent_folder`, `child_folder`, `file_name`, plus all data columns from the CSV files.
+
+```sql
+-- Read all CSV files from each company's "bank" subfolder
+SELECT *
+FROM next_cloud_folder(
+  'https://cloud.example.com/remote.php/dav/files/user/mandanten',
+  child_folder := 'bank',
+  file_type := 'csv',
+  username := 'myuser',
+  password := 'mypassword'
+);
+
+-- List which companies and files were found
+SELECT DISTINCT parent_folder, child_folder, file_name
+FROM next_cloud_folder(
+  'https://cloud.example.com/remote.php/dav/files/user/mandanten',
+  child_folder := 'bank',
+  file_type := 'csv',
+  username := 'myuser',
+  password := 'mypassword'
+);
+
+-- Read files directly from company folders (no child_folder)
+SELECT *
+FROM next_cloud_folder(
+  'https://cloud.example.com/remote.php/dav/files/user/mandanten',
+  file_type := 'csv',
+  username := 'myuser',
+  password := 'mypassword'
+);
+```
+
+Notes:
+- Uses WebDAV PROPFIND to list directories; requires Nextcloud or any WebDAV-compatible server.
+- `child_folder` is optional. If omitted, files are read directly from each company subfolder.
+- `file_type` defaults to `csv`. Only CSV is currently supported.
+- The schema is determined by the first file found. Files with a different column count are silently skipped.
+- Companies where `child_folder` does not exist are silently skipped.
+- Column names are normalized to snake_case (like DuckDB's `normalize_names=true`).
+
 ---
 
 #### `stps_ask_ai_gender(name VARCHAR[, model VARCHAR]) → VARCHAR`

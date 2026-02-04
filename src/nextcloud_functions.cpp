@@ -1,6 +1,7 @@
 #include "nextcloud_functions.hpp"
 #include "shared/archive_utils.hpp"
 #include "curl_utils.hpp"
+#include "case_transform.hpp"
 #include "duckdb/function/table_function.hpp"
 #include "duckdb/parser/parsed_data/create_table_function_info.hpp"
 #include "duckdb/main/extension/extension_loader.hpp"
@@ -487,15 +488,466 @@ static void NextcloudScan(ClientContext &context, TableFunctionInput &data_p, Da
     output.SetCardinality(count);
 }
 
-void RegisterNextcloudFunctions(ExtensionLoader &loader) {
-    TableFunction func("next_cloud", {LogicalType::VARCHAR}, NextcloudScan, NextcloudBind, NextcloudInit);
+// ============================================================================
+// next_cloud_folder - Scan Nextcloud parent folder, enter each company's
+// child_folder, read all matching files, return unified table with metadata.
+// ============================================================================
 
-    // Register named parameters
+struct PropfindEntry {
+    std::string href;
+    bool is_collection;
+};
+
+// Parse WebDAV PROPFIND XML response into entries
+// Handles both d: and D: namespace prefixes
+static std::vector<PropfindEntry> ParsePropfindResponse(const std::string &xml) {
+    std::vector<PropfindEntry> entries;
+
+    // Find all <d:response> or <D:response> blocks
+    size_t pos = 0;
+    while (pos < xml.size()) {
+        // Find response opening tag (case-insensitive prefix)
+        size_t resp_start = std::string::npos;
+        for (const char *tag : {"<d:response>", "<D:response>", "<d:response ", "<D:response "}) {
+            size_t found = xml.find(tag, pos);
+            if (found != std::string::npos && (resp_start == std::string::npos || found < resp_start)) {
+                resp_start = found;
+            }
+        }
+        if (resp_start == std::string::npos) break;
+
+        // Find response closing tag
+        size_t resp_end = std::string::npos;
+        for (const char *tag : {"</d:response>", "</D:response>"}) {
+            size_t found = xml.find(tag, resp_start);
+            if (found != std::string::npos && (resp_end == std::string::npos || found < resp_end)) {
+                resp_end = found;
+            }
+        }
+        if (resp_end == std::string::npos) break;
+
+        std::string block = xml.substr(resp_start, resp_end - resp_start);
+
+        PropfindEntry entry;
+        entry.is_collection = false;
+
+        // Extract href
+        for (const char *open : {"<d:href>", "<D:href>"}) {
+            size_t href_start = block.find(open);
+            if (href_start != std::string::npos) {
+                href_start += strlen(open);
+                size_t href_end = block.find("</", href_start);
+                if (href_end != std::string::npos) {
+                    entry.href = block.substr(href_start, href_end - href_start);
+                }
+                break;
+            }
+        }
+
+        // Check if it's a collection (directory)
+        if (block.find("<d:collection") != std::string::npos ||
+            block.find("<D:collection") != std::string::npos) {
+            entry.is_collection = true;
+        }
+
+        if (!entry.href.empty()) {
+            entries.push_back(entry);
+        }
+
+        pos = resp_end + 1;
+    }
+
+    return entries;
+}
+
+// Decode percent-encoded URL path segments
+static std::string PercentDecodePath(const std::string &encoded) {
+    std::string decoded;
+    decoded.reserve(encoded.size());
+
+    for (size_t i = 0; i < encoded.size(); i++) {
+        if (encoded[i] == '%' && i + 2 < encoded.size() &&
+            IsHexChar(encoded[i + 1]) && IsHexChar(encoded[i + 2])) {
+            char hi = encoded[i + 1];
+            char lo = encoded[i + 2];
+            auto hex_val = [](char c) -> int {
+                if (c >= '0' && c <= '9') return c - '0';
+                if (c >= 'a' && c <= 'f') return 10 + c - 'a';
+                if (c >= 'A' && c <= 'F') return 10 + c - 'A';
+                return 0;
+            };
+            decoded.push_back(static_cast<char>((hex_val(hi) << 4) | hex_val(lo)));
+            i += 2;
+        } else {
+            decoded.push_back(encoded[i]);
+        }
+    }
+    return decoded;
+}
+
+// Extract the last path segment from a URL path (filename or folder name)
+static std::string GetLastPathSegment(const std::string &path) {
+    std::string clean = path;
+    // Remove trailing slash
+    while (!clean.empty() && clean.back() == '/') {
+        clean.pop_back();
+    }
+    size_t last_slash = clean.rfind('/');
+    if (last_slash != std::string::npos) {
+        return clean.substr(last_slash + 1);
+    }
+    return clean;
+}
+
+// Extract base URL (scheme + host) from full URL
+static std::string GetBaseUrl(const std::string &url) {
+    size_t scheme_end = url.find("://");
+    if (scheme_end == std::string::npos) return "";
+    size_t host_end = url.find('/', scheme_end + 3);
+    if (host_end == std::string::npos) return url;
+    return url.substr(0, host_end);
+}
+
+// Normalize a column name to snake_case
+static std::string NormalizeColumnName(const std::string &name) {
+    return to_snake_case(name);
+}
+
+struct NextcloudFolderFileInfo {
+    std::string parent_folder;   // company folder name
+    std::string child_folder;    // e.g. "bank"
+    std::string file_name;       // e.g. "data.csv"
+    std::string download_url;    // full URL to download
+};
+
+struct NextcloudFolderBindData : public TableFunctionData {
+    std::string parent_url;
+    std::string child_folder;
+    std::string file_type;
+    std::string username;
+    std::string password;
+
+    // Discovered files
+    std::vector<NextcloudFolderFileInfo> files;
+
+    // Schema from first file
+    std::vector<std::string> column_names;
+    std::vector<LogicalType> column_types;
+
+    // Materialized rows from first file (transferred to init)
+    std::vector<std::vector<Value>> first_file_rows;
+    idx_t first_file_col_count = 0;
+};
+
+struct NextcloudFolderGlobalState : public GlobalTableFunctionState {
+    std::vector<std::vector<Value>> rows;
+    idx_t current_row = 0;
+};
+
+// Build auth headers for PROPFIND/GET requests
+static void BuildAuthHeaders(CurlHeaders &headers, const std::string &username, const std::string &password) {
+    if (!username.empty() || !password.empty()) {
+        std::string credentials = username + ":" + password;
+        headers.append("Authorization: Basic " + Base64Encode(credentials));
+    }
+}
+
+// PROPFIND request body for depth-1 directory listing
+static const char* PROPFIND_BODY =
+    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+    "<d:propfind xmlns:d=\"DAV:\">"
+    "<d:prop><d:resourcetype/></d:prop>"
+    "</d:propfind>";
+
+static unique_ptr<FunctionData> NextcloudFolderBind(ClientContext &context, TableFunctionBindInput &input,
+                                                     vector<LogicalType> &return_types, vector<string> &names) {
+    auto result = make_uniq<NextcloudFolderBindData>();
+
+    if (input.inputs.empty()) {
+        throw BinderException("next_cloud_folder requires a parent URL argument");
+    }
+    result->parent_url = input.inputs[0].GetValue<std::string>();
+
+    // Defaults
+    result->child_folder = "";
+    result->file_type = "csv";
+
+    // Parse named parameters
+    for (auto &kv : input.named_parameters) {
+        if (kv.first == "child_folder") {
+            result->child_folder = kv.second.ToString();
+        } else if (kv.first == "file_type") {
+            result->file_type = kv.second.ToString();
+            std::transform(result->file_type.begin(), result->file_type.end(),
+                           result->file_type.begin(), ::tolower);
+        } else if (kv.first == "username") {
+            result->username = kv.second.ToString();
+        } else if (kv.first == "password") {
+            result->password = kv.second.ToString();
+        }
+    }
+
+    // Ensure parent URL ends with /
+    if (!result->parent_url.empty() && result->parent_url.back() != '/') {
+        result->parent_url += '/';
+    }
+
+    std::string base_url = GetBaseUrl(result->parent_url);
+
+    // Step 1: PROPFIND the parent folder to list company subfolders
+    {
+        CurlHeaders headers;
+        BuildAuthHeaders(headers, result->username, result->password);
+        headers.append("Depth: 1");
+        headers.append("Content-Type: application/xml");
+
+        long http_code = 0;
+        std::string request_url = NormalizeRequestUrl(result->parent_url);
+        std::string response = curl_propfind(request_url, PROPFIND_BODY, headers, &http_code);
+
+        if (response.find("ERROR:") == 0) {
+            throw IOException(GetCurlErrorDetails(response));
+        }
+        if (http_code >= 400) {
+            throw IOException(GetHttpErrorMessage(http_code, result->parent_url));
+        }
+
+        auto entries = ParsePropfindResponse(response);
+
+        // For each collection entry (skip the parent itself), PROPFIND child_folder
+        for (auto &entry : entries) {
+            if (!entry.is_collection) continue;
+
+            std::string decoded_href = PercentDecodePath(entry.href);
+            std::string company_name = GetLastPathSegment(decoded_href);
+
+            // Skip the parent folder itself (its href matches the parent path)
+            // The parent URL path decoded should end with the same thing
+            std::string parent_path = PercentDecodePath(result->parent_url);
+            // Remove scheme+host from parent_url to compare paths
+            size_t scheme_end = parent_path.find("://");
+            if (scheme_end != std::string::npos) {
+                size_t path_start = parent_path.find('/', scheme_end + 3);
+                if (path_start != std::string::npos) {
+                    parent_path = parent_path.substr(path_start);
+                }
+            }
+            // Normalize trailing slashes for comparison
+            std::string norm_href = decoded_href;
+            while (!norm_href.empty() && norm_href.back() == '/') norm_href.pop_back();
+            while (!parent_path.empty() && parent_path.back() == '/') parent_path.pop_back();
+            if (norm_href == parent_path) continue;
+
+            if (company_name.empty()) continue;
+
+            // Step 2: Build the child folder URL and PROPFIND it
+            std::string child_url;
+            if (!result->child_folder.empty()) {
+                // entry.href is already the full path from server root
+                child_url = base_url + entry.href;
+                if (child_url.back() != '/') child_url += '/';
+                child_url += result->child_folder + "/";
+            } else {
+                // No child folder: list files directly in the company folder
+                child_url = base_url + entry.href;
+                if (child_url.back() != '/') child_url += '/';
+            }
+
+            CurlHeaders child_headers;
+            BuildAuthHeaders(child_headers, result->username, result->password);
+            child_headers.append("Depth: 1");
+            child_headers.append("Content-Type: application/xml");
+
+            long child_http_code = 0;
+            std::string child_request_url = NormalizeRequestUrl(child_url);
+            std::string child_response = curl_propfind(child_request_url, PROPFIND_BODY, child_headers, &child_http_code);
+
+            // Skip if child_folder doesn't exist (404) or other error
+            if (child_response.find("ERROR:") == 0 || child_http_code >= 400) {
+                continue;
+            }
+
+            auto child_entries = ParsePropfindResponse(child_response);
+
+            // Filter files by extension
+            std::string ext_suffix = "." + result->file_type;
+            for (auto &file_entry : child_entries) {
+                if (file_entry.is_collection) continue;
+
+                std::string file_href_decoded = PercentDecodePath(file_entry.href);
+                std::string file_name = GetLastPathSegment(file_href_decoded);
+
+                // Check extension match
+                if (file_name.size() <= ext_suffix.size()) continue;
+                std::string file_ext = file_name.substr(file_name.size() - ext_suffix.size());
+                std::transform(file_ext.begin(), file_ext.end(), file_ext.begin(), ::tolower);
+                if (file_ext != ext_suffix) continue;
+
+                NextcloudFolderFileInfo info;
+                info.parent_folder = company_name;
+                info.child_folder = result->child_folder;
+                info.file_name = file_name;
+                info.download_url = base_url + file_entry.href;
+                result->files.push_back(info);
+            }
+        }
+    }
+
+    if (result->files.empty()) {
+        // No files found - return a minimal schema with metadata columns only
+        names = {"parent_folder", "child_folder", "file_name"};
+        return_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR};
+        return result;
+    }
+
+    // Step 3: Download the first file to detect schema
+    {
+        CurlHeaders headers;
+        BuildAuthHeaders(headers, result->username, result->password);
+
+        long http_code = 0;
+        std::string request_url = NormalizeRequestUrl(result->files[0].download_url);
+        std::string body = curl_get(request_url, headers, &http_code);
+
+        if (body.find("ERROR:") == 0 || http_code >= 400 || body.empty()) {
+            throw IOException("Failed to download first file for schema detection: " + result->files[0].download_url);
+        }
+
+        std::vector<std::string> col_names;
+        std::vector<LogicalType> col_types;
+        std::vector<std::vector<Value>> rows;
+        ParseCSVContent(body, col_names, col_types, rows);
+
+        if (col_names.empty()) {
+            throw IOException("Could not detect schema from first file: " + result->files[0].file_name);
+        }
+
+        // Normalize column names to snake_case
+        for (auto &name : col_names) {
+            name = NormalizeColumnName(name);
+        }
+
+        result->column_names = col_names;
+        result->column_types = col_types;
+        result->first_file_col_count = col_names.size();
+
+        // Store first file rows with metadata prepended
+        for (auto &row : rows) {
+            std::vector<Value> full_row;
+            full_row.push_back(Value(result->files[0].parent_folder));
+            full_row.push_back(Value(result->files[0].child_folder));
+            full_row.push_back(Value(result->files[0].file_name));
+            for (auto &val : row) {
+                full_row.push_back(std::move(val));
+            }
+            result->first_file_rows.push_back(std::move(full_row));
+        }
+    }
+
+    // Build return schema: metadata columns + data columns
+    names.push_back("parent_folder");
+    return_types.push_back(LogicalType::VARCHAR);
+    names.push_back("child_folder");
+    return_types.push_back(LogicalType::VARCHAR);
+    names.push_back("file_name");
+    return_types.push_back(LogicalType::VARCHAR);
+
+    for (size_t i = 0; i < result->column_names.size(); i++) {
+        names.push_back(result->column_names[i]);
+        return_types.push_back(result->column_types[i]);
+    }
+
+    return result;
+}
+
+static unique_ptr<GlobalTableFunctionState> NextcloudFolderInit(ClientContext &context, TableFunctionInitInput &input) {
+    auto &bind = input.bind_data->Cast<NextcloudFolderBindData>();
+    auto state = make_uniq<NextcloudFolderGlobalState>();
+
+    // Copy first file rows
+    for (auto &row : bind.first_file_rows) {
+        state->rows.push_back(row);
+    }
+
+    // Download and parse remaining files (index 1+)
+    for (size_t file_idx = 1; file_idx < bind.files.size(); file_idx++) {
+        auto &file_info = bind.files[file_idx];
+
+        CurlHeaders headers;
+        BuildAuthHeaders(headers, bind.username, bind.password);
+
+        long http_code = 0;
+        std::string request_url = NormalizeRequestUrl(file_info.download_url);
+        std::string body = curl_get(request_url, headers, &http_code);
+
+        // Skip files that fail to download
+        if (body.find("ERROR:") == 0 || http_code >= 400 || body.empty()) {
+            continue;
+        }
+
+        std::vector<std::string> col_names;
+        std::vector<LogicalType> col_types;
+        std::vector<std::vector<Value>> rows;
+        ParseCSVContent(body, col_names, col_types, rows);
+
+        // Skip files with different column count (schema mismatch)
+        if (col_names.size() != bind.first_file_col_count) {
+            continue;
+        }
+
+        // Prepend metadata columns to each row
+        for (auto &row : rows) {
+            std::vector<Value> full_row;
+            full_row.push_back(Value(file_info.parent_folder));
+            full_row.push_back(Value(file_info.child_folder));
+            full_row.push_back(Value(file_info.file_name));
+            for (auto &val : row) {
+                full_row.push_back(std::move(val));
+            }
+            state->rows.push_back(std::move(full_row));
+        }
+    }
+
+    return state;
+}
+
+static void NextcloudFolderScan(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
+    auto &state = data_p.global_state->Cast<NextcloudFolderGlobalState>();
+
+    idx_t count = 0;
+    idx_t max_count = STANDARD_VECTOR_SIZE;
+
+    while (state.current_row < state.rows.size() && count < max_count) {
+        auto &row = state.rows[state.current_row];
+        for (idx_t col = 0; col < row.size() && col < output.ColumnCount(); col++) {
+            output.SetValue(col, count, row[col]);
+        }
+        state.current_row++;
+        count++;
+    }
+    output.SetCardinality(count);
+}
+
+// ============================================================================
+// Registration
+// ============================================================================
+
+void RegisterNextcloudFunctions(ExtensionLoader &loader) {
+    // next_cloud - single file download
+    TableFunction func("next_cloud", {LogicalType::VARCHAR}, NextcloudScan, NextcloudBind, NextcloudInit);
     func.named_parameters["username"] = LogicalType::VARCHAR;
     func.named_parameters["password"] = LogicalType::VARCHAR;
     func.named_parameters["headers"] = LogicalType::VARCHAR;
-
     loader.RegisterFunction(func);
+
+    // next_cloud_folder - scan parent folder's company subfolders
+    TableFunction folder_func("next_cloud_folder", {LogicalType::VARCHAR},
+                              NextcloudFolderScan, NextcloudFolderBind, NextcloudFolderInit);
+    folder_func.named_parameters["child_folder"] = LogicalType::VARCHAR;
+    folder_func.named_parameters["file_type"] = LogicalType::VARCHAR;
+    folder_func.named_parameters["username"] = LogicalType::VARCHAR;
+    folder_func.named_parameters["password"] = LogicalType::VARCHAR;
+    loader.RegisterFunction(folder_func);
 }
 
 } // namespace stps

@@ -55,5 +55,12 @@ std::string curl_get(const std::string& url,
                      const CurlHeaders& headers,
                      long* http_code_out = nullptr);
 
+// Make WebDAV PROPFIND request (directory listing)
+// Returns: response body as string, or "ERROR: ..." on failure
+std::string curl_propfind(const std::string& url,
+                          const std::string& request_body,
+                          const CurlHeaders& headers,
+                          long* http_code_out = nullptr);
+
 } // namespace stps
 } // namespace duckdb
