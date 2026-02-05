@@ -32,12 +32,18 @@ jobs:
       - name: Copy artifact
         run: |
           mkdir -p dist
-          EXTENSION_FILE=$(find build -name "*.duckdb_extension" -type f | head -1)
+          # Find the extension in the repository folder (the properly packaged loadable extension)
+          EXTENSION_FILE=$(find build/release/repository -name "stps.duckdb_extension" -type f | head -1)
+          if [ -z "$EXTENSION_FILE" ]; then
+            echo "Extension not found in repository, trying extension folder..."
+            EXTENSION_FILE=$(find build/release/extension -name "stps.duckdb_extension" -type f | head -1)
+          fi
           if [ -z "$EXTENSION_FILE" ]; then
             echo "Extension file not found!"
             find build -type f -name "*.duckdb_extension" || true
             exit 1
           fi
+          echo "Found extension at: $EXTENSION_FILE"
           cp "$EXTENSION_FILE" dist/stps.duckdb_extension
 
       - name: Upload macOS artifact
@@ -72,12 +78,18 @@ jobs:
       - name: Copy artifact
         run: |
           mkdir -p dist
-          EXTENSION_FILE=$(find build -name "*.duckdb_extension" -type f | head -1)
+          # Find the extension in the repository folder (the properly packaged loadable extension)
+          EXTENSION_FILE=$(find build/release/repository -name "stps.duckdb_extension" -type f | head -1)
+          if [ -z "$EXTENSION_FILE" ]; then
+            echo "Extension not found in repository, trying extension folder..."
+            EXTENSION_FILE=$(find build/release/extension -name "stps.duckdb_extension" -type f | head -1)
+          fi
           if [ -z "$EXTENSION_FILE" ]; then
             echo "Extension file not found!"
             find build -type f -name "*.duckdb_extension" || true
             exit 1
           fi
+          echo "Found extension at: $EXTENSION_FILE"
           cp "$EXTENSION_FILE" dist/stps.duckdb_extension
 
       - name: Upload Linux artifact
@@ -125,12 +137,18 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist
-          EXTENSION_FILE=$(find build -name "*.duckdb_extension" -type f | head -1)
+          # Find the extension in the repository folder (the properly packaged loadable extension)
+          EXTENSION_FILE=$(find build/release/repository -name "stps.duckdb_extension" -type f | head -1)
+          if [ -z "$EXTENSION_FILE" ]; then
+            echo "Extension not found in repository, trying extension folder..."
+            EXTENSION_FILE=$(find build/release/extension -name "stps.duckdb_extension" -type f | head -1)
+          fi
           if [ -z "$EXTENSION_FILE" ]; then
             echo "Extension file not found!"
             find build -type f -name "*.duckdb_extension" || true
             exit 1
           fi
+          echo "Found extension at: $EXTENSION_FILE"
           cp "$EXTENSION_FILE" dist/stps.duckdb_extension
 
       - name: Upload Windows artifact
