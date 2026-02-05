@@ -103,6 +103,12 @@ jobs:
       - name: Install build dependencies
         run: choco install -y cmake ninja
 
+      - name: Setup vcpkg and install dependencies
+        run: |
+          git clone https://github.com/microsoft/vcpkg.git C:\vcpkg
+          C:\vcpkg\bootstrap-vcpkg.bat
+          C:\vcpkg\vcpkg install zlib:x64-windows curl:x64-windows
+
       - name: Setup MSVC
         uses: ilammy/msvc-dev-cmd@v1
 
@@ -111,6 +117,7 @@ jobs:
         env:
           BUILD_UNITTESTS: 0
           BUILD_SHELL: 0
+          VCPKG_TOOLCHAIN_PATH: C:/vcpkg/scripts/buildsystems/vcpkg.cmake
         run: make release
 
       - name: Copy artifact
