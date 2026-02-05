@@ -42,8 +42,6 @@ set(EXTENSION_SOURCES
     src/search_database_function.cpp
     src/clean_database_function.cpp
     src/inso_account_function.cpp
-    src/ai_functions.cpp
-    src/curl_utils.cpp
     # src/fill_functions.cpp  # Temporarily disabled - DuckDB API changed
     src/smart_cast_utils.cpp
     src/smart_cast_scalar.cpp
@@ -60,9 +58,16 @@ set(EXTENSION_SOURCES
     # ZIP archive reading functions (using miniz)
     src/zip_functions.cpp
     src/miniz/miniz.c
-    # Nextcloud/WebDAV fetcher
-    src/nextcloud_functions.cpp
 )
+
+# Add curl-dependent sources only if curl is available
+if(CURL_FOUND)
+    list(APPEND EXTENSION_SOURCES
+        src/ai_functions.cpp
+        src/curl_utils.cpp
+        src/nextcloud_functions.cpp
+    )
+endif()
 
 build_static_extension(${TARGET_NAME} ${EXTENSION_SOURCES})
 build_loadable_extension(${TARGET_NAME} " " ${EXTENSION_SOURCES})

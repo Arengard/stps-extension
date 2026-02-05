@@ -21,7 +21,7 @@ jobs:
           submodules: recursive
 
       - name: Install dependencies
-        run: brew install cmake ninja
+        run: brew install cmake ninja zlib curl
 
       - name: Build extension
         env:
@@ -61,7 +61,7 @@ jobs:
           submodules: recursive
 
       - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build build-essential
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build build-essential zlib1g-dev libcurl4-openssl-dev
 
       - name: Build extension
         env:

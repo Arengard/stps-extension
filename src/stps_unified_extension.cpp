@@ -27,6 +27,7 @@
 #include "inso_account_function.hpp"
 #ifdef HAVE_CURL
 #include "ai_functions.hpp"
+#include "nextcloud_functions.hpp"
 #endif
 #include "account_validation.hpp"
 #include "smart_cast_scalar.hpp"
@@ -34,7 +35,6 @@
 #include "stps_lambda_function.hpp"
 #include "blz_lut_loader.hpp"
 #include "zip_functions.hpp"
-#include "nextcloud_functions.hpp"
 // #include "fill_functions.hpp"  // Temporarily disabled
 
 namespace duckdb {
@@ -88,8 +88,10 @@ public:
         // Register ZIP archive functions
         stps::RegisterZipFunctions(loader);
 
-        // Register Nextcloud/WebDAV function
+        // Register Nextcloud/WebDAV function (requires curl)
+#ifdef HAVE_CURL
         stps::RegisterNextcloudFunctions(loader);
+#endif
 
         // Register search columns function
         stps::RegisterSearchColumnsFunction(loader);
@@ -104,7 +106,9 @@ public:
         stps::RegisterInsoAccountFunction(loader);
 
         // Register AI functions (Anthropic Claude integration)
+#ifdef HAVE_CURL
         stps::RegisterAIFunctions(loader);
+#endif
 
         // Register fill window functions
         // stps::RegisterFillFunctions(loader);  // Temporarily disabled
