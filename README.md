@@ -704,6 +704,81 @@ SELECT * FROM gobd_table_schema('index.xml', 'transactions');
 -- Returns: column_name, data_type, description
 ```
 
+#### `stps_read_gobd_cloud(url VARCHAR, table_name VARCHAR, username := VARCHAR, password := VARCHAR, delimiter := VARCHAR) → TABLE`
+Read a single table from a GoBD/GDPDU export stored on a WebDAV/Nextcloud server. Automatically discovers `index.xml` in the given folder (tries direct path, PROPFIND listing, and one level of subfolders).
+```sql
+-- Read Buchungsstapel from a cloud export
+SELECT * FROM stps_read_gobd_cloud(
+  'https://cloud.example.com/remote.php/dav/files/user/mandant1/export/',
+  'Buchungsstapel',
+  username := 'myuser',
+  password := 'mypassword'
+);
+
+-- With custom delimiter
+SELECT * FROM stps_read_gobd_cloud(
+  'https://cloud.example.com/remote.php/dav/files/user/export/',
+  'Kontenbeschriftungen',
+  username := 'myuser',
+  password := 'mypassword',
+  delimiter := ','
+);
+```
+
+#### `stps_read_gobd_cloud_folder(url VARCHAR, table_name VARCHAR, child_folder := VARCHAR, username := VARCHAR, password := VARCHAR, delimiter := VARCHAR) → TABLE`
+Scan multiple mandant subfolders under a parent URL, read the same GoBD table from each, and return a unified table with `parent_folder` and `child_folder` metadata columns. Silently skips mandants where `index.xml` or the requested table is missing.
+```sql
+-- Read Buchungsstapel from all mandant folders
+SELECT * FROM stps_read_gobd_cloud_folder(
+  'https://cloud.example.com/remote.php/dav/files/user/mandanten/',
+  'Buchungsstapel',
+  child_folder := 'export',
+  username := 'myuser',
+  password := 'mypassword'
+);
+
+-- See which mandants were found
+SELECT DISTINCT parent_folder
+FROM stps_read_gobd_cloud_folder(
+  'https://cloud.example.com/remote.php/dav/files/user/mandanten/',
+  'Buchungsstapel',
+  child_folder := 'export',
+  username := 'myuser',
+  password := 'mypassword'
+);
+```
+
+**Returns:** `parent_folder`, `child_folder`, plus all data columns from the GoBD table (all VARCHAR).
+
+#### `gobd_list_tables_cloud(url VARCHAR, username := VARCHAR, password := VARCHAR) → TABLE`
+List all tables defined in a cloud-hosted GoBD `index.xml`.
+```sql
+SELECT * FROM gobd_list_tables_cloud(
+  'https://cloud.example.com/remote.php/dav/files/user/export/',
+  username := 'myuser',
+  password := 'mypassword'
+);
+-- Returns: table_name, table_url, description, column_count
+```
+
+#### `gobd_table_schema_cloud(url VARCHAR, table_name VARCHAR, username := VARCHAR, password := VARCHAR) → TABLE`
+Show the column schema for a specific table in a cloud-hosted GoBD `index.xml`.
+```sql
+SELECT * FROM gobd_table_schema_cloud(
+  'https://cloud.example.com/remote.php/dav/files/user/export/',
+  'Buchungsstapel',
+  username := 'myuser',
+  password := 'mypassword'
+);
+-- Returns: column_name, data_type, accuracy, column_order
+```
+
+**Notes (cloud GoBD functions):**
+- Requires `curl` (functions are only available when the extension is built with libcurl).
+- `index.xml` discovery: tries `<url>/index.xml` first, then PROPFIND listing, then one subfolder level.
+- All data columns are returned as VARCHAR (matching the local `stps_read_gobd` behavior).
+- Authentication uses HTTP Basic Auth via `username`/`password` parameters.
+
 ---
 
 ### 🔄 NULL Handling

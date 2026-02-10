@@ -28,6 +28,7 @@
 #ifdef HAVE_CURL
 #include "ai_functions.hpp"
 #include "nextcloud_functions.hpp"
+#include "gobd_cloud_reader.hpp"
 #endif
 #include "account_validation.hpp"
 #include "smart_cast_scalar.hpp"
@@ -91,6 +92,7 @@ public:
         // Register Nextcloud/WebDAV function (requires curl)
 #ifdef HAVE_CURL
         stps::RegisterNextcloudFunctions(loader);
+        stps::RegisterGobdCloudReaderFunctions(loader);
 #endif
 
         // Register search columns function

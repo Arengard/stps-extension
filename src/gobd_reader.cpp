@@ -12,21 +12,6 @@
 namespace duckdb {
 namespace stps {
 
-// Simple XML parsing structure for GoBD
-struct GobdColumn {
-    string name;
-    string data_type;  // Numeric, AlphaNumeric, Date
-    int accuracy = -1;
-    int order = 0;
-};
-
-struct GobdTable {
-    string name;
-    string url;
-    string description;
-    vector<GobdColumn> columns;
-};
-
 // Helper function to extract directory from file path
 static string GetDirectory(const string &filepath) {
     size_t pos = filepath.find_last_of("/\\");
@@ -37,7 +22,7 @@ static string GetDirectory(const string &filepath) {
 }
 
 // Simple XML text extraction between tags
-static string ExtractTagValue(const string &xml, const string &tag_name, size_t start_pos = 0) {
+string ExtractTagValue(const string &xml, const string &tag_name, size_t start_pos) {
     string open_tag = "<" + tag_name + ">";
     string close_tag = "</" + tag_name + ">";
 
@@ -52,7 +37,7 @@ static string ExtractTagValue(const string &xml, const string &tag_name, size_t 
 }
 
 // Extract all occurrences of a tag
-static vector<string> ExtractAllTags(const string &xml, const string &tag_name) {
+vector<string> ExtractAllTags(const string &xml, const string &tag_name) {
     vector<string> results;
     string open_tag = "<" + tag_name;
     string close_tag = "</" + tag_name + ">";
@@ -82,19 +67,9 @@ static vector<string> ExtractAllTags(const string &xml, const string &tag_name) 
     return results;
 }
 
-// Parse GoBD index.xml
-static vector<GobdTable> ParseGobdIndex(const string &filepath) {
+// Parse GoBD index.xml from an in-memory XML string
+vector<GobdTable> ParseGobdIndexFromString(const string &xml) {
     vector<GobdTable> tables;
-
-    std::ifstream file(filepath);
-    if (!file.is_open()) {
-        throw IOException("Cannot open GoBD index file: " + filepath);
-    }
-
-    std::stringstream buffer;
-    buffer << file.rdbuf();
-    string xml = buffer.str();
-    file.close();
 
     // Find all Table elements
     auto table_elements = ExtractAllTags(xml, "Table");
@@ -162,8 +137,23 @@ static vector<GobdTable> ParseGobdIndex(const string &filepath) {
     return tables;
 }
 
+// Parse GoBD index.xml from a file path (wrapper around string-based parser)
+static vector<GobdTable> ParseGobdIndex(const string &filepath) {
+    std::ifstream file(filepath);
+    if (!file.is_open()) {
+        throw IOException("Cannot open GoBD index file: " + filepath);
+    }
+
+    std::stringstream buffer;
+    buffer << file.rdbuf();
+    string xml = buffer.str();
+    file.close();
+
+    return ParseGobdIndexFromString(xml);
+}
+
 // Helper function to convert GoBD data type to DuckDB type
-static LogicalType GobdTypeToDuckDbType(const string &gobd_type, int accuracy = -1) {
+LogicalType GobdTypeToDuckDbType(const string &gobd_type, int accuracy) {
     if (gobd_type == "Numeric") {
         if (accuracy >= 0) {
             return LogicalType::DECIMAL(18, accuracy);
@@ -178,7 +168,7 @@ static LogicalType GobdTypeToDuckDbType(const string &gobd_type, int accuracy = 
 // ============ CSV Parsing Helpers ============
 
 // Parse a single CSV line respecting quotes
-static vector<string> ParseCsvLine(const string &line, char delimiter) {
+vector<string> ParseCsvLine(const string &line, char delimiter) {
     vector<string> fields;
     string current_field;
     bool in_quotes = false;

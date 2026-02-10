@@ -66,6 +66,8 @@ if(CURL_FOUND)
         src/ai_functions.cpp
         src/curl_utils.cpp
         src/nextcloud_functions.cpp
+        src/webdav_utils.cpp
+        src/gobd_cloud_reader.cpp
     )
 endif()
 
