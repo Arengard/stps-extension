@@ -25,6 +25,11 @@ struct NextcloudBindData : public TableFunctionData {
     std::string username;
     std::string password;
     std::vector<std::string> extra_headers;
+    bool all_varchar = false;
+    bool ignore_errors = false;
+    std::string reader_options;
+    std::string sheet;
+    std::string range;
 
     // Fetched data stored in bind for schema detection
     std::string fetched_body;
@@ -87,6 +92,16 @@ static unique_ptr<FunctionData> NextcloudBind(ClientContext &context, TableFunct
                     result->extra_headers.push_back(line.substr(start, end - start + 1));
                 }
             }
+        } else if (kv.first == "all_varchar") {
+            result->all_varchar = kv.second.GetValue<bool>();
+        } else if (kv.first == "ignore_errors") {
+            result->ignore_errors = kv.second.GetValue<bool>();
+        } else if (kv.first == "reader_options") {
+            result->reader_options = kv.second.ToString();
+        } else if (kv.first == "sheet") {
+            result->sheet = kv.second.ToString();
+        } else if (kv.first == "range") {
+            result->range = kv.second.ToString();
         }
     }
 
@@ -127,181 +142,28 @@ static unique_ptr<FunctionData> NextcloudBind(ClientContext &context, TableFunct
     std::transform(result->file_extension.begin(), result->file_extension.end(),
                    result->file_extension.begin(), ::tolower);
 
-    // Handle binary formats (parquet, arrow, feather)
-    if (result->file_extension == "parquet" || result->file_extension == "arrow" ||
-        result->file_extension == "feather") {
-        result->is_binary = true;
-        result->needs_temp_file = true;
+    // Read file content using DuckDB's built-in readers (supports all_varchar, ignore_errors, reader_options)
+    std::vector<std::string> col_names;
+    std::vector<LogicalType> col_types;
 
-        // Write to temp file for DuckDB's parquet reader
-        result->temp_file_path = GenerateTempFilename(result->file_extension);
-        std::ofstream out(result->temp_file_path, std::ios::binary);
-        if (!out) {
-            throw IOException("Failed to create temp file: " + result->temp_file_path);
+    bool read_ok = ReadFileViaDuckDB(context, result->fetched_body, result->file_extension,
+                                      result->all_varchar, result->ignore_errors, result->reader_options,
+                                      result->sheet, result->range,
+                                      col_names, col_types, result->materialized_rows);
+
+    if (!read_ok) {
+        // DuckDB reader failed - try custom CSV parser as fallback for text files
+        bool is_binary = (result->file_extension == "parquet" || result->file_extension == "arrow" ||
+                          result->file_extension == "feather" || result->file_extension == "xlsx" ||
+                          result->file_extension == "xls");
+        if (!is_binary) {
+            ParseCSVContent(result->fetched_body, col_names, col_types, result->materialized_rows);
         }
-        out.write(result->fetched_body.data(), result->fetched_body.size());
-        out.close();
-
-        // Clear body to free memory
-        result->fetched_body.clear();
-        result->fetched_body.shrink_to_fit();
-
-        // Use DuckDB to read the parquet and get schema
-        try {
-            auto &db = DatabaseInstance::GetDatabase(context);
-            Connection conn(db);
-
-            // Get schema from parquet file
-            std::string query = "SELECT * FROM read_parquet('" + result->temp_file_path + "') LIMIT 0";
-            auto schema_result = conn.Query(query);
-
-            if (schema_result->HasError()) {
-                throw IOException("Failed to read parquet schema: " + schema_result->GetError());
-            }
-
-            // Extract column names and types
-            for (idx_t i = 0; i < schema_result->ColumnCount(); i++) {
-            result->column_names.push_back(schema_result->ColumnName(i));
-            result->column_types.push_back(schema_result->types[i]); // ✅ updated
     }
 
-            // Now read all data and materialize
-            query = "SELECT * FROM read_parquet('" + result->temp_file_path + "')";
-            auto data_result = conn.Query(query);
-
-            if (data_result->HasError()) {
-                throw IOException("Failed to read parquet data: " + data_result->GetError());
-            }
-
-            // Materialize all rows
-            while (true) {
-                auto chunk = data_result->Fetch();
-                if (!chunk || chunk->size() == 0) break;
-
-                for (idx_t row = 0; row < chunk->size(); row++) {
-                    vector<Value> row_values;
-                    for (idx_t col = 0; col < chunk->ColumnCount(); col++) {
-                        row_values.push_back(chunk->GetValue(col, row));
-                    }
-                    result->materialized_rows.push_back(std::move(row_values));
-                }
-            }
-
-            // Clean up temp file
-            std::remove(result->temp_file_path.c_str());
-            result->temp_file_path.clear();
-
-        } catch (std::exception &e) {
-            // Clean up on error
-            if (!result->temp_file_path.empty()) {
-                std::remove(result->temp_file_path.c_str());
-            }
-            throw IOException("Failed to process parquet file: " + std::string(e.what()));
-        }
-
-        // Set return schema
-        for (const auto &name : result->column_names) {
-            names.push_back(name);
-        }
-        for (const auto &type : result->column_types) {
-            return_types.push_back(type);
-        }
-
-        return result;
-    }
-
-    // Handle Excel files
-    if (result->file_extension == "xlsx" || result->file_extension == "xls") {
-        result->is_binary = true;
-        result->needs_temp_file = true;
-
-        result->temp_file_path = GenerateTempFilename(result->file_extension);
-        std::ofstream out(result->temp_file_path, std::ios::binary);
-        if (!out) {
-            throw IOException("Failed to create temp file: " + result->temp_file_path);
-        }
-        out.write(result->fetched_body.data(), result->fetched_body.size());
-        out.close();
-
-        result->fetched_body.clear();
-        result->fetched_body.shrink_to_fit();
-
-        // Try to read Excel using spatial extension
-        try {
-            auto &db = DatabaseInstance::GetDatabase(context);
-            Connection conn(db);
-
-            // Install and load spatial extension if needed
-            conn.Query("INSTALL spatial");
-            conn.Query("LOAD spatial");
-
-            // Get schema from Excel file
-            std::string query = "SELECT * FROM st_read('" + result->temp_file_path + "') LIMIT 0";
-            auto schema_result = conn.Query(query);
-
-            if (schema_result->HasError()) {
-                // Spatial extension not available - fall back to metadata return
-                names = {"temp_path", "file_type", "query"};
-                return_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR};
-                return result;
-            }
-
-            // Extract column names and types
-            for (idx_t i = 0; i < schema_result->ColumnCount(); i++) {
-                result->column_names.push_back(schema_result->ColumnName(i));
-                result->column_types.push_back(schema_result->types[i]);
-            }
-
-            // Now read all data and materialize
-            query = "SELECT * FROM st_read('" + result->temp_file_path + "')";
-            auto data_result = conn.Query(query);
-
-            if (data_result->HasError()) {
-                throw IOException("Failed to read Excel data: " + data_result->GetError());
-            }
-
-            // Materialize all rows
-            while (true) {
-                auto chunk = data_result->Fetch();
-                if (!chunk || chunk->size() == 0) break;
-
-                for (idx_t row = 0; row < chunk->size(); row++) {
-                    vector<Value> row_values;
-                    for (idx_t col = 0; col < chunk->ColumnCount(); col++) {
-                        row_values.push_back(chunk->GetValue(col, row));
-                    }
-                    result->materialized_rows.push_back(std::move(row_values));
-                }
-            }
-
-            // Clean up temp file
-            std::remove(result->temp_file_path.c_str());
-            result->temp_file_path.clear();
-
-        } catch (std::exception &e) {
-            // Spatial extension failed - fall back to metadata return
-            names = {"temp_path", "file_type", "query"};
-            return_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR};
-            return result;
-        }
-
-        // Set return schema from Excel
-        for (const auto &name : result->column_names) {
-            names.push_back(name);
-        }
-        for (const auto &type : result->column_types) {
-            return_types.push_back(type);
-        }
-
-        return result;
-    }
-
-    // Parse CSV/TSV content for schema detection
-    std::vector<std::vector<Value>> temp_rows;
-    ParseCSVContent(result->fetched_body, result->column_names, result->column_types, temp_rows);
-
-    if (!result->column_names.empty()) {
-        // Use detected schema
+    if (!col_names.empty()) {
+        result->column_names = col_names;
+        result->column_types = col_types;
         for (const auto &name : result->column_names) {
             names.push_back(name);
         }
@@ -314,7 +176,14 @@ static unique_ptr<FunctionData> NextcloudBind(ClientContext &context, TableFunct
         result->column_types = {LogicalType::VARCHAR};
         names = {"content"};
         return_types = {LogicalType::VARCHAR};
+        if (result->materialized_rows.empty()) {
+            result->materialized_rows.push_back({Value(result->fetched_body)});
+        }
     }
+
+    // Free fetched body to save memory
+    result->fetched_body.clear();
+    result->fetched_body.shrink_to_fit();
 
     return result;
 }
@@ -323,44 +192,9 @@ static unique_ptr<GlobalTableFunctionState> NextcloudInit(ClientContext &context
     auto &bind = input.bind_data->Cast<NextcloudBindData>();
     auto state = make_uniq<NextcloudGlobalState>();
 
-    // Handle parquet/arrow/feather - use materialized rows from bind
-    if (bind.is_binary && (bind.file_extension == "parquet" || bind.file_extension == "arrow" ||
-                           bind.file_extension == "feather")) {
-        // Data was already materialized in Bind phase
-        for (auto &row : bind.materialized_rows) {
-            state->rows.push_back(row);
-        }
-        return state;
-    }
-
-    // Handle Excel files
-    if (bind.is_binary && (bind.file_extension == "xlsx" || bind.file_extension == "xls")) {
-        // Check if data was materialized (spatial extension worked)
-        if (!bind.materialized_rows.empty()) {
-            for (auto &row : bind.materialized_rows) {
-                state->rows.push_back(row);
-            }
-        } else {
-            // Fallback: return metadata for manual query
-            std::string query = "INSTALL spatial; LOAD spatial; SELECT * FROM st_read('" +
-                               bind.temp_file_path + "')";
-            state->rows.push_back({
-                Value(bind.temp_file_path),
-                Value(bind.file_extension),
-                Value(query)
-            });
-        }
-        return state;
-    }
-
-    // Parse CSV/TSV content
-    std::vector<std::string> col_names;
-    std::vector<LogicalType> col_types;
-    ParseCSVContent(bind.fetched_body, col_names, col_types, state->rows);
-
-    if (state->rows.empty() && !bind.fetched_body.empty()) {
-        // Fallback: return raw content as single row
-        state->rows.push_back({Value(bind.fetched_body)});
+    // All data is materialized in bind phase
+    for (const auto &row : bind.materialized_rows) {
+        state->rows.push_back(row);
     }
 
     return state;
@@ -408,6 +242,11 @@ struct NextcloudFolderBindData : public TableFunctionData {
     std::string file_type;
     std::string username;
     std::string password;
+    bool all_varchar = false;
+    bool ignore_errors = false;
+    std::string reader_options;
+    std::string sheet;
+    std::string range;
 
     // Discovered files
     std::vector<NextcloudFolderFileInfo> files;
@@ -433,13 +272,16 @@ static bool IsBinaryFileType(const std::string &file_type) {
            file_type == "parquet" || file_type == "arrow" || file_type == "feather";
 }
 
-// Read a binary file (xlsx/parquet/etc.) via DuckDB into column names, types, and rows.
-// Writes content to a temp file, queries it with DuckDB, then cleans up.
+// Unified file reader: writes content to temp file, reads via DuckDB's built-in readers with options.
+// Handles CSV, TSV, Parquet, Arrow, Feather, XLSX, XLS.
 // Returns true on success, false on failure.
-static bool ReadBinaryFileContent(ClientContext &context, const std::string &body, const std::string &file_type,
-                                  std::vector<std::string> &col_names, std::vector<LogicalType> &col_types,
-                                  std::vector<std::vector<Value>> &rows) {
-    std::string temp_path = GenerateTempFilename(file_type);
+static bool ReadFileViaDuckDB(ClientContext &context, const std::string &body, const std::string &file_type,
+                               bool all_varchar, bool ignore_errors, const std::string &reader_options,
+                               const std::string &sheet, const std::string &range,
+                               std::vector<std::string> &col_names, std::vector<LogicalType> &col_types,
+                               std::vector<std::vector<Value>> &rows) {
+    std::string ext = file_type.empty() ? "csv" : file_type;
+    std::string temp_path = GenerateTempFilename(ext);
     std::ofstream out(temp_path, std::ios::binary);
     if (!out) return false;
     out.write(body.data(), body.size());
@@ -449,17 +291,53 @@ static bool ReadBinaryFileContent(ClientContext &context, const std::string &bod
         auto &db = DatabaseInstance::GetDatabase(context);
         Connection conn(db);
 
-        std::string read_func;
-        if (file_type == "xlsx" || file_type == "xls") {
+        // Build the reader expression based on file type
+        std::string read_expr;
+
+        if (ext == "xlsx" || ext == "xls") {
             conn.Query("INSTALL spatial");
             conn.Query("LOAD spatial");
-            read_func = "st_read";
+            read_expr = "st_read('" + temp_path + "'";
+            // Build layer parameter from sheet and/or range
+            if (!sheet.empty() || !range.empty()) {
+                std::string layer = sheet.empty() ? "Sheet1" : sheet;
+                if (!range.empty()) {
+                    layer += "$" + range;
+                }
+                read_expr += ", layer='" + layer + "'";
+            }
+            if (all_varchar) {
+                read_expr += ", open_options=['FIELD_TYPES=STRING']";
+            }
+            if (!reader_options.empty()) {
+                read_expr += ", " + reader_options;
+            }
+            read_expr += ")";
+        } else if (ext == "parquet" || ext == "arrow" || ext == "feather") {
+            read_expr = "read_parquet('" + temp_path + "'";
+            if (!reader_options.empty()) {
+                read_expr += ", " + reader_options;
+            }
+            read_expr += ")";
         } else {
-            read_func = "read_parquet";
+            // CSV/TSV - use DuckDB's read_csv_auto for robust parsing
+            read_expr = "read_csv_auto('" + temp_path + "'";
+            if (all_varchar) {
+                read_expr += ", all_varchar=true";
+            }
+            if (ignore_errors) {
+                read_expr += ", ignore_errors=true";
+            }
+            if (!reader_options.empty()) {
+                read_expr += ", " + reader_options;
+            }
+            read_expr += ")";
         }
 
+        std::string base_query = "SELECT * FROM " + read_expr;
+
         // Get schema
-        auto schema_result = conn.Query("SELECT * FROM " + read_func + "('" + temp_path + "') LIMIT 0");
+        auto schema_result = conn.Query(base_query + " LIMIT 0");
         if (schema_result->HasError()) {
             std::remove(temp_path.c_str());
             return false;
@@ -471,7 +349,7 @@ static bool ReadBinaryFileContent(ClientContext &context, const std::string &bod
         }
 
         // Read all data
-        auto data_result = conn.Query("SELECT * FROM " + read_func + "('" + temp_path + "')");
+        auto data_result = conn.Query(base_query);
         if (data_result->HasError()) {
             std::remove(temp_path.c_str());
             return false;
@@ -522,6 +400,16 @@ static unique_ptr<FunctionData> NextcloudFolderBind(ClientContext &context, Tabl
             result->username = kv.second.ToString();
         } else if (kv.first == "password") {
             result->password = kv.second.ToString();
+        } else if (kv.first == "all_varchar") {
+            result->all_varchar = kv.second.GetValue<bool>();
+        } else if (kv.first == "ignore_errors") {
+            result->ignore_errors = kv.second.GetValue<bool>();
+        } else if (kv.first == "reader_options") {
+            result->reader_options = kv.second.ToString();
+        } else if (kv.first == "sheet") {
+            result->sheet = kv.second.ToString();
+        } else if (kv.first == "range") {
+            result->range = kv.second.ToString();
         }
     }
 
@@ -655,13 +543,17 @@ static unique_ptr<FunctionData> NextcloudFolderBind(ClientContext &context, Tabl
         std::vector<LogicalType> col_types;
         std::vector<std::vector<Value>> rows;
 
-        if (IsBinaryFileType(result->file_type)) {
-            if (!ReadBinaryFileContent(context, body, result->file_type, col_names, col_types, rows)) {
-                throw IOException("Could not read binary file: " + result->files[0].file_name +
+        if (!ReadFileViaDuckDB(context, body, result->file_type, result->all_varchar,
+                               result->ignore_errors, result->reader_options,
+                               result->sheet, result->range,
+                               col_names, col_types, rows)) {
+            // DuckDB reader failed - try custom CSV parser as fallback for text files
+            if (!IsBinaryFileType(result->file_type)) {
+                ParseCSVContent(body, col_names, col_types, rows);
+            } else {
+                throw IOException("Could not read file: " + result->files[0].file_name +
                                   " (for xlsx/xls, the spatial extension must be installed)");
             }
-        } else {
-            ParseCSVContent(body, col_names, col_types, rows);
         }
 
         if (col_names.empty()) {
@@ -735,12 +627,16 @@ static unique_ptr<GlobalTableFunctionState> NextcloudFolderInit(ClientContext &c
         std::vector<LogicalType> col_types;
         std::vector<std::vector<Value>> rows;
 
-        if (IsBinaryFileType(bind.file_type)) {
-            if (!ReadBinaryFileContent(context, body, bind.file_type, col_names, col_types, rows)) {
-                continue;  // Skip files that fail to parse
+        if (!ReadFileViaDuckDB(context, body, bind.file_type, bind.all_varchar,
+                               bind.ignore_errors, bind.reader_options,
+                               bind.sheet, bind.range,
+                               col_names, col_types, rows)) {
+            // Fallback for text files
+            if (!IsBinaryFileType(bind.file_type)) {
+                ParseCSVContent(body, col_names, col_types, rows);
+            } else {
+                continue;  // Skip binary files that fail to parse
             }
-        } else {
-            ParseCSVContent(body, col_names, col_types, rows);
         }
 
         // Skip files with different column count (schema mismatch)
@@ -791,6 +687,11 @@ void RegisterNextcloudFunctions(ExtensionLoader &loader) {
     func.named_parameters["username"] = LogicalType::VARCHAR;
     func.named_parameters["password"] = LogicalType::VARCHAR;
     func.named_parameters["headers"] = LogicalType::VARCHAR;
+    func.named_parameters["all_varchar"] = LogicalType::BOOLEAN;
+    func.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
+    func.named_parameters["reader_options"] = LogicalType::VARCHAR;
+    func.named_parameters["sheet"] = LogicalType::VARCHAR;
+    func.named_parameters["range"] = LogicalType::VARCHAR;
     loader.RegisterFunction(func);
 
     // next_cloud_folder - scan parent folder's company subfolders
@@ -800,6 +701,11 @@ void RegisterNextcloudFunctions(ExtensionLoader &loader) {
     folder_func.named_parameters["file_type"] = LogicalType::VARCHAR;
     folder_func.named_parameters["username"] = LogicalType::VARCHAR;
     folder_func.named_parameters["password"] = LogicalType::VARCHAR;
+    folder_func.named_parameters["all_varchar"] = LogicalType::BOOLEAN;
+    folder_func.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
+    folder_func.named_parameters["reader_options"] = LogicalType::VARCHAR;
+    folder_func.named_parameters["sheet"] = LogicalType::VARCHAR;
+    folder_func.named_parameters["range"] = LogicalType::VARCHAR;
     loader.RegisterFunction(folder_func);
 }
 
