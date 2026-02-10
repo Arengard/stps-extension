@@ -14,7 +14,7 @@ namespace duckdb {
 namespace stps {
 
 // ============================================================================
-// Shared helper: discover and download index.xml from a cloud folder
+// Shared helpers
 // ============================================================================
 
 // Ensure URL ends with /
@@ -23,6 +23,29 @@ static std::string EnsureTrailingSlash(const std::string &url) {
         return url + "/";
     }
     return url;
+}
+
+// Extract server-relative path from a full URL, percent-decoded
+// e.g. "https://host/remote.php/dav/files/User%40org/test/" -> "/remote.php/dav/files/User@org/test/"
+static std::string ExtractDecodedPath(const std::string &url) {
+    std::string decoded = PercentDecodePath(url);
+    size_t scheme_end = decoded.find("://");
+    if (scheme_end == std::string::npos) return decoded;
+    size_t path_start = decoded.find('/', scheme_end + 3);
+    if (path_start == std::string::npos) return "/";
+    return decoded.substr(path_start);
+}
+
+// Normalize a path for comparison: decode + strip trailing slashes
+static std::string NormalizePath(const std::string &path) {
+    std::string decoded = PercentDecodePath(path);
+    while (!decoded.empty() && decoded.back() == '/') decoded.pop_back();
+    return decoded;
+}
+
+// Check if a PROPFIND entry's href matches the parent folder (should be skipped)
+static bool IsParentEntry(const std::string &entry_href, const std::string &parent_url) {
+    return NormalizePath(entry_href) == NormalizePath(ExtractDecodedPath(parent_url));
 }
 
 // Download a file from URL, returns body string. Empty on failure.
@@ -115,29 +138,11 @@ static std::string DiscoverAndDownloadIndexXml(const std::string &folder_url,
     }
 
     // Strategy 3: Search one level of subfolders
-    // Get the parent folder's decoded path for skipping
-    std::string parent_path;
-    {
-        size_t scheme_end = base.find("://");
-        if (scheme_end != std::string::npos) {
-            size_t path_start = base.find('/', scheme_end + 3);
-            if (path_start != std::string::npos) {
-                parent_path = base.substr(path_start);
-            }
-        }
-    }
-
     for (auto &entry : entries) {
         if (!entry.is_collection) continue;
 
-        std::string decoded_href = PercentDecodePath(entry.href);
-
-        // Skip the parent folder itself
-        std::string norm_href = decoded_href;
-        while (!norm_href.empty() && norm_href.back() == '/') norm_href.pop_back();
-        std::string norm_parent = parent_path;
-        while (!norm_parent.empty() && norm_parent.back() == '/') norm_parent.pop_back();
-        if (norm_href == norm_parent) continue;
+        // Skip the parent folder itself (PROPFIND Depth:1 always includes it)
+        if (IsParentEntry(entry.href, base)) continue;
 
         // PROPFIND this subfolder
         std::string subfolder_url = server_base + entry.href;
@@ -360,37 +365,25 @@ static unique_ptr<FunctionData> GobdCloudFolderBind(ClientContext &context, Tabl
     auto entries = PropfindFolder(parent_url, username, password);
 
     if (entries.empty()) {
-        throw IOException("Could not list parent folder: " + parent_url);
-    }
-
-    // Compute parent path for skipping
-    std::string parent_path;
-    {
-        size_t scheme_end = parent_url.find("://");
-        if (scheme_end != std::string::npos) {
-            size_t path_start = parent_url.find('/', scheme_end + 3);
-            if (path_start != std::string::npos) {
-                parent_path = parent_url.substr(path_start);
-            }
-        }
+        throw IOException("Could not list parent folder (PROPFIND failed or empty): " + parent_url);
     }
 
     bool schema_detected = false;
+    idx_t mandants_scanned = 0;
+    idx_t mandants_with_index = 0;
+    idx_t mandants_with_table = 0;
 
     for (auto &entry : entries) {
         if (!entry.is_collection) continue;
 
+        // Skip the parent folder itself (PROPFIND Depth:1 always includes it)
+        if (IsParentEntry(entry.href, parent_url)) continue;
+
         std::string decoded_href = PercentDecodePath(entry.href);
         std::string mandant_name = GetLastPathSegment(decoded_href);
-
-        // Skip the parent folder itself
-        std::string norm_href = decoded_href;
-        while (!norm_href.empty() && norm_href.back() == '/') norm_href.pop_back();
-        std::string norm_parent = parent_path;
-        while (!norm_parent.empty() && norm_parent.back() == '/') norm_parent.pop_back();
-        if (norm_href == norm_parent) continue;
-
         if (mandant_name.empty()) continue;
+
+        mandants_scanned++;
 
         // Build target folder URL
         std::string target_url = server_base + entry.href;
@@ -404,6 +397,8 @@ static unique_ptr<FunctionData> GobdCloudFolderBind(ClientContext &context, Tabl
         std::string xml_content = DiscoverAndDownloadIndexXml(target_url, username, password, index_base_url);
         if (xml_content.empty()) continue;
 
+        mandants_with_index++;
+
         // Parse tables
         auto tables = ParseGobdIndexFromString(xml_content);
 
@@ -416,6 +411,8 @@ static unique_ptr<FunctionData> GobdCloudFolderBind(ClientContext &context, Tabl
             }
         }
         if (!found_table) continue;
+
+        mandants_with_table++;
 
         // On first success, establish schema
         if (!schema_detected) {
@@ -460,17 +457,56 @@ static unique_ptr<FunctionData> GobdCloudFolderBind(ClientContext &context, Tabl
         }
     }
 
+    // If nothing was found, throw a helpful error instead of silently returning empty
+    if (!schema_detected) {
+        std::string detail = "Scanned " + std::to_string(mandants_scanned) + " subfolders";
+        if (mandants_scanned == 0) {
+            detail += " (no subfolders found in parent folder)";
+        } else if (mandants_with_index == 0) {
+            detail += ", none contained index.xml";
+            if (!child_folder.empty()) {
+                detail += " (child_folder='" + child_folder + "')";
+            }
+        } else if (mandants_with_table == 0) {
+            detail += ", " + std::to_string(mandants_with_index) + " had index.xml but none contained table '" + table_name + "'";
+            // Try to list available tables from first index.xml found
+            // (re-scan to give helpful error)
+            for (auto &entry : entries) {
+                if (!entry.is_collection) continue;
+                if (IsParentEntry(entry.href, parent_url)) continue;
+
+                std::string target_url = server_base + entry.href;
+                if (target_url.back() != '/') target_url += '/';
+                if (!child_folder.empty()) target_url += child_folder + "/";
+
+                std::string index_base_url;
+                std::string xml_content = DiscoverAndDownloadIndexXml(target_url, username, password, index_base_url);
+                if (xml_content.empty()) continue;
+
+                auto tables = ParseGobdIndexFromString(xml_content);
+                if (!tables.empty()) {
+                    detail += ". Available tables: ";
+                    for (size_t i = 0; i < tables.size() && i < 10; i++) {
+                        if (i > 0) detail += ", ";
+                        detail += tables[i].name;
+                    }
+                    if (tables.size() > 10) detail += ", ...";
+                    break;
+                }
+            }
+        }
+        throw IOException("No GoBD data found. " + detail + ". URL: " + parent_url);
+    }
+
     // Build return schema
     names.push_back("parent_folder");
     return_types.push_back(LogicalType::VARCHAR);
     names.push_back("child_folder");
     return_types.push_back(LogicalType::VARCHAR);
 
-    if (schema_detected) {
-        for (const auto &col_name : result->column_names) {
-            names.push_back(col_name);
-            return_types.push_back(LogicalType::VARCHAR);
-        }
+    for (const auto &col_name : result->column_names) {
+        names.push_back(col_name);
+        return_types.push_back(LogicalType::VARCHAR);
     }
 
     return std::move(result);
