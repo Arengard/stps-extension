@@ -14,6 +14,82 @@ namespace duckdb {
 namespace stps {
 
 // ============================================================================
+// Encoding helpers
+// ============================================================================
+
+// Check if a string is valid UTF-8
+static bool IsValidUtf8(const std::string &str) {
+    const unsigned char *bytes = reinterpret_cast<const unsigned char *>(str.data());
+    size_t len = str.size();
+    for (size_t i = 0; i < len; ) {
+        if (bytes[i] <= 0x7F) {
+            i++;
+        } else if ((bytes[i] & 0xE0) == 0xC0) {
+            if (i + 1 >= len || (bytes[i + 1] & 0xC0) != 0x80) return false;
+            i += 2;
+        } else if ((bytes[i] & 0xF0) == 0xE0) {
+            if (i + 2 >= len || (bytes[i + 1] & 0xC0) != 0x80 || (bytes[i + 2] & 0xC0) != 0x80) return false;
+            i += 3;
+        } else if ((bytes[i] & 0xF8) == 0xF0) {
+            if (i + 3 >= len || (bytes[i + 1] & 0xC0) != 0x80 || (bytes[i + 2] & 0xC0) != 0x80 || (bytes[i + 3] & 0xC0) != 0x80) return false;
+            i += 4;
+        } else {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Windows-1252 code points for bytes 0x80-0x9F (the ones that differ from Latin-1)
+static const uint16_t CP1252_MAP[32] = {
+    0x20AC, 0x0081, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021,  // 80-87
+    0x02C6, 0x2030, 0x0160, 0x2039, 0x0152, 0x008D, 0x017D, 0x008F,  // 88-8F
+    0x0090, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014,  // 90-97
+    0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0x009D, 0x017E, 0x0178   // 98-9F
+};
+
+// Encode a Unicode code point as UTF-8 and append to output
+static void AppendUtf8(std::string &out, uint32_t cp) {
+    if (cp <= 0x7F) {
+        out.push_back(static_cast<char>(cp));
+    } else if (cp <= 0x7FF) {
+        out.push_back(static_cast<char>(0xC0 | (cp >> 6)));
+        out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+    } else if (cp <= 0xFFFF) {
+        out.push_back(static_cast<char>(0xE0 | (cp >> 12)));
+        out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+    }
+}
+
+// Convert a Windows-1252 encoded string to UTF-8
+static std::string ConvertWindows1252ToUtf8(const std::string &input) {
+    std::string output;
+    output.reserve(input.size() * 2);  // worst case: all 2-byte UTF-8
+
+    for (unsigned char c : input) {
+        if (c <= 0x7F) {
+            output.push_back(static_cast<char>(c));
+        } else if (c >= 0x80 && c <= 0x9F) {
+            // Special Windows-1252 range
+            AppendUtf8(output, CP1252_MAP[c - 0x80]);
+        } else {
+            // 0xA0-0xFF: same code point as Unicode (Latin-1 supplement)
+            AppendUtf8(output, c);
+        }
+    }
+    return output;
+}
+
+// Ensure a string is valid UTF-8. If not, convert from Windows-1252.
+static std::string EnsureUtf8(const std::string &input) {
+    if (IsValidUtf8(input)) {
+        return input;
+    }
+    return ConvertWindows1252ToUtf8(input);
+}
+
+// ============================================================================
 // Shared helpers
 // ============================================================================
 
@@ -252,6 +328,9 @@ static unique_ptr<FunctionData> GobdCloudReaderBind(ClientContext &context, Tabl
         throw IOException("Could not download CSV file: " + csv_url);
     }
 
+    // Convert encoding to UTF-8 if needed (GoBD exports are often Windows-1252)
+    result->csv_content = EnsureUtf8(result->csv_content);
+
     // Build schema - all VARCHAR (matching local reader)
     for (const auto &col : found_table->columns) {
         result->column_names.push_back(col.name);
@@ -430,6 +509,9 @@ static unique_ptr<FunctionData> GobdCloudFolderBind(ClientContext &context, Tabl
         std::string csv_url = EnsureTrailingSlash(index_base_url) + found_table->url;
         std::string csv_content = DownloadFile(csv_url, username, password);
         if (csv_content.empty()) continue;
+
+        // Convert encoding to UTF-8 if needed (GoBD exports are often Windows-1252)
+        csv_content = EnsureUtf8(csv_content);
 
         // Parse CSV lines
         std::istringstream stream(csv_content);
