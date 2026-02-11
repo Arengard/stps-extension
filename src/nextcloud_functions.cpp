@@ -69,7 +69,8 @@ static bool ReadFileViaDuckDB(ClientContext &context, const std::string &body, c
                                bool all_varchar, bool ignore_errors, const std::string &reader_options,
                                const std::string &sheet, const std::string &range,
                                std::vector<std::string> &col_names, std::vector<LogicalType> &col_types,
-                               std::vector<std::vector<Value>> &rows);
+                               std::vector<std::vector<Value>> &rows,
+                               std::string *error_out = nullptr);
 
 static unique_ptr<FunctionData> NextcloudBind(ClientContext &context, TableFunctionBindInput &input,
                                              vector<LogicalType> &return_types, vector<string> &names) {
@@ -291,7 +292,8 @@ static bool ReadFileViaDuckDB(ClientContext &context, const std::string &body, c
                                bool all_varchar, bool ignore_errors, const std::string &reader_options,
                                const std::string &sheet, const std::string &range,
                                std::vector<std::string> &col_names, std::vector<LogicalType> &col_types,
-                               std::vector<std::vector<Value>> &rows) {
+                               std::vector<std::vector<Value>> &rows,
+                               std::string *error_out) {
     std::string ext = file_type.empty() ? "csv" : file_type;
     std::string temp_path = GenerateTempFilename(ext);
     std::ofstream out(temp_path, std::ios::binary);
@@ -351,6 +353,7 @@ static bool ReadFileViaDuckDB(ClientContext &context, const std::string &body, c
         // Get schema
         auto schema_result = conn.Query(base_query + " LIMIT 0");
         if (schema_result->HasError()) {
+            if (error_out) *error_out = schema_result->GetError();
             std::remove(temp_path.c_str());
             return false;
         }
@@ -363,6 +366,7 @@ static bool ReadFileViaDuckDB(ClientContext &context, const std::string &body, c
         // Read all data
         auto data_result = conn.Query(base_query);
         if (data_result->HasError()) {
+            if (error_out) *error_out = data_result->GetError();
             std::remove(temp_path.c_str());
             return false;
         }
@@ -381,7 +385,12 @@ static bool ReadFileViaDuckDB(ClientContext &context, const std::string &body, c
 
         std::remove(temp_path.c_str());
         return true;
+    } catch (std::exception &e) {
+        if (error_out) *error_out = e.what();
+        std::remove(temp_path.c_str());
+        return false;
     } catch (...) {
+        if (error_out) *error_out = "Unknown error reading file";
         std::remove(temp_path.c_str());
         return false;
     }
@@ -555,16 +564,17 @@ static unique_ptr<FunctionData> NextcloudFolderBind(ClientContext &context, Tabl
         std::vector<LogicalType> col_types;
         std::vector<std::vector<Value>> rows;
 
+        std::string read_error;
         if (!ReadFileViaDuckDB(context, body, result->file_type, result->all_varchar,
                                result->ignore_errors, result->reader_options,
                                result->sheet, result->range,
-                               col_names, col_types, rows)) {
+                               col_names, col_types, rows, &read_error)) {
             // DuckDB reader failed - try custom CSV parser as fallback for text files
             if (!IsBinaryFileType(result->file_type)) {
                 ParseCSVContent(body, col_names, col_types, rows);
             } else {
                 throw IOException("Could not read file: " + result->files[0].file_name +
-                                  " (for xlsx/xls, the spatial extension must be installed)");
+                                  (read_error.empty() ? "" : " - " + read_error));
             }
         }
 
