@@ -314,7 +314,22 @@ static bool ReadFileViaDuckDB(ClientContext &context, const std::string &body, c
             read_expr = "st_read('" + temp_path + "'";
             // Build layer parameter from sheet and/or range
             if (!sheet.empty() || !range.empty()) {
-                std::string layer = sheet.empty() ? "Sheet1" : sheet;
+                std::string layer;
+                if (!sheet.empty()) {
+                    layer = sheet;
+                } else {
+                    // Auto-detect the first sheet name instead of hardcoding "Sheet1"
+                    auto layers_result = conn.Query("SELECT name FROM st_layers('" + temp_path + "') LIMIT 1");
+                    if (layers_result && !layers_result->HasError()) {
+                        auto chunk = layers_result->Fetch();
+                        if (chunk && chunk->size() > 0) {
+                            layer = chunk->GetValue(0, 0).ToString();
+                        }
+                    }
+                    if (layer.empty()) {
+                        layer = "Sheet1"; // fallback if detection fails
+                    }
+                }
                 if (!range.empty()) {
                     layer += "$" + range;
                 }
@@ -353,7 +368,26 @@ static bool ReadFileViaDuckDB(ClientContext &context, const std::string &body, c
         // Get schema
         auto schema_result = conn.Query(base_query + " LIMIT 0");
         if (schema_result->HasError()) {
-            if (error_out) *error_out = schema_result->GetError();
+            std::string err = schema_result->GetError();
+            // If layer not found for Excel files, list available sheets in error
+            if ((ext == "xlsx" || ext == "xls") && err.find("could not be found") != std::string::npos) {
+                auto layers_result = conn.Query("SELECT name FROM st_layers('" + temp_path + "')");
+                if (layers_result && !layers_result->HasError()) {
+                    std::string available;
+                    while (true) {
+                        auto chunk = layers_result->Fetch();
+                        if (!chunk || chunk->size() == 0) break;
+                        for (idx_t r = 0; r < chunk->size(); r++) {
+                            if (!available.empty()) available += ", ";
+                            available += "'" + chunk->GetValue(0, r).ToString() + "'";
+                        }
+                    }
+                    if (!available.empty()) {
+                        err += " (available sheets: " + available + ")";
+                    }
+                }
+            }
+            if (error_out) *error_out = err;
             std::remove(temp_path.c_str());
             return false;
         }
