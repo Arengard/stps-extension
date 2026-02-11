@@ -271,6 +271,7 @@ struct NextcloudFolderBindData : public TableFunctionData {
     // Materialized rows from first file (transferred to init)
     std::vector<std::vector<Value>> first_file_rows;
     idx_t first_file_col_count = 0;
+    idx_t schema_file_idx = 0;  // Index of file used for schema detection
 };
 
 struct NextcloudFolderGlobalState : public GlobalTableFunctionState {
@@ -621,17 +622,17 @@ static unique_ptr<FunctionData> NextcloudFolderBind(ClientContext &context, Tabl
         return result;
     }
 
-    // Step 3: Download the first file to detect schema
-    {
+    // Step 3: Loop through files to find the first one with data rows for schema detection
+    for (size_t schema_idx = 0; schema_idx < result->files.size(); schema_idx++) {
         CurlHeaders headers;
         BuildAuthHeaders(headers, result->username, result->password);
 
         long http_code = 0;
-        std::string request_url = NormalizeRequestUrl(result->files[0].download_url);
+        std::string request_url = NormalizeRequestUrl(result->files[schema_idx].download_url);
         std::string body = curl_get(request_url, headers, &http_code);
 
         if (body.find("ERROR:") == 0 || http_code >= 400 || body.empty()) {
-            throw IOException("Failed to download first file for schema detection: " + result->files[0].download_url);
+            continue;  // Skip files that fail to download
         }
 
         std::vector<std::string> col_names;
@@ -643,17 +644,15 @@ static unique_ptr<FunctionData> NextcloudFolderBind(ClientContext &context, Tabl
                                result->ignore_errors, result->reader_options,
                                result->sheet, result->range,
                                col_names, col_types, rows, &read_error)) {
-            // DuckDB reader failed - try custom CSV parser as fallback for text files
             if (!IsBinaryFileType(result->file_type)) {
                 ParseCSVContent(body, col_names, col_types, rows);
             } else {
-                throw IOException("Could not read file: " + result->files[0].file_name +
-                                  (read_error.empty() ? "" : " - " + read_error));
+                continue;  // Skip binary files that fail to parse
             }
         }
 
-        if (col_names.empty()) {
-            throw IOException("Could not detect schema from first file: " + result->files[0].file_name);
+        if (col_names.empty() || rows.empty()) {
+            continue;  // Skip files with no columns or no data rows (header-only)
         }
 
         // Normalize column names to snake_case
@@ -664,18 +663,27 @@ static unique_ptr<FunctionData> NextcloudFolderBind(ClientContext &context, Tabl
         result->column_names = col_names;
         result->column_types = col_types;
         result->first_file_col_count = col_names.size();
+        result->schema_file_idx = schema_idx;
 
         // Store first file rows with metadata prepended
         for (auto &row : rows) {
             std::vector<Value> full_row;
-            full_row.push_back(Value(result->files[0].parent_folder));
-            full_row.push_back(Value(result->files[0].child_folder));
-            full_row.push_back(Value(result->files[0].file_name));
+            full_row.push_back(Value(result->files[schema_idx].parent_folder));
+            full_row.push_back(Value(result->files[schema_idx].child_folder));
+            full_row.push_back(Value(result->files[schema_idx].file_name));
             for (auto &val : row) {
                 full_row.push_back(std::move(val));
             }
             result->first_file_rows.push_back(std::move(full_row));
         }
+        break;  // Found a valid file with data, stop searching
+    }
+
+    // If no file with data was found, return minimal schema
+    if (result->column_names.empty()) {
+        names = {"parent_folder", "child_folder", "file_name"};
+        return_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR};
+        return result;
     }
 
     // Build return schema: metadata columns + data columns
@@ -703,8 +711,8 @@ static unique_ptr<GlobalTableFunctionState> NextcloudFolderInit(ClientContext &c
         state->rows.push_back(row);
     }
 
-    // Download and parse remaining files (index 1+)
-    for (size_t file_idx = 1; file_idx < bind.files.size(); file_idx++) {
+    // Download and parse remaining files (skip files up to and including the schema file)
+    for (size_t file_idx = bind.schema_file_idx + 1; file_idx < bind.files.size(); file_idx++) {
         auto &file_info = bind.files[file_idx];
 
         CurlHeaders headers;
@@ -737,6 +745,11 @@ static unique_ptr<GlobalTableFunctionState> NextcloudFolderInit(ClientContext &c
 
         // Skip files with different column count (schema mismatch)
         if (col_names.size() != bind.first_file_col_count) {
+            continue;
+        }
+
+        // Skip files with no data rows (header-only or empty)
+        if (rows.empty()) {
             continue;
         }
 
