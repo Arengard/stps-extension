@@ -778,6 +778,7 @@ SELECT * FROM gobd_table_schema_cloud(
 - `index.xml` discovery: tries `<url>/index.xml` first, then PROPFIND listing, then one subfolder level.
 - All data columns are returned as VARCHAR (matching the local `stps_read_gobd` behavior).
 - Authentication uses HTTP Basic Auth via `username`/`password` parameters.
+- **Encoding:** Automatically detects and converts Windows-1252 (CP1252) encoded CSV files to UTF-8. This is common for GoBD/GDPDU exports from German accounting software (Navision, DATEV, etc.).
 
 ---
 
@@ -1152,60 +1153,91 @@ See [LICENSE](LICENSE) file.
 cd C:\stps-extension
 cmake --build build/release --config Release---
 
-## Nextcloud/WebDAV table function
+## Nextcloud/WebDAV table functions
 
-Fetch a file directly over WebDAV and auto-handle by suffix:
+### `next_cloud(url VARCHAR, ...) → TABLE`
 
-- CSV/TSV: parsed in-memory and returned as rows
-- parquet/arrow/feather: downloaded to a temp file; you get `extracted_path`, `file_type`, `usage_hint`
-- xlsx/xls: downloaded to a temp file with a usage hint (open via Excel reader extension)
-- Any other type: raw content string
+Fetch a file directly over WebDAV and return it as a table. File type is auto-detected from the URL extension. All file types are parsed via DuckDB's built-in readers (`read_csv_auto`, `read_parquet`, `st_read`).
 
-### Examples
+**Supported formats:** CSV, TSV, Parquet, Arrow, Feather, XLSX, XLS
+
+**Named Parameters:**
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `username` | VARCHAR | | WebDAV/Nextcloud username |
+| `password` | VARCHAR | | WebDAV/Nextcloud password |
+| `headers` | VARCHAR | | Extra HTTP headers (newline-separated) |
+| `all_varchar` | BOOLEAN | false | Read all columns as VARCHAR (avoids type cast errors) |
+| `ignore_errors` | BOOLEAN | false | Skip rows that fail to parse (CSV only) |
+| `sheet` | VARCHAR | | Excel sheet name (XLSX/XLS only) |
+| `range` | VARCHAR | | Excel cell range, e.g. `'A1:D100'` (XLSX/XLS only) |
+| `reader_options` | VARCHAR | | Additional DuckDB reader options passed through verbatim |
+
 ```sql
--- Public CSV
-SELECT * FROM next_cloud('https://daten.example.cloud/path/file.csv');
-
--- CSV (already worked)
+-- CSV with auto-detected types
 SELECT * FROM next_cloud('https://your-server/path/file.csv', username:='user', password:='pass');
 
--- Parquet (now returns actual data!)
+-- Parquet
 SELECT * FROM next_cloud('https://your-server/path/file.parquet', username:='user', password:='pass');
 
--- Excel (returns actual data if spatial extension is available)
-SELECT * FROM next_cloud('https://your-server/path/file.xlsx', username:='user', password:='pass');
-
--- Basic auth
-SELECT *
-FROM next_cloud(
-  'https://daten.example.cloud/path/file.csv',
-  username:='myuser',
-  password:='mypassword'
+-- Excel with all columns as text (avoids type errors from totals rows)
+SELECT * FROM next_cloud(
+  'https://your-server/path/file.xlsx',
+  username := 'user',
+  password := 'pass',
+  all_varchar := true
 );
 
--- Custom headers (newline-separated list)
-SELECT *
-FROM next_cloud(
-  'https://daten.example.cloud/path/file.csv',
-  headers:='X-API-Key: abc123\nAccept: text/csv'
+-- Excel: specific sheet and range
+SELECT * FROM next_cloud(
+  'https://your-server/path/file.xlsx',
+  username := 'user',
+  password := 'pass',
+  sheet := 'Buchungen',
+  range := 'A1:F500'
 );
 
--- Parquet download: returns temp path and hint
-SELECT * FROM next_cloud('https://daten.example.cloud/path/file.parquet');
+-- CSV with custom reader options
+SELECT * FROM next_cloud(
+  'https://your-server/path/file.csv',
+  username := 'user',
+  password := 'pass',
+  reader_options := 'delim='';'', header=true'
+);
+
+-- Custom headers (bearer token, etc.)
+SELECT * FROM next_cloud(
+  'https://daten.example.cloud/path/file.csv',
+  headers := 'X-API-Key: abc123'
+);
 ```
 
 Notes:
 - Uses HTTP GET via libcurl; `username`/`password` map to Basic Auth.
 - `headers` lets you pass bearer tokens, extra headers, etc. (one header per line).
-- Temp files are created under the extension temp directory; follow the returned `usage_hint` to load them.
+- XLSX/XLS requires the DuckDB `spatial` extension (auto-installed).
+- If `read_csv_auto` fails for CSV files, falls back to a built-in CSV parser (all VARCHAR).
 
-### `next_cloud_folder(parent_url VARCHAR, child_folder := VARCHAR, file_type := VARCHAR, username := VARCHAR, password := VARCHAR)` → TABLE
+### `next_cloud_folder(parent_url VARCHAR, ...) → TABLE`
 
 Scan a Nextcloud/WebDAV parent folder, enter each company subfolder's `child_folder`, read all matching files, and return a unified table with metadata columns.
 
-The function uses WebDAV PROPFIND to discover subfolders and files. Column names from CSV files are normalized to snake_case.
+The function uses WebDAV PROPFIND to discover subfolders and files. Column names are normalized to snake_case.
 
-**Returns:** `parent_folder`, `child_folder`, `file_name`, plus all data columns from the CSV files.
+**Returns:** `parent_folder`, `child_folder`, `file_name`, plus all data columns.
+
+**Named Parameters:**
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `child_folder` | VARCHAR | | Subfolder within each company folder to look in |
+| `file_type` | VARCHAR | `csv` | File extension to match (`csv`, `xlsx`, `parquet`, etc.) |
+| `username` | VARCHAR | | WebDAV/Nextcloud username |
+| `password` | VARCHAR | | WebDAV/Nextcloud password |
+| `all_varchar` | BOOLEAN | false | Read all columns as VARCHAR (avoids type cast errors) |
+| `ignore_errors` | BOOLEAN | false | Skip rows that fail to parse (CSV only) |
+| `sheet` | VARCHAR | | Excel sheet name (XLSX/XLS only) |
+| `range` | VARCHAR | | Excel cell range, e.g. `'A1:D100'` (XLSX/XLS only) |
+| `reader_options` | VARCHAR | | Additional DuckDB reader options passed through verbatim |
 
 ```sql
 -- Read all CSV files from each company's "bank" subfolder
@@ -1218,12 +1250,25 @@ FROM next_cloud_folder(
   password := 'mypassword'
 );
 
--- List which companies and files were found
-SELECT DISTINCT parent_folder, child_folder, file_name
+-- Read XLSX files with all_varchar to avoid type errors (e.g. totals rows)
+SELECT *
 FROM next_cloud_folder(
   'https://cloud.example.com/remote.php/dav/files/user/mandanten',
-  child_folder := 'bank',
-  file_type := 'csv',
+  child_folder := 'Bank',
+  file_type := 'xlsx',
+  all_varchar := true,
+  username := 'myuser',
+  password := 'mypassword'
+);
+
+-- XLSX with specific sheet
+SELECT *
+FROM next_cloud_folder(
+  'https://cloud.example.com/remote.php/dav/files/user/mandanten',
+  child_folder := 'Bank',
+  file_type := 'xlsx',
+  all_varchar := true,
+  sheet := 'Buchungen',
   username := 'myuser',
   password := 'mypassword'
 );
@@ -1241,10 +1286,11 @@ FROM next_cloud_folder(
 Notes:
 - Uses WebDAV PROPFIND to list directories; requires Nextcloud or any WebDAV-compatible server.
 - `child_folder` is optional. If omitted, files are read directly from each company subfolder.
-- `file_type` defaults to `csv`. Only CSV is currently supported.
+- `file_type` defaults to `csv`. Supports: `csv`, `tsv`, `xlsx`, `xls`, `parquet`, `arrow`, `feather`.
 - The schema is determined by the first file found. Files with a different column count are silently skipped.
 - Companies where `child_folder` does not exist are silently skipped.
 - Column names are normalized to snake_case (like DuckDB's `normalize_names=true`).
+- For XLSX files with totals/summary rows that cause type errors, use `all_varchar := true`.
 
 ---
 
