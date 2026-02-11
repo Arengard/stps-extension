@@ -517,6 +517,7 @@ static unique_ptr<FunctionData> NextcloudFolderBind(ClientContext &context, Tabl
     std::string base_url = GetBaseUrl(result->parent_url);
 
     // Step 1: PROPFIND the parent folder to list company subfolders
+    std::vector<PropfindEntry> parent_entries;
     {
         CurlHeaders headers;
         BuildAuthHeaders(headers, result->username, result->password);
@@ -534,10 +535,10 @@ static unique_ptr<FunctionData> NextcloudFolderBind(ClientContext &context, Tabl
             throw IOException(GetHttpErrorMessage(http_code, result->parent_url));
         }
 
-        auto entries = ParsePropfindResponse(response);
+        parent_entries = ParsePropfindResponse(response);
 
         // For each collection entry (skip the parent itself), PROPFIND child_folder
-        for (auto &entry : entries) {
+        for (auto &entry : parent_entries) {
             if (!entry.is_collection) continue;
 
             std::string decoded_href = PercentDecodePath(entry.href);
@@ -612,6 +613,32 @@ static unique_ptr<FunctionData> NextcloudFolderBind(ClientContext &context, Tabl
                 info.download_url = base_url + file_entry.href;
                 result->files.push_back(info);
             }
+        }
+    }
+
+    // Fallback: if no files found in subfolders, check for files directly in the parent folder
+    if (result->files.empty() && !parent_entries.empty()) {
+        std::string ext_suffix = "." + result->file_type;
+        std::string parent_folder_name = GetLastPathSegment(
+            PercentDecodePath(result->parent_url));
+
+        for (auto &entry : parent_entries) {
+            if (entry.is_collection) continue;
+
+            std::string file_href_decoded = PercentDecodePath(entry.href);
+            std::string file_name = GetLastPathSegment(file_href_decoded);
+
+            if (file_name.size() <= ext_suffix.size()) continue;
+            std::string file_ext = file_name.substr(file_name.size() - ext_suffix.size());
+            std::transform(file_ext.begin(), file_ext.end(), file_ext.begin(), ::tolower);
+            if (file_ext != ext_suffix) continue;
+
+            NextcloudFolderFileInfo info;
+            info.parent_folder = parent_folder_name;
+            info.child_folder = "";
+            info.file_name = file_name;
+            info.download_url = base_url + entry.href;
+            result->files.push_back(info);
         }
     }
 
