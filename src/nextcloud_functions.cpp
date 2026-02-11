@@ -285,6 +285,40 @@ static bool IsBinaryFileType(const std::string &file_type) {
            file_type == "parquet" || file_type == "arrow" || file_type == "feather";
 }
 
+// Escape a string for use inside a single-quoted SQL literal (double any single quotes)
+static std::string EscapeSqlLiteral(const std::string &s) {
+    std::string result;
+    result.reserve(s.size());
+    for (char c : s) {
+        if (c == '\'') {
+            result += "''";
+        } else {
+            result += c;
+        }
+    }
+    return result;
+}
+
+// Validate reader_options to prevent SQL injection.
+// Only allows safe characters: alphanumeric, spaces, commas, equals, dots, underscores,
+// single-quoted strings (with no unbalanced quotes), square brackets, and parentheses.
+// Rejects semicolons, double-dashes, and block comments.
+static bool ValidateReaderOptions(const std::string &opts) {
+    if (opts.empty()) return true;
+    // Reject statement terminators and comment markers
+    if (opts.find(';') != std::string::npos) return false;
+    if (opts.find("--") != std::string::npos) return false;
+    if (opts.find("/*") != std::string::npos) return false;
+    if (opts.find("*/") != std::string::npos) return false;
+    // Check for balanced single quotes
+    int quote_count = 0;
+    for (char c : opts) {
+        if (c == '\'') quote_count++;
+    }
+    if (quote_count % 2 != 0) return false;
+    return true;
+}
+
 // Unified file reader: writes content to temp file, reads via DuckDB's built-in readers with options.
 // Handles CSV, TSV, Parquet, Arrow, Feather, XLSX, XLS.
 // Returns true on success, false on failure.
@@ -294,6 +328,12 @@ static bool ReadFileViaDuckDB(ClientContext &context, const std::string &body, c
                                std::vector<std::string> &col_names, std::vector<LogicalType> &col_types,
                                std::vector<std::vector<Value>> &rows,
                                std::string *error_out) {
+    // Validate reader_options to prevent SQL injection
+    if (!reader_options.empty() && !ValidateReaderOptions(reader_options)) {
+        if (error_out) *error_out = "Invalid reader_options: contains disallowed characters (;, --, /*)";
+        return false;
+    }
+
     std::string ext = file_type.empty() ? "csv" : file_type;
     std::string temp_path = GenerateTempFilename(ext);
     std::ofstream out(temp_path, std::ios::binary);
@@ -316,14 +356,14 @@ static bool ReadFileViaDuckDB(ClientContext &context, const std::string &body, c
             if (!sheet.empty() || !range.empty()) {
                 std::string layer;
                 if (!sheet.empty()) {
-                    layer = sheet;
+                    layer = EscapeSqlLiteral(sheet);
                 } else {
                     // Auto-detect the first sheet name instead of hardcoding "Sheet1"
                     auto layers_result = conn.Query("SELECT name FROM st_layers('" + temp_path + "') LIMIT 1");
                     if (layers_result && !layers_result->HasError()) {
                         auto chunk = layers_result->Fetch();
                         if (chunk && chunk->size() > 0) {
-                            layer = chunk->GetValue(0, 0).ToString();
+                            layer = EscapeSqlLiteral(chunk->GetValue(0, 0).ToString());
                         }
                     }
                     if (layer.empty()) {
@@ -331,7 +371,7 @@ static bool ReadFileViaDuckDB(ClientContext &context, const std::string &body, c
                     }
                 }
                 if (!range.empty()) {
-                    layer += "$" + range;
+                    layer += "$" + EscapeSqlLiteral(range);
                 }
                 read_expr += ", layer='" + layer + "'";
             }

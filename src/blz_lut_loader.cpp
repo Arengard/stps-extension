@@ -10,6 +10,10 @@
 #include <sys/stat.h>
 #include <zlib.h>
 
+#ifdef HAVE_CURL
+#include <curl/curl.h>
+#endif
+
 #ifdef _WIN32
 #include <direct.h>
 #define mkdir(path, mode) _mkdir(path)
@@ -17,6 +21,16 @@
 
 namespace duckdb {
 namespace stps {
+
+#ifdef HAVE_CURL
+// Curl write callback that writes downloaded data to an ofstream
+static size_t BlzLutFileWriteCallback(char *contents, size_t size, size_t nmemb, void *userp) {
+    auto *file = static_cast<std::ofstream *>(userp);
+    size_t total = size * nmemb;
+    file->write(contents, total);
+    return file->good() ? total : 0;
+}
+#endif
 
 BlzLutLoader::BlzLutLoader() : is_loaded_(false), entry_count_(0) {
 }
@@ -86,31 +100,53 @@ bool BlzLutLoader::DownloadLutFile(const std::string& dest_path) {
 
         std::cout << "Downloading BLZ LUT file from " << LUT_DOWNLOAD_URL << "..." << std::endl;
 
-        // Open output file
+#ifdef HAVE_CURL
+        // Use libcurl directly instead of system() to avoid command injection
+        CURL *curl = curl_easy_init();
+        if (!curl) {
+            std::cerr << "Failed to initialize libcurl" << std::endl;
+            return false;
+        }
+
         std::ofstream output_file(dest_path, std::ios::binary);
         if (!output_file) {
+            curl_easy_cleanup(curl);
             std::cerr << "Failed to open output file: " << dest_path << std::endl;
             return false;
         }
 
-        // Use curl or wget as fallback for now
-        // TODO: Use DuckDB's HTTP client once we have proper context
-        std::string download_cmd = "curl -L -o \"" + dest_path + "\" \"" + LUT_DOWNLOAD_URL + "\"";
+        curl_easy_setopt(curl, CURLOPT_URL, LUT_DOWNLOAD_URL);
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, BlzLutFileWriteCallback);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &output_file);
+        curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+        curl_easy_setopt(curl, CURLOPT_TIMEOUT, 60L);
 
-        int result = system(download_cmd.c_str());
-        if (result != 0) {
-            std::cerr << "Failed to download LUT file using curl, trying wget..." << std::endl;
-            download_cmd = "wget -O \"" + dest_path + "\" \"" + LUT_DOWNLOAD_URL + "\"";
-            result = system(download_cmd.c_str());
+        CURLcode res = curl_easy_perform(curl);
+        long http_code = 0;
+        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+        curl_easy_cleanup(curl);
+        output_file.close();
 
-            if (result != 0) {
-                std::cerr << "Failed to download LUT file with both curl and wget" << std::endl;
-                return false;
-            }
+        if (res != CURLE_OK) {
+            std::cerr << "Failed to download LUT file: " << curl_easy_strerror(res) << std::endl;
+            std::remove(dest_path.c_str());
+            return false;
+        }
+
+        if (http_code < 200 || http_code >= 300) {
+            std::cerr << "Failed to download LUT file: HTTP " << http_code << std::endl;
+            std::remove(dest_path.c_str());
+            return false;
         }
 
         std::cout << "Successfully downloaded BLZ LUT file to " << dest_path << std::endl;
         return true;
+#else
+        std::cerr << "Cannot download BLZ LUT file: libcurl not available." << std::endl;
+        std::cerr << "Please download manually from " << LUT_DOWNLOAD_URL
+                  << " and place it at " << dest_path << std::endl;
+        return false;
+#endif
 
     } catch (const std::exception& e) {
         std::cerr << "Error downloading LUT file: " << e.what() << std::endl;
