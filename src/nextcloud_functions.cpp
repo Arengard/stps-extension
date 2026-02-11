@@ -64,6 +64,12 @@ static std::string GenerateTempFilename(const std::string &ext) {
     return temp_dir + "/nextcloud_" + std::to_string(ms) + "_" + std::to_string(dis(gen)) + "." + ext;
 }
 
+// Forward declaration
+static bool ReadFileViaDuckDB(ClientContext &context, const std::string &body, const std::string &file_type,
+                               bool all_varchar, bool ignore_errors, const std::string &reader_options,
+                               const std::string &sheet, const std::string &range,
+                               std::vector<std::string> &col_names, std::vector<LogicalType> &col_types,
+                               std::vector<std::vector<Value>> &rows);
 
 static unique_ptr<FunctionData> NextcloudBind(ClientContext &context, TableFunctionBindInput &input,
                                              vector<LogicalType> &return_types, vector<string> &names) {
@@ -145,11 +151,12 @@ static unique_ptr<FunctionData> NextcloudBind(ClientContext &context, TableFunct
     // Read file content using DuckDB's built-in readers (supports all_varchar, ignore_errors, reader_options)
     std::vector<std::string> col_names;
     std::vector<LogicalType> col_types;
+    std::vector<std::vector<Value>> mat_rows;
 
     bool read_ok = ReadFileViaDuckDB(context, result->fetched_body, result->file_extension,
                                       result->all_varchar, result->ignore_errors, result->reader_options,
                                       result->sheet, result->range,
-                                      col_names, col_types, result->materialized_rows);
+                                      col_names, col_types, mat_rows);
 
     if (!read_ok) {
         // DuckDB reader failed - try custom CSV parser as fallback for text files
@@ -157,23 +164,28 @@ static unique_ptr<FunctionData> NextcloudBind(ClientContext &context, TableFunct
                           result->file_extension == "feather" || result->file_extension == "xlsx" ||
                           result->file_extension == "xls");
         if (!is_binary) {
-            ParseCSVContent(result->fetched_body, col_names, col_types, result->materialized_rows);
+            ParseCSVContent(result->fetched_body, col_names, col_types, mat_rows);
         }
     }
 
+    // Transfer rows to bind data (std::vector -> duckdb::vector)
+    for (auto &row : mat_rows) {
+        result->materialized_rows.push_back(std::move(row));
+    }
+
     if (!col_names.empty()) {
-        result->column_names = col_names;
-        result->column_types = col_types;
-        for (const auto &name : result->column_names) {
+        for (const auto &name : col_names) {
+            result->column_names.push_back(name);
             names.push_back(name);
         }
-        for (const auto &type : result->column_types) {
+        for (const auto &type : col_types) {
+            result->column_types.push_back(type);
             return_types.push_back(type);
         }
     } else {
         // Fallback: return raw content
-        result->column_names = {"content"};
-        result->column_types = {LogicalType::VARCHAR};
+        result->column_names.push_back("content");
+        result->column_types.push_back(LogicalType::VARCHAR);
         names = {"content"};
         return_types = {LogicalType::VARCHAR};
         if (result->materialized_rows.empty()) {
