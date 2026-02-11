@@ -353,28 +353,9 @@ static bool ReadFileViaDuckDB(ClientContext &context, const std::string &body, c
             conn.Query("INSTALL spatial");
             conn.Query("LOAD spatial");
             read_expr = "st_read('" + temp_path + "'";
-            // Build layer parameter from sheet and/or range
-            if (!sheet.empty() || !range.empty()) {
-                std::string layer;
-                if (!sheet.empty()) {
-                    layer = EscapeSqlLiteral(sheet);
-                } else {
-                    // Auto-detect the first sheet name instead of hardcoding "Sheet1"
-                    auto layers_result = conn.Query("SELECT name FROM st_layers('" + temp_path + "') LIMIT 1");
-                    if (layers_result && !layers_result->HasError()) {
-                        auto chunk = layers_result->Fetch();
-                        if (chunk && chunk->size() > 0) {
-                            layer = EscapeSqlLiteral(chunk->GetValue(0, 0).ToString());
-                        }
-                    }
-                    if (layer.empty()) {
-                        layer = "Sheet1"; // fallback if detection fails
-                    }
-                }
-                if (!range.empty()) {
-                    layer += "$" + EscapeSqlLiteral(range);
-                }
-                read_expr += ", layer='" + layer + "'";
+            // Build layer parameter from sheet name only (range handled via SQL LIMIT)
+            if (!sheet.empty()) {
+                read_expr += ", layer='" + EscapeSqlLiteral(sheet) + "'";
             }
             if (all_varchar) {
                 read_expr += ", open_options=['FIELD_TYPES=STRING']";
@@ -405,6 +386,23 @@ static bool ReadFileViaDuckDB(ClientContext &context, const std::string &body, c
         }
 
         std::string base_query = "SELECT * FROM " + read_expr;
+
+        // For xlsx/xls with range, parse end row for SQL LIMIT
+        // Range format: "A1:N10000" → end row = 10000 → LIMIT 10000 (header consumed by st_read)
+        std::string data_query_suffix;
+        if ((ext == "xlsx" || ext == "xls") && !range.empty()) {
+            size_t colon_pos = range.find(':');
+            if (colon_pos != std::string::npos) {
+                std::string end_cell = range.substr(colon_pos + 1);
+                std::string row_digits;
+                for (char c : end_cell) {
+                    if (c >= '0' && c <= '9') row_digits += c;
+                }
+                if (!row_digits.empty()) {
+                    data_query_suffix = " LIMIT " + row_digits;
+                }
+            }
+        }
 
         // Get schema
         auto schema_result = conn.Query(base_query + " LIMIT 0");
@@ -438,8 +436,8 @@ static bool ReadFileViaDuckDB(ClientContext &context, const std::string &body, c
             col_types.push_back(schema_result->types[i]);
         }
 
-        // Read all data
-        auto data_result = conn.Query(base_query);
+        // Read data (with optional row limit from range parameter)
+        auto data_result = conn.Query(base_query + data_query_suffix);
         if (data_result->HasError()) {
             if (error_out) *error_out = data_result->GetError();
             std::remove(temp_path.c_str());
