@@ -274,7 +274,7 @@ static unique_ptr<GlobalTableFunctionState> ZipInit(ClientContext &context, Tabl
         if (ext == "parquet") {
             usage_hint = "SELECT * FROM read_parquet('" + temp_path + "')";
         } else if (ext == "xlsx" || ext == "xls") {
-            usage_hint = "Install and use st_read() for Excel files";
+            usage_hint = "Install and use read_sheet() for Excel files";
         } else if (ext == "arrow" || ext == "feather") {
             usage_hint = "SELECT * FROM read_parquet('" + temp_path + "') -- Arrow/Feather compatible";
         } else {

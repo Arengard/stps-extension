@@ -502,7 +502,7 @@ SELECT dguid('{"a": 1, "b": 2}') AS guid;
 
 ---
 
-### 🗃️ Archive Functions (ZIP & 7-Zip)
+### 🗃️ Archive Functions (ZIP)
 
 #### `stps_zip(archive_path VARCHAR, inner_filename VARCHAR) → TABLE`
 Extract and parse CSV/TXT file from ZIP archive.
@@ -517,23 +517,6 @@ SELECT * FROM stps_zip('C:/data/archive.zip', 'report.txt');
 List files in ZIP archive.
 ```sql
 SELECT * FROM stps_view_zip('data.zip');
--- Returns: filename, uncompressed_size, is_directory, index
-```
-
-#### `stps_7zip(archive_path VARCHAR, inner_filename VARCHAR) → TABLE`
-Extract and parse CSV/TXT file from 7-Zip archive.
-```sql
-SELECT * FROM stps_7zip('data.7z', 'customers.csv');
--- Returns: parsed CSV as table
-
--- Auto-detect first file
-SELECT * FROM stps_7zip('data.7z');
-```
-
-#### `stps_view_7zip(archive_path VARCHAR) → TABLE`
-List files in 7-Zip archive.
-```sql
-SELECT * FROM stps_view_7zip('data.7z');
 -- Returns: filename, uncompressed_size, is_directory, index
 ```
 
@@ -1066,9 +1049,9 @@ FROM raw_varchar_table;
 
 ### Archive Processing
 ```sql
--- Extract CSV from 7z archive
+-- Extract CSV from ZIP archive
 SELECT customer_id, amount, date
-FROM stps_7zip('monthly_reports.7z', 'january.csv')
+FROM stps_zip('monthly_reports.zip', 'january.csv')
 WHERE amount > 1000;
 ```
 
@@ -1087,7 +1070,6 @@ FROM locations;
 ## 📖 Documentation
 
 - **[Complete Function List](howToUseMD/STPS_FUNCTIONS.md)** - Detailed function reference
-- **[Troubleshooting 7-Zip](howToUseMD/TROUBLESHOOTING_7ZIP.md)** - Common 7z issues
 - **[How to Update](howToUseMD/HOW_TO_UPDATE_EXTENSION.md)** - Get latest version
 - **[Build Process](howToUseMD/BUILD_PROCESS.md)** - GitHub Actions build info
 
@@ -1120,13 +1102,13 @@ https://github.com/Arengard/stps-extension/actions
 Use forward slashes or escape backslashes:
 ```sql
 -- Good: forward slashes
-SELECT * FROM stps_7zip('C:/data/archive.7z', 'file.csv');
+SELECT * FROM stps_zip('C:/data/archive.zip', 'file.csv');
 
 -- Good: escaped backslashes
-SELECT * FROM stps_7zip('C:\\data\\archive.7z', 'file.csv');
+SELECT * FROM stps_zip('C:\\data\\archive.zip', 'file.csv');
 
 -- Bad: unescaped backslashes
-SELECT * FROM stps_7zip('C:\data\archive.7z', 'file.csv');  -- ERROR
+SELECT * FROM stps_zip('C:\data\archive.zip', 'file.csv');  -- ERROR
 ```
 
 ---
@@ -1150,14 +1132,11 @@ See [LICENSE](LICENSE) file.
 - **Latest Builds**: https://github.com/Arengard/stps-extension/actions
 - **DuckDB**: https://duckdb.org/
 
-cd C:\stps-extension
-cmake --build build/release --config Release---
-
 ## Nextcloud/WebDAV table functions
 
 ### `next_cloud(url VARCHAR, ...) → TABLE`
 
-Fetch a file directly over WebDAV and return it as a table. File type is auto-detected from the URL extension. All file types are parsed via DuckDB's built-in readers (`read_csv_auto`, `read_parquet`, `st_read`).
+Fetch a file directly over WebDAV and return it as a table. File type is auto-detected from the URL extension. All file types are parsed via DuckDB's built-in readers (`read_csv_auto`, `read_parquet`, `read_sheet`).
 
 **Supported formats:** CSV, TSV, Parquet, Arrow, Feather, XLSX, XLS
 
@@ -1215,7 +1194,7 @@ SELECT * FROM next_cloud(
 Notes:
 - Uses HTTP GET via libcurl; `username`/`password` map to Basic Auth.
 - `headers` lets you pass bearer tokens, extra headers, etc. (one header per line).
-- XLSX/XLS requires the DuckDB `spatial` extension (auto-installed).
+- XLSX/XLS requires the DuckDB `rusty_sheet` community extension (auto-installed).
 - If `read_csv_auto` fails for CSV files, falls back to a built-in CSV parser (all VARCHAR).
 
 ### `next_cloud_folder(parent_url VARCHAR, ...) → TABLE`

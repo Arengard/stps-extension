@@ -350,15 +350,14 @@ static bool ReadFileViaDuckDB(ClientContext &context, const std::string &body, c
         std::string read_expr;
 
         if (ext == "xlsx" || ext == "xls") {
-            conn.Query("INSTALL spatial");
-            conn.Query("LOAD spatial");
-            read_expr = "st_read('" + temp_path + "'";
-            // Build layer parameter from sheet name only (range handled via SQL LIMIT)
+            conn.Query("INSTALL rusty_sheet FROM community");
+            conn.Query("LOAD rusty_sheet");
+            read_expr = "read_sheet('" + temp_path + "'";
             if (!sheet.empty()) {
-                read_expr += ", layer='" + EscapeSqlLiteral(sheet) + "'";
+                read_expr += ", sheet='" + EscapeSqlLiteral(sheet) + "'";
             }
-            if (all_varchar) {
-                read_expr += ", open_options=['FIELD_TYPES=STRING']";
+            if (!range.empty()) {
+                read_expr += ", range='" + EscapeSqlLiteral(range) + "'";
             }
             if (!reader_options.empty()) {
                 read_expr += ", " + reader_options;
@@ -387,57 +386,38 @@ static bool ReadFileViaDuckDB(ClientContext &context, const std::string &body, c
 
         std::string base_query = "SELECT * FROM " + read_expr;
 
-        // For xlsx/xls with range, parse end row for SQL LIMIT
-        // Range format: "A1:N10000" → end row = 10000 → LIMIT 10000 (header consumed by st_read)
-        std::string data_query_suffix;
-        if ((ext == "xlsx" || ext == "xls") && !range.empty()) {
-            size_t colon_pos = range.find(':');
-            if (colon_pos != std::string::npos) {
-                std::string end_cell = range.substr(colon_pos + 1);
-                std::string row_digits;
-                for (char c : end_cell) {
-                    if (c >= '0' && c <= '9') row_digits += c;
-                }
-                if (!row_digits.empty()) {
-                    data_query_suffix = " LIMIT " + row_digits;
-                }
-            }
-        }
-
         // Get schema
         auto schema_result = conn.Query(base_query + " LIMIT 0");
         if (schema_result->HasError()) {
-            std::string err = schema_result->GetError();
-            // If layer not found for Excel files, list available sheets in error
-            if ((ext == "xlsx" || ext == "xls") && err.find("could not be found") != std::string::npos) {
-                auto layers_result = conn.Query("SELECT name FROM st_layers('" + temp_path + "')");
-                if (layers_result && !layers_result->HasError()) {
-                    std::string available;
-                    while (true) {
-                        auto chunk = layers_result->Fetch();
-                        if (!chunk || chunk->size() == 0) break;
-                        for (idx_t r = 0; r < chunk->size(); r++) {
-                            if (!available.empty()) available += ", ";
-                            available += "'" + chunk->GetValue(0, r).ToString() + "'";
-                        }
-                    }
-                    if (!available.empty()) {
-                        err += " (available sheets: " + available + ")";
-                    }
-                }
-            }
-            if (error_out) *error_out = err;
+            if (error_out) *error_out = schema_result->GetError();
             std::remove(temp_path.c_str());
             return false;
         }
 
         for (idx_t i = 0; i < schema_result->ColumnCount(); i++) {
             col_names.push_back(schema_result->ColumnName(i));
-            col_types.push_back(schema_result->types[i]);
+            if (all_varchar && (ext == "xlsx" || ext == "xls")) {
+                col_types.push_back(LogicalType::VARCHAR);
+            } else {
+                col_types.push_back(schema_result->types[i]);
+            }
         }
 
-        // Read data (with optional row limit from range parameter)
-        auto data_result = conn.Query(base_query + data_query_suffix);
+        // Build data query — for xlsx with all_varchar, cast all columns to VARCHAR
+        std::string data_query;
+        if (all_varchar && (ext == "xlsx" || ext == "xls")) {
+            data_query = "SELECT ";
+            for (idx_t i = 0; i < col_names.size(); i++) {
+                if (i > 0) data_query += ", ";
+                data_query += "CAST(\"" + col_names[i] + "\" AS VARCHAR) AS \"" + col_names[i] + "\"";
+            }
+            data_query += " FROM " + read_expr;
+        } else {
+            data_query = base_query;
+        }
+
+        // Read data
+        auto data_result = conn.Query(data_query);
         if (data_result->HasError()) {
             if (error_out) *error_out = data_result->GetError();
             std::remove(temp_path.c_str());
