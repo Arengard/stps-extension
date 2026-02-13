@@ -823,6 +823,65 @@ SELECT * FROM stps_read_gobd_cloud_zip_all(
 
 ---
 
+### 📁 Folder Import Functions
+
+#### `stps_import_folder(path VARCHAR, overwrite := BOOLEAN) → TABLE`
+Import **all supported files** from a local folder into DuckDB tables. Scans the folder for CSV, TSV, Parquet, JSON, XLSX, and XLS files and creates one table per file with:
+- **Table name** derived from filename (snake_case, e.g. `Sales Report.xlsx` → `sales_report`)
+- **Normalized column names** (snake_case)
+- **Empty columns removed** (all NULL/empty values)
+- **Smart type casting** via `stps_smart_cast`
+- **Database cleanup** via `stps_clean_database()` after all imports
+
+```sql
+-- Import all files from a folder
+SELECT * FROM stps_import_folder('C:/data/import/');
+-- Returns: table_name, file_name, rows_imported, columns_created, error
+
+-- Re-import with overwrite
+SELECT * FROM stps_import_folder('C:/data/import/', overwrite := true);
+
+-- Then query the created tables directly
+SHOW TABLES;
+SELECT * FROM sales_report;
+```
+
+**Supported file types:** `.csv`, `.tsv`, `.parquet`, `.json`, `.xlsx`, `.xls`
+
+**Notes:**
+- XLSX/XLS files require the `rusty_sheet` extension (installed automatically from community).
+- Each file becomes a separate DuckDB table. Duplicate filenames (e.g. `data.csv` and `data.json`) get a numeric suffix (`data`, `data_2`).
+- Files that fail to import are reported with an error message; other files continue importing.
+
+#### `stps_import_nextcloud_folder(url VARCHAR, username := VARCHAR, password := VARCHAR, overwrite := BOOLEAN) → TABLE`
+Import **all supported files** from a Nextcloud/WebDAV folder into DuckDB tables. Same pipeline as `stps_import_folder` but downloads files from a cloud server.
+
+```sql
+-- Import all files from a Nextcloud folder
+SELECT * FROM stps_import_nextcloud_folder(
+  'https://cloud.example.com/remote.php/dav/files/user/data/',
+  username := 'myuser',
+  password := 'mypassword'
+);
+-- Returns: table_name, file_name, rows_imported, columns_created, error
+
+-- Re-import with overwrite
+SELECT * FROM stps_import_nextcloud_folder(
+  'https://cloud.example.com/remote.php/dav/files/user/data/',
+  username := 'myuser',
+  password := 'mypassword',
+  overwrite := true
+);
+```
+
+**Notes:**
+- Requires `curl` (only available when the extension is built with libcurl).
+- Uses WebDAV PROPFIND to list files in the folder, then downloads each supported file.
+- Authentication uses HTTP Basic Auth via `username`/`password` parameters.
+- Files are downloaded to temp files for import, then cleaned up automatically.
+
+---
+
 ### 🔄 NULL Handling
 
 #### `stps_map_null_to_empty(value VARCHAR) → VARCHAR`

@@ -36,6 +36,7 @@
 #include "stps_lambda_function.hpp"
 #include "blz_lut_loader.hpp"
 #include "zip_functions.hpp"
+#include "import_folder_functions.hpp"
 // #include "fill_functions.hpp"  // Temporarily disabled
 
 namespace duckdb {
@@ -88,6 +89,9 @@ public:
 
         // Register ZIP archive functions
         stps::RegisterZipFunctions(loader);
+
+        // Register folder import functions (local + cloud)
+        stps::RegisterImportFolderFunctions(loader);
 
         // Register Nextcloud/WebDAV function (requires curl)
 #ifdef HAVE_CURL

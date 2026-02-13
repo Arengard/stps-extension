@@ -58,6 +58,8 @@ set(EXTENSION_SOURCES
     # ZIP archive reading functions (using miniz)
     src/zip_functions.cpp
     src/miniz/miniz.c
+    # Folder import functions (local + cloud via #ifdef HAVE_CURL)
+    src/import_folder_functions.cpp
 )
 
 # Add curl-dependent sources only if curl is available
