@@ -3,7 +3,7 @@
                 "zlib",
                 {
                         "name": "curl",
-                        "features": ["ssl", "schannel"]
+                        "features": ["ssl"]
                 }
         ],
         "vcpkg-configuration": {
