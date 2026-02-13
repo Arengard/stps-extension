@@ -7,13 +7,20 @@
 #include "duckdb/common/types/data_chunk.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/main/connection.hpp"
-#include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <algorithm>
 #include <set>
 #include <random>
 #include <chrono>
+
+#ifdef _WIN32
+#define NOMINMAX
+#include <windows.h>
+#else
+#include <dirent.h>
+#include <sys/stat.h>
+#endif
 
 #ifdef HAVE_CURL
 #include "webdav_utils.hpp"
@@ -22,8 +29,6 @@
 
 namespace duckdb {
 namespace stps {
-
-namespace fs = std::filesystem;
 
 // ============================================================================
 // Shared helpers (same patterns as gobd_reader.cpp)
@@ -348,23 +353,57 @@ static unique_ptr<FunctionData> ImportFolderBind(ClientContext &context, TableFu
         }
     }
 
-    // Verify folder exists
-    if (!fs::exists(folder_path) || !fs::is_directory(folder_path)) {
-        throw IOException("Folder does not exist or is not a directory: " + folder_path);
+    // Ensure trailing separator
+    if (!folder_path.empty() && folder_path.back() != '/' && folder_path.back() != '\\') {
+#ifdef _WIN32
+        folder_path += '\\';
+#else
+        folder_path += '/';
+#endif
     }
 
     // List and import files
     std::set<string> used_table_names;
 
-    for (const auto &entry : fs::directory_iterator(folder_path)) {
-        if (!entry.is_regular_file()) continue;
-        string filename = entry.path().filename().string();
+#ifdef _WIN32
+    WIN32_FIND_DATAA find_data;
+    string search_path = folder_path + "*";
+    HANDLE hFind = FindFirstFileA(search_path.c_str(), &find_data);
+    if (hFind == INVALID_HANDLE_VALUE) {
+        throw IOException("Folder does not exist or cannot be listed: " + folder_path);
+    }
+    do {
+        string filename = find_data.cFileName;
+        if (filename == "." || filename == "..") continue;
+        if (find_data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
         if (!IsSupportedImportFile(filename)) continue;
 
-        string file_path_str = entry.path().string();
+        string file_path_str = folder_path + filename;
+        auto import_result = ImportSingleFile(context, file_path_str, filename, overwrite, used_table_names);
+        result->results.push_back(import_result);
+    } while (FindNextFileA(hFind, &find_data));
+    FindClose(hFind);
+#else
+    DIR *dir = opendir(folder_path.c_str());
+    if (!dir) {
+        throw IOException("Folder does not exist or cannot be listed: " + folder_path);
+    }
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != nullptr) {
+        string filename = entry->d_name;
+        if (filename == "." || filename == "..") continue;
+
+        // Check if regular file
+        string file_path_str = folder_path + filename;
+        struct stat st;
+        if (stat(file_path_str.c_str(), &st) != 0 || !S_ISREG(st.st_mode)) continue;
+        if (!IsSupportedImportFile(filename)) continue;
+
         auto import_result = ImportSingleFile(context, file_path_str, filename, overwrite, used_table_names);
         result->results.push_back(import_result);
     }
+    closedir(dir);
+#endif
 
     // Run clean_database after all imports
     if (!result->results.empty()) {
