@@ -1,4 +1,5 @@
 #include "gobd_reader.hpp"
+#include "shared/archive_utils.hpp"
 #include "duckdb/function/table_function.hpp"
 #include "duckdb/parser/parsed_data/create_table_function_info.hpp"
 #include "duckdb/main/extension/extension_loader.hpp"
@@ -10,6 +11,8 @@
 #include <algorithm>
 #include <set>
 #include <unordered_map>
+#include <random>
+#include <chrono>
 
 namespace duckdb {
 namespace stps {
@@ -322,6 +325,27 @@ static string EscapeStringLiteral(const string &value) {
     return "'" + escaped + "'";
 }
 
+// Generate unique temp filename for bulk CSV loading
+static std::string GenerateGobdTempFilename() {
+    auto now = std::chrono::system_clock::now();
+    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<> dis(1000, 9999);
+
+    std::string temp_dir = GetTempDirectory();
+    return temp_dir + "gobd_import_" + std::to_string(ms) + "_" + std::to_string(dis(gen)) + ".csv";
+}
+
+// Escape a path for use in SQL (replace backslashes with forward slashes for DuckDB compatibility)
+static string NormalizeSqlPath(const string &path) {
+    string result = path;
+    for (auto &c : result) {
+        if (c == '\\') c = '/';
+    }
+    return result;
+}
+
 vector<GobdImportResult> ExecuteGobdImportPipeline(ClientContext &context,
                                                     const GobdImportData &data,
                                                     char delimiter,
@@ -383,66 +407,132 @@ vector<GobdImportResult> ExecuteGobdImportPipeline(ClientContext &context,
             }
         }
 
-        // Step 1: CREATE TABLE with all VARCHAR columns
-        {
-            string create_sql = "CREATE TABLE " + escaped_table + " (";
-            for (size_t i = 0; i < normalized_cols.size(); i++) {
-                if (i > 0) create_sql += ", ";
-                create_sql += EscapeIdentifier(normalized_cols[i]) + " VARCHAR";
-            }
-            create_sql += ")";
+        // Step 1+2: Bulk load CSV via temp file + DuckDB's read_csv (vectorized, ~100x faster)
+        std::string csv_content = EnsureUtf8(csv_it->second);
+        std::string temp_path = GenerateGobdTempFilename();
+        bool bulk_loaded = false;
 
-            auto create_result = conn.Query(create_sql);
-            if (create_result->HasError()) {
-                result.error = "Failed to create table: " + create_result->GetError();
-                results.push_back(result);
-                continue;
+        {
+            std::ofstream out(temp_path, std::ios::binary);
+            if (out) {
+                out.write(csv_content.data(), csv_content.size());
+                out.close();
+
+                // Build columns={col1: 'VARCHAR', col2: 'VARCHAR', ...} for read_csv
+                string columns_spec = "{";
+                for (size_t i = 0; i < normalized_cols.size(); i++) {
+                    if (i > 0) columns_spec += ", ";
+                    columns_spec += EscapeStringLiteral(normalized_cols[i]) + ": 'VARCHAR'";
+                }
+                columns_spec += "}";
+
+                string delim_escaped = EscapeStringLiteral(string(1, delimiter));
+                string sql_path = EscapeStringLiteral(NormalizeSqlPath(temp_path));
+
+                string create_sql = "CREATE TABLE " + escaped_table +
+                                    " AS SELECT * FROM read_csv(" + sql_path +
+                                    ", delim=" + delim_escaped +
+                                    ", header=false, all_varchar=true, columns=" + columns_spec +
+                                    ", ignore_errors=true, null_padding=true)";
+
+                auto create_result = conn.Query(create_sql);
+                if (create_result && !create_result->HasError()) {
+                    bulk_loaded = true;
+                }
+
+                std::remove(temp_path.c_str());
             }
         }
 
-        // Step 2: INSERT data from CSV content
-        std::string csv_content = EnsureUtf8(csv_it->second);
-        std::istringstream stream(csv_content);
-        string line;
-        int64_t row_count = 0;
+        // Fallback: batched multi-row INSERT if read_csv failed
+        if (!bulk_loaded) {
+            // Create the table first
+            {
+                string create_sql = "CREATE TABLE " + escaped_table + " (";
+                for (size_t i = 0; i < normalized_cols.size(); i++) {
+                    if (i > 0) create_sql += ", ";
+                    create_sql += EscapeIdentifier(normalized_cols[i]) + " VARCHAR";
+                }
+                create_sql += ")";
 
-        // Build INSERT in batches
-        while (std::getline(stream, line)) {
-            if (line.empty()) continue;
-            if (!line.empty() && line.back() == '\r') line.pop_back();
-            if (line.empty()) continue;
-
-            auto fields = ParseCsvLine(line, delimiter);
-
-            string insert_sql = "INSERT INTO " + escaped_table + " VALUES (";
-            for (size_t i = 0; i < normalized_cols.size(); i++) {
-                if (i > 0) insert_sql += ", ";
-                if (i < fields.size() && !fields[i].empty()) {
-                    insert_sql += EscapeStringLiteral(fields[i]);
-                } else {
-                    insert_sql += "NULL";
+                auto create_result = conn.Query(create_sql);
+                if (create_result->HasError()) {
+                    result.error = "Failed to create table: " + create_result->GetError();
+                    results.push_back(result);
+                    continue;
                 }
             }
-            insert_sql += ")";
 
-            conn.Query(insert_sql);
-            row_count++;
+            // Batched INSERT (1000 rows per statement instead of 1 row per statement)
+            std::istringstream stream(csv_content);
+            string line;
+            const size_t BATCH_SIZE = 1000;
+            string batch_sql;
+            size_t batch_count = 0;
+
+            string insert_prefix = "INSERT INTO " + escaped_table + " VALUES ";
+
+            while (std::getline(stream, line)) {
+                if (line.empty()) continue;
+                if (!line.empty() && line.back() == '\r') line.pop_back();
+                if (line.empty()) continue;
+
+                auto fields = ParseCsvLine(line, delimiter);
+
+                if (batch_count > 0) batch_sql += ", ";
+                batch_sql += "(";
+                for (size_t i = 0; i < normalized_cols.size(); i++) {
+                    if (i > 0) batch_sql += ", ";
+                    if (i < fields.size() && !fields[i].empty()) {
+                        batch_sql += EscapeStringLiteral(fields[i]);
+                    } else {
+                        batch_sql += "NULL";
+                    }
+                }
+                batch_sql += ")";
+                batch_count++;
+
+                if (batch_count >= BATCH_SIZE) {
+                    conn.Query(insert_prefix + batch_sql);
+                    batch_sql.clear();
+                    batch_count = 0;
+                }
+            }
+
+            // Flush remaining rows
+            if (batch_count > 0) {
+                conn.Query(insert_prefix + batch_sql);
+            }
         }
 
-        result.rows_imported = row_count;
+        // Get row count
+        {
+            auto count_result = conn.Query("SELECT COUNT(*) FROM " + escaped_table);
+            if (count_result && count_result->RowCount() > 0) {
+                result.rows_imported = count_result->GetValue(0, 0).GetValue<int64_t>();
+            }
+        }
 
-        // Step 3: Drop empty columns (all NULL or empty string)
+        // Step 3: Drop empty columns - single query checks all columns at once
         {
             vector<string> cols_to_drop;
-            for (auto &col_name : normalized_cols) {
-                string check_sql = "SELECT COUNT(*) FROM " + escaped_table +
-                                   " WHERE " + EscapeIdentifier(col_name) + " IS NOT NULL AND " +
-                                   EscapeIdentifier(col_name) + " <> ''";
-                auto check_result = conn.Query(check_sql);
-                if (check_result && check_result->RowCount() > 0) {
-                    auto count_val = check_result->GetValue(0, 0).GetValue<int64_t>();
+
+            // Build one query that counts non-empty values for ALL columns
+            string check_sql = "SELECT ";
+            for (size_t i = 0; i < normalized_cols.size(); i++) {
+                if (i > 0) check_sql += ", ";
+                check_sql += "COUNT(CASE WHEN " + EscapeIdentifier(normalized_cols[i]) +
+                             " IS NOT NULL AND " + EscapeIdentifier(normalized_cols[i]) +
+                             " <> '' THEN 1 END)";
+            }
+            check_sql += " FROM " + escaped_table;
+
+            auto check_result = conn.Query(check_sql);
+            if (check_result && !check_result->HasError() && check_result->RowCount() > 0) {
+                for (size_t i = 0; i < normalized_cols.size(); i++) {
+                    auto count_val = check_result->GetValue(i, 0).GetValue<int64_t>();
                     if (count_val == 0) {
-                        cols_to_drop.push_back(col_name);
+                        cols_to_drop.push_back(normalized_cols[i]);
                     }
                 }
             }
@@ -455,7 +545,7 @@ vector<GobdImportResult> ExecuteGobdImportPipeline(ClientContext &context,
         }
 
         // Step 4: Smart cast types
-        if (row_count > 0) {
+        if (result.rows_imported > 0) {
             string cast_sql = "CREATE OR REPLACE TABLE " + escaped_table +
                               " AS SELECT * FROM stps_smart_cast(" + EscapeStringLiteral(table_name) + ")";
             auto cast_result = conn.Query(cast_sql);

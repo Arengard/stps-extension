@@ -103,7 +103,7 @@ std::string curl_get(const std::string& url,
     curl_easy_setopt(handle.handle(), CURLOPT_HTTPHEADER, headers.list());
     curl_easy_setopt(handle.handle(), CURLOPT_WRITEFUNCTION, curl_write_callback);
     curl_easy_setopt(handle.handle(), CURLOPT_WRITEDATA, &response);
-    curl_easy_setopt(handle.handle(), CURLOPT_TIMEOUT, 30L);  // 30s timeout for searches
+    curl_easy_setopt(handle.handle(), CURLOPT_TIMEOUT, 300L);  // 5min timeout for large file downloads
     curl_easy_setopt(handle.handle(), CURLOPT_FOLLOWLOCATION, 1L);
 
     // Perform request

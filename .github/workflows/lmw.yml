@@ -120,7 +120,7 @@ jobs:
           git clone https://github.com/microsoft/vcpkg.git C:\vcpkg
           C:\vcpkg\bootstrap-vcpkg.bat
           cd C:\vcpkg
-          .\vcpkg install zlib:x64-windows curl:x64-windows
+          .\vcpkg install zlib:x64-windows "curl[ssl,schannel]:x64-windows"
 
       - name: Setup MSVC
         uses: ilammy/msvc-dev-cmd@v1

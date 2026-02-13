@@ -1,7 +1,10 @@
 {
         "dependencies": [
                 "zlib",
-                "curl"
+                {
+                        "name": "curl",
+                        "features": ["ssl", "schannel"]
+                }
         ],
         "vcpkg-configuration": {
                 "overlay-ports": [
