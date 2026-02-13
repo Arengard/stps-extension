@@ -102,6 +102,32 @@ static bool IsSupportedImportFile(const string &filename) {
 }
 
 // ============================================================================
+// Reader options (forwarded to read_csv_auto / read_sheet / read_json_auto / read_parquet)
+// ============================================================================
+
+struct ReaderOptions {
+    // Common
+    bool all_varchar = false;
+    bool header_set = false;
+    bool header = true;
+    bool ignore_errors = false;
+
+    // CSV-specific
+    string delimiter;
+    string quote;
+    string escape;
+    int64_t skip = 0;
+    string null_str;
+
+    // Excel-specific
+    string sheet;
+    string range;
+
+    // Generic passthrough (appended as-is to reader call)
+    string reader_options;
+};
+
+// ============================================================================
 // Import result
 // ============================================================================
 
@@ -131,12 +157,48 @@ static std::string GenerateImportTempPath(const string &original_filename) {
 }
 
 // ============================================================================
+// Parse ReaderOptions from named parameters
+// ============================================================================
+
+static ReaderOptions ParseReaderOptions(const named_parameter_map_t &params) {
+    ReaderOptions opts;
+    for (auto &kv : params) {
+        if (kv.first == "all_varchar") {
+            opts.all_varchar = BooleanValue::Get(kv.second);
+        } else if (kv.first == "header") {
+            opts.header_set = true;
+            opts.header = BooleanValue::Get(kv.second);
+        } else if (kv.first == "ignore_errors") {
+            opts.ignore_errors = BooleanValue::Get(kv.second);
+        } else if (kv.first == "delimiter" || kv.first == "sep") {
+            opts.delimiter = kv.second.ToString();
+        } else if (kv.first == "quote") {
+            opts.quote = kv.second.ToString();
+        } else if (kv.first == "escape") {
+            opts.escape = kv.second.ToString();
+        } else if (kv.first == "skip") {
+            opts.skip = kv.second.GetValue<int64_t>();
+        } else if (kv.first == "null_str" || kv.first == "nullstr") {
+            opts.null_str = kv.second.ToString();
+        } else if (kv.first == "sheet") {
+            opts.sheet = kv.second.ToString();
+        } else if (kv.first == "range") {
+            opts.range = kv.second.ToString();
+        } else if (kv.first == "reader_options") {
+            opts.reader_options = kv.second.ToString();
+        }
+    }
+    return opts;
+}
+
+// ============================================================================
 // Core import logic for a single file
 // ============================================================================
 
 static ImportFileResult ImportSingleFile(ClientContext &context, const string &file_path,
                                           const string &file_name, bool overwrite,
-                                          std::set<string> &used_table_names) {
+                                          std::set<string> &used_table_names,
+                                          const ReaderOptions &opts = ReaderOptions()) {
     ImportFileResult result;
     result.file_name = file_name;
 
@@ -200,17 +262,38 @@ static ImportFileResult ImportSingleFile(ClientContext &context, const string &f
         // 6. CTAS with appropriate reader
         string create_sql;
         if (ext == "csv" || ext == "tsv") {
-            create_sql = "CREATE TABLE " + escaped_table +
-                         " AS SELECT * FROM read_csv_auto(" + sql_path + ")";
+            string reader_expr = "read_csv_auto(" + sql_path;
+            if (opts.all_varchar) reader_expr += ", all_varchar=true";
+            if (opts.header_set) reader_expr += opts.header ? ", header=true" : ", header=false";
+            if (opts.ignore_errors) reader_expr += ", ignore_errors=true";
+            if (!opts.delimiter.empty()) reader_expr += ", delimiter=" + EscapeStringLiteral(opts.delimiter);
+            if (!opts.quote.empty()) reader_expr += ", quote=" + EscapeStringLiteral(opts.quote);
+            if (!opts.escape.empty()) reader_expr += ", escape=" + EscapeStringLiteral(opts.escape);
+            if (opts.skip > 0) reader_expr += ", skip=" + std::to_string(opts.skip);
+            if (!opts.null_str.empty()) reader_expr += ", null_padding=true, nullstr=" + EscapeStringLiteral(opts.null_str);
+            if (!opts.reader_options.empty()) reader_expr += ", " + opts.reader_options;
+            reader_expr += ")";
+            create_sql = "CREATE TABLE " + escaped_table + " AS SELECT * FROM " + reader_expr;
         } else if (ext == "json") {
-            create_sql = "CREATE TABLE " + escaped_table +
-                         " AS SELECT * FROM read_json_auto(" + sql_path + ")";
+            string reader_expr = "read_json_auto(" + sql_path;
+            if (opts.ignore_errors) reader_expr += ", ignore_errors=true";
+            if (!opts.reader_options.empty()) reader_expr += ", " + opts.reader_options;
+            reader_expr += ")";
+            create_sql = "CREATE TABLE " + escaped_table + " AS SELECT * FROM " + reader_expr;
         } else if (ext == "parquet") {
-            create_sql = "CREATE TABLE " + escaped_table +
-                         " AS SELECT * FROM read_parquet(" + sql_path + ")";
+            string reader_expr = "read_parquet(" + sql_path;
+            if (!opts.reader_options.empty()) reader_expr += ", " + opts.reader_options;
+            reader_expr += ")";
+            create_sql = "CREATE TABLE " + escaped_table + " AS SELECT * FROM " + reader_expr;
         } else if (ext == "xlsx" || ext == "xls") {
-            create_sql = "CREATE TABLE " + escaped_table +
-                         " AS SELECT * FROM read_sheet(" + sql_path + ", all_varchar=true)";
+            string sheet_expr = "read_sheet(" + sql_path;
+            if (!opts.sheet.empty()) sheet_expr += ", sheet=" + EscapeStringLiteral(opts.sheet);
+            if (!opts.range.empty()) sheet_expr += ", range=" + EscapeStringLiteral(opts.range);
+            if (opts.header_set) sheet_expr += opts.header ? ", header=true" : ", header=false";
+            if (opts.all_varchar) sheet_expr += ", columns={'*': 'VARCHAR'}";
+            if (!opts.reader_options.empty()) sheet_expr += ", " + opts.reader_options;
+            sheet_expr += ")";
+            create_sql = "CREATE TABLE " + escaped_table + " AS SELECT * FROM " + sheet_expr;
         } else {
             result.error = "Unsupported file type: " + ext;
             return result;
@@ -346,6 +429,7 @@ static unique_ptr<FunctionData> ImportFolderBind(ClientContext &context, TableFu
 
     string folder_path = input.inputs[0].ToString();
     bool overwrite = false;
+    ReaderOptions opts = ParseReaderOptions(input.named_parameters);
 
     for (auto &kv : input.named_parameters) {
         if (kv.first == "overwrite") {
@@ -379,7 +463,7 @@ static unique_ptr<FunctionData> ImportFolderBind(ClientContext &context, TableFu
         if (!IsSupportedImportFile(filename)) continue;
 
         string file_path_str = folder_path + filename;
-        auto import_result = ImportSingleFile(context, file_path_str, filename, overwrite, used_table_names);
+        auto import_result = ImportSingleFile(context, file_path_str, filename, overwrite, used_table_names, opts);
         result->results.push_back(import_result);
     } while (FindNextFileA(hFind, &find_data));
     FindClose(hFind);
@@ -399,7 +483,7 @@ static unique_ptr<FunctionData> ImportFolderBind(ClientContext &context, TableFu
         if (stat(file_path_str.c_str(), &st) != 0 || !S_ISREG(st.st_mode)) continue;
         if (!IsSupportedImportFile(filename)) continue;
 
-        auto import_result = ImportSingleFile(context, file_path_str, filename, overwrite, used_table_names);
+        auto import_result = ImportSingleFile(context, file_path_str, filename, overwrite, used_table_names, opts);
         result->results.push_back(import_result);
     }
     closedir(dir);
@@ -535,6 +619,7 @@ static unique_ptr<FunctionData> ImportNextcloudFolderBind(ClientContext &context
     string folder_url = input.inputs[0].ToString();
     string username, password;
     bool overwrite = false;
+    ReaderOptions opts = ParseReaderOptions(input.named_parameters);
 
     for (auto &kv : input.named_parameters) {
         if (kv.first == "username") {
@@ -601,7 +686,7 @@ static unique_ptr<FunctionData> ImportNextcloudFolderBind(ClientContext &context
         }
 
         // Import the file
-        auto import_result = ImportSingleFile(context, temp_path, filename, overwrite, used_table_names);
+        auto import_result = ImportSingleFile(context, temp_path, filename, overwrite, used_table_names, opts);
         result->results.push_back(import_result);
 
         // Cleanup temp file
@@ -657,20 +742,41 @@ static void ImportNextcloudFolderScan(ClientContext &context, TableFunctionInput
 // Registration
 // ============================================================================
 
+static void RegisterReaderNamedParameters(TableFunction &func) {
+    // Common
+    func.named_parameters["all_varchar"] = LogicalType::BOOLEAN;
+    func.named_parameters["header"] = LogicalType::BOOLEAN;
+    func.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
+    // CSV-specific
+    func.named_parameters["delimiter"] = LogicalType::VARCHAR;
+    func.named_parameters["sep"] = LogicalType::VARCHAR;
+    func.named_parameters["quote"] = LogicalType::VARCHAR;
+    func.named_parameters["escape"] = LogicalType::VARCHAR;
+    func.named_parameters["skip"] = LogicalType::BIGINT;
+    func.named_parameters["null_str"] = LogicalType::VARCHAR;
+    func.named_parameters["nullstr"] = LogicalType::VARCHAR;
+    // Excel-specific
+    func.named_parameters["sheet"] = LogicalType::VARCHAR;
+    func.named_parameters["range"] = LogicalType::VARCHAR;
+    // Generic passthrough
+    func.named_parameters["reader_options"] = LogicalType::VARCHAR;
+}
+
 void RegisterImportFolderFunctions(ExtensionLoader &loader) {
-    // stps_import_folder(path, overwrite)
+    // stps_import_folder(path, overwrite, ...)
     {
         TableFunction func("stps_import_folder",
                           {LogicalType::VARCHAR},
                           ImportFolderScan, ImportFolderBind, ImportFolderInit);
         func.named_parameters["overwrite"] = LogicalType::BOOLEAN;
+        RegisterReaderNamedParameters(func);
 
         CreateTableFunctionInfo info(func);
         loader.RegisterFunction(info);
     }
 
 #ifdef HAVE_CURL
-    // stps_import_nextcloud_folder(url, username, password, overwrite)
+    // stps_import_nextcloud_folder(url, username, password, overwrite, ...)
     {
         TableFunction func("stps_import_nextcloud_folder",
                           {LogicalType::VARCHAR},
@@ -678,6 +784,7 @@ void RegisterImportFolderFunctions(ExtensionLoader &loader) {
         func.named_parameters["username"] = LogicalType::VARCHAR;
         func.named_parameters["password"] = LogicalType::VARCHAR;
         func.named_parameters["overwrite"] = LogicalType::BOOLEAN;
+        RegisterReaderNamedParameters(func);
 
         CreateTableFunctionInfo info(func);
         loader.RegisterFunction(info);

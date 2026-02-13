@@ -825,7 +825,7 @@ SELECT * FROM stps_read_gobd_cloud_zip_all(
 
 ### 📁 Folder Import Functions
 
-#### `stps_import_folder(path VARCHAR, overwrite := BOOLEAN) → TABLE`
+#### `stps_import_folder(path VARCHAR, ...) → TABLE`
 Import **all supported files** from a local folder into DuckDB tables. Scans the folder for CSV, TSV, Parquet, JSON, XLSX, and XLS files and creates one table per file with:
 - **Table name** derived from filename (snake_case, e.g. `Sales Report.xlsx` → `sales_report`)
 - **Normalized column names** (snake_case)
@@ -833,13 +833,57 @@ Import **all supported files** from a local folder into DuckDB tables. Scans the
 - **Smart type casting** via `stps_smart_cast`
 - **Database cleanup** via `stps_clean_database()` after all imports
 
+**Named Parameters:**
+
+| Parameter | Type | Default | Applies to | Description |
+|-----------|------|---------|------------|-------------|
+| `overwrite` | BOOLEAN | false | All | Drop existing tables before re-importing |
+| `all_varchar` | BOOLEAN | false | CSV, XLSX | Read all columns as VARCHAR. For CSV: passes `all_varchar=true` to `read_csv_auto`. For XLSX/XLS: passes `columns={'*': 'VARCHAR'}` to `read_sheet`. Useful to avoid type detection errors from mixed-type columns or totals rows. |
+| `header` | BOOLEAN | true | CSV, XLSX | Whether the first row contains column headers |
+| `ignore_errors` | BOOLEAN | false | CSV, JSON | Skip rows that fail to parse instead of erroring |
+| `delimiter` | VARCHAR | auto | CSV | Column delimiter (e.g. `';'`, `'\t'`, `','`). Also accepts `sep` as alias. |
+| `sep` | VARCHAR | auto | CSV | Alias for `delimiter` |
+| `quote` | VARCHAR | `"` | CSV | Quote character for CSV fields |
+| `escape` | VARCHAR | `"` | CSV | Escape character within quoted CSV fields |
+| `skip` | BIGINT | 0 | CSV | Number of rows to skip at the beginning of the file |
+| `null_str` | VARCHAR | | CSV | String that represents NULL values (e.g. `'NA'`, `'\\N'`). Also accepts `nullstr`. |
+| `nullstr` | VARCHAR | | CSV | Alias for `null_str` |
+| `sheet` | VARCHAR | | XLSX/XLS | Excel sheet name to read (e.g. `'Buchungen'`). If omitted, reads the first sheet. |
+| `range` | VARCHAR | | XLSX/XLS | Excel cell range (e.g. `'A1:D100'`) |
+| `reader_options` | VARCHAR | | All | Additional DuckDB reader options passed through verbatim as a raw string (e.g. `'dateformat=''%d.%m.%Y'''`). Use this for any parameter not listed above. |
+
+**Returns:** `table_name`, `file_name`, `rows_imported`, `columns_created`, `error`
+
 ```sql
--- Import all files from a folder
+-- Basic: Import all files from a folder
 SELECT * FROM stps_import_folder('C:/data/import/');
--- Returns: table_name, file_name, rows_imported, columns_created, error
 
 -- Re-import with overwrite
 SELECT * FROM stps_import_folder('C:/data/import/', overwrite := true);
+
+-- Import CSV files with semicolon delimiter and all as text
+SELECT * FROM stps_import_folder('C:/data/import/',
+    all_varchar := true,
+    delimiter := ';'
+);
+
+-- Import with German CSV settings
+SELECT * FROM stps_import_folder('C:/data/german/',
+    delimiter := ';',
+    skip := 2,
+    null_str := 'N/A'
+);
+
+-- Import Excel files reading a specific sheet, all as VARCHAR
+SELECT * FROM stps_import_folder('C:/data/excel/',
+    all_varchar := true,
+    sheet := 'Buchungen'
+);
+
+-- Import with generic reader_options passthrough
+SELECT * FROM stps_import_folder('C:/data/import/',
+    reader_options := 'dateformat=''%d.%m.%Y'''
+);
 
 -- Then query the created tables directly
 SHOW TABLES;
@@ -849,28 +893,78 @@ SELECT * FROM sales_report;
 **Supported file types:** `.csv`, `.tsv`, `.parquet`, `.json`, `.xlsx`, `.xls`
 
 **Notes:**
+- Reader parameters are applied to **all files** in the folder. If the folder contains mixed formats (e.g. CSV and XLSX), only the relevant parameters are used per file type — CSV parameters are ignored for XLSX files and vice versa.
 - XLSX/XLS files require the `rusty_sheet` extension (installed automatically from community).
 - Each file becomes a separate DuckDB table. Duplicate filenames (e.g. `data.csv` and `data.json`) get a numeric suffix (`data`, `data_2`).
 - Files that fail to import are reported with an error message; other files continue importing.
 
-#### `stps_import_nextcloud_folder(url VARCHAR, username := VARCHAR, password := VARCHAR, overwrite := BOOLEAN) → TABLE`
+#### `stps_import_nextcloud_folder(url VARCHAR, ...) → TABLE`
 Import **all supported files** from a Nextcloud/WebDAV folder into DuckDB tables. Same pipeline as `stps_import_folder` but downloads files from a cloud server.
 
+**Named Parameters:**
+
+| Parameter | Type | Default | Applies to | Description |
+|-----------|------|---------|------------|-------------|
+| `username` | VARCHAR | | Connection | WebDAV/Nextcloud username |
+| `password` | VARCHAR | | Connection | WebDAV/Nextcloud password |
+| `overwrite` | BOOLEAN | false | All | Drop existing tables before re-importing |
+| `all_varchar` | BOOLEAN | false | CSV, XLSX | Read all columns as VARCHAR (see `stps_import_folder` above) |
+| `header` | BOOLEAN | true | CSV, XLSX | Whether the first row contains column headers |
+| `ignore_errors` | BOOLEAN | false | CSV, JSON | Skip rows that fail to parse |
+| `delimiter` | VARCHAR | auto | CSV | Column delimiter. Also accepts `sep`. |
+| `sep` | VARCHAR | auto | CSV | Alias for `delimiter` |
+| `quote` | VARCHAR | `"` | CSV | Quote character |
+| `escape` | VARCHAR | `"` | CSV | Escape character within quoted fields |
+| `skip` | BIGINT | 0 | CSV | Number of rows to skip at the beginning |
+| `null_str` | VARCHAR | | CSV | String representing NULL. Also accepts `nullstr`. |
+| `nullstr` | VARCHAR | | CSV | Alias for `null_str` |
+| `sheet` | VARCHAR | | XLSX/XLS | Excel sheet name |
+| `range` | VARCHAR | | XLSX/XLS | Excel cell range (e.g. `'A1:D100'`) |
+| `reader_options` | VARCHAR | | All | Additional DuckDB reader options (raw passthrough) |
+
+**Returns:** `table_name`, `file_name`, `rows_imported`, `columns_created`, `error`
+
 ```sql
--- Import all files from a Nextcloud folder
+-- Basic: Import all files from a Nextcloud folder
 SELECT * FROM stps_import_nextcloud_folder(
-  'https://cloud.example.com/remote.php/dav/files/user/data/',
-  username := 'myuser',
-  password := 'mypassword'
+    'https://cloud.example.com/remote.php/dav/files/user/data/',
+    username := 'myuser',
+    password := 'mypassword'
 );
--- Returns: table_name, file_name, rows_imported, columns_created, error
+
+-- Import with all columns as VARCHAR (avoids type errors in Excel files)
+SELECT * FROM stps_import_nextcloud_folder(
+    'https://cloud.example.com/remote.php/dav/files/user/data/',
+    username := 'myuser',
+    password := 'mypassword',
+    all_varchar := true
+);
+
+-- Import with CSV-specific settings
+SELECT * FROM stps_import_nextcloud_folder(
+    'https://cloud.example.com/remote.php/dav/files/user/data/',
+    username := 'myuser',
+    password := 'mypassword',
+    delimiter := ';',
+    skip := 1,
+    ignore_errors := true
+);
+
+-- Import Excel files from specific sheet
+SELECT * FROM stps_import_nextcloud_folder(
+    'https://cloud.example.com/remote.php/dav/files/user/data/',
+    username := 'myuser',
+    password := 'mypassword',
+    sheet := 'Buchungen',
+    all_varchar := true
+);
 
 -- Re-import with overwrite
 SELECT * FROM stps_import_nextcloud_folder(
-  'https://cloud.example.com/remote.php/dav/files/user/data/',
-  username := 'myuser',
-  password := 'mypassword',
-  overwrite := true
+    'https://cloud.example.com/remote.php/dav/files/user/data/',
+    username := 'myuser',
+    password := 'mypassword',
+    overwrite := true
 );
 ```
 
@@ -879,6 +973,7 @@ SELECT * FROM stps_import_nextcloud_folder(
 - Uses WebDAV PROPFIND to list files in the folder, then downloads each supported file.
 - Authentication uses HTTP Basic Auth via `username`/`password` parameters.
 - Files are downloaded to temp files for import, then cleaned up automatically.
+- All reader parameters work identically to `stps_import_folder` — see the parameter descriptions above.
 
 ---
 
