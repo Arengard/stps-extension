@@ -10,6 +10,7 @@
 #include <windows.h>
 #else
 #include <unistd.h>
+#include <dirent.h>
 #endif
 
 namespace duckdb {
@@ -219,18 +220,114 @@ std::string stps_rename_file_impl(const std::string& old_name, const std::string
     }
 }
 
-// Helper function to delete file with error handling
-std::string stps_delete_file_impl(const std::string& path) {
-    try {
-        // Check if file exists
-        if (!file_exists(path)) {
-            return "ERROR: File does not exist: " + path;
+// Recursively delete a directory and all its contents
+bool delete_directory_recursive(const std::string& path) {
+#ifdef _WIN32
+    std::wstring wpath = Utf8ToWide(path);
+    std::wstring search_path = wpath + L"\\*";
+
+    WIN32_FIND_DATAW find_data;
+    HANDLE hFind = FindFirstFileW(search_path.c_str(), &find_data);
+    if (hFind == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+
+    do {
+        std::wstring name = find_data.cFileName;
+        if (name == L"." || name == L"..") {
+            continue;
         }
 
-        // Try to delete the file
+        std::wstring full_path = wpath + L"\\" + name;
+
+        // Convert back to UTF-8 for recursive call
+        int size_needed = WideCharToMultiByte(CP_UTF8, 0, full_path.c_str(), (int)full_path.size(), nullptr, 0, nullptr, nullptr);
+        std::string utf8_path(size_needed, 0);
+        WideCharToMultiByte(CP_UTF8, 0, full_path.c_str(), (int)full_path.size(), &utf8_path[0], size_needed, nullptr, nullptr);
+
+        if (find_data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+            if (!delete_directory_recursive(utf8_path)) {
+                FindClose(hFind);
+                return false;
+            }
+        } else {
+            // Remove read-only attribute if set
+            if (find_data.dwFileAttributes & FILE_ATTRIBUTE_READONLY) {
+                SetFileAttributesW(full_path.c_str(), find_data.dwFileAttributes & ~FILE_ATTRIBUTE_READONLY);
+            }
+            if (!DeleteFileW(full_path.c_str())) {
+                FindClose(hFind);
+                return false;
+            }
+        }
+    } while (FindNextFileW(hFind, &find_data));
+
+    FindClose(hFind);
+    return RemoveDirectoryW(wpath.c_str()) != 0;
+#else
+    DIR* dir = opendir(path.c_str());
+    if (!dir) {
+        return false;
+    }
+
+    struct dirent* entry;
+    while ((entry = readdir(dir)) != nullptr) {
+        std::string name = entry->d_name;
+        if (name == "." || name == "..") {
+            continue;
+        }
+
+        std::string full_path = path + "/" + name;
+
+        struct stat st;
+        if (stat(full_path.c_str(), &st) != 0) {
+            closedir(dir);
+            return false;
+        }
+
+        if (S_ISDIR(st.st_mode)) {
+            if (!delete_directory_recursive(full_path)) {
+                closedir(dir);
+                return false;
+            }
+        } else {
+            if (unlink(full_path.c_str()) != 0) {
+                closedir(dir);
+                return false;
+            }
+        }
+    }
+
+    closedir(dir);
+    return rmdir(path.c_str()) == 0;
+#endif
+}
+
+// Helper function to delete file or directory with error handling
+std::string stps_delete_file_impl(const std::string& path) {
+    try {
+        // Check if path exists (as file or directory)
+        if (!file_exists(path) && !directory_exists(path)) {
+            return "ERROR: Path does not exist: " + path;
+        }
+
+        // If it's a directory, delete recursively
+        if (directory_exists(path)) {
+            if (!delete_directory_recursive(path)) {
+                return "ERROR: Cannot delete folder: " + path;
+            }
+            return "SUCCESS: Deleted folder and all contents: " + path;
+        }
+
+        // It's a file - delete it
         #ifdef _WIN32
         {
             std::wstring wpath = Utf8ToWide(path);
+            // Remove read-only attribute if set
+            DWORD attrs = GetFileAttributesW(wpath.c_str());
+            if (attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_READONLY)) {
+                SetFileAttributesW(wpath.c_str(), attrs & ~FILE_ATTRIBUTE_READONLY);
+            }
             if (!DeleteFileW(wpath.c_str())) {
                 return "ERROR: Cannot delete file: " + path;
             }
