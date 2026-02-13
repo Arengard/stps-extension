@@ -472,6 +472,193 @@ static void GobdSchemaFunction(ClientContext &context, TableFunctionInput &data_
     output.SetCardinality(count);
 }
 
+// ============ stps_read_gobd_all ============
+
+struct GobdReadAllBindData : public TableFunctionData {
+    string index_path;
+    char delimiter;
+    // Unified column names across all tables (excluding _table_name)
+    vector<string> column_names;
+    // Per-table info
+    struct TableInfo {
+        string name;
+        string csv_path;
+        // Maps unified column index -> table's CSV column index (-1 if not present)
+        vector<int> col_mapping;
+    };
+    vector<TableInfo> tables;
+
+    GobdReadAllBindData(string index_path_p, char delimiter_p)
+        : index_path(std::move(index_path_p)), delimiter(delimiter_p) {}
+};
+
+struct GobdReadAllGlobalState : public GlobalTableFunctionState {
+    idx_t current_table = 0;
+    std::shared_ptr<std::ifstream> file;
+    bool finished = false;
+    char delimiter = ';';
+
+    idx_t MaxThreads() const override { return 1; }
+};
+
+static unique_ptr<FunctionData> GobdReadAllBind(ClientContext &context, TableFunctionBindInput &input,
+                                                 vector<LogicalType> &return_types, vector<string> &names) {
+    char delimiter = ';';
+
+    for (auto &kv : input.named_parameters) {
+        if (kv.first == "delimiter") {
+            string delim_str = StringValue::Get(kv.second);
+            if (!delim_str.empty()) {
+                delimiter = delim_str[0];
+            }
+        }
+    }
+
+    auto result = make_uniq<GobdReadAllBindData>(input.inputs[0].ToString(), delimiter);
+
+    auto tables = ParseGobdIndex(result->index_path);
+    if (tables.empty()) {
+        throw BinderException("No tables found in GoBD index: " + result->index_path);
+    }
+
+    string index_dir = GetDirectory(result->index_path);
+
+    // First pass: collect all unique column names in order
+    // Use a map to track insertion order
+    vector<string> all_columns;
+    std::unordered_map<string, idx_t> col_index_map;
+
+    for (auto &t : tables) {
+        for (auto &col : t.columns) {
+            if (col_index_map.find(col.name) == col_index_map.end()) {
+                col_index_map[col.name] = all_columns.size();
+                all_columns.push_back(col.name);
+            }
+        }
+    }
+
+    result->column_names = all_columns;
+
+    // Second pass: build per-table column mappings
+    for (auto &t : tables) {
+        GobdReadAllBindData::TableInfo info;
+        info.name = t.name;
+        info.csv_path = index_dir + "/" + t.url;
+        info.col_mapping.resize(all_columns.size(), -1);
+
+        for (idx_t csv_col = 0; csv_col < t.columns.size(); csv_col++) {
+            auto it = col_index_map.find(t.columns[csv_col].name);
+            if (it != col_index_map.end()) {
+                info.col_mapping[it->second] = static_cast<int>(csv_col);
+            }
+        }
+
+        result->tables.push_back(std::move(info));
+    }
+
+    // Output schema: _table_name + all unified columns
+    names.emplace_back("_table_name");
+    return_types.emplace_back(LogicalType::VARCHAR);
+
+    for (auto &col_name : all_columns) {
+        names.push_back(col_name);
+        return_types.push_back(LogicalType::VARCHAR);
+    }
+
+    return std::move(result);
+}
+
+static unique_ptr<GlobalTableFunctionState> GobdReadAllInit(ClientContext &context, TableFunctionInitInput &input) {
+    auto &bind_data = input.bind_data->Cast<GobdReadAllBindData>();
+    auto result = make_uniq<GobdReadAllGlobalState>();
+    result->delimiter = bind_data.delimiter;
+
+    if (!bind_data.tables.empty()) {
+        result->file = std::make_shared<std::ifstream>(bind_data.tables[0].csv_path);
+        if (!result->file->is_open()) {
+            // Skip files that can't be opened
+            result->file.reset();
+        }
+    } else {
+        result->finished = true;
+    }
+
+    return std::move(result);
+}
+
+static void GobdReadAllFunction(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
+    auto &bind_data = data_p.bind_data->Cast<GobdReadAllBindData>();
+    auto &state = data_p.global_state->Cast<GobdReadAllGlobalState>();
+
+    if (state.finished) {
+        output.SetCardinality(0);
+        return;
+    }
+
+    idx_t total_columns = bind_data.column_names.size();
+    idx_t count = 0;
+    string line;
+
+    while (count < STANDARD_VECTOR_SIZE) {
+        // Try to read a line from the current file
+        bool got_line = false;
+
+        while (state.current_table < bind_data.tables.size()) {
+            if (state.file && state.file->is_open() && std::getline(*state.file, line)) {
+                if (line.empty()) continue;
+                if (!line.empty() && line.back() == '\r') {
+                    line.pop_back();
+                }
+                if (line.empty()) continue;
+                got_line = true;
+                break;
+            }
+
+            // Current file exhausted or not open, move to next table
+            if (state.file && state.file->is_open()) {
+                state.file->close();
+            }
+            state.current_table++;
+
+            if (state.current_table < bind_data.tables.size()) {
+                state.file = std::make_shared<std::ifstream>(bind_data.tables[state.current_table].csv_path);
+                if (!state.file->is_open()) {
+                    state.file.reset();
+                }
+            }
+        }
+
+        if (!got_line) {
+            state.finished = true;
+            break;
+        }
+
+        auto &table_info = bind_data.tables[state.current_table];
+        auto fields = ParseCsvLine(line, state.delimiter);
+
+        // Column 0: _table_name
+        output.SetValue(0, count, Value(table_info.name));
+
+        // Columns 1..N: mapped data columns
+        for (idx_t col = 0; col < total_columns; col++) {
+            int csv_idx = table_info.col_mapping[col];
+            if (csv_idx >= 0 && static_cast<idx_t>(csv_idx) < fields.size()) {
+                output.SetValue(col + 1, count, Value(fields[csv_idx]));
+            } else {
+                output.SetValue(col + 1, count, Value());  // NULL
+            }
+        }
+
+        count++;
+    }
+
+    output.SetCardinality(count);
+}
+
+static unique_ptr<NodeStatistics> GobdReadAllCardinality(ClientContext &context, const FunctionData *bind_data_p) {
+    return make_uniq<NodeStatistics>();
+}
+
 // ============ Registration ============
 
 void RegisterGobdReaderFunctions(ExtensionLoader &loader) {
@@ -485,6 +672,17 @@ void RegisterGobdReaderFunctions(ExtensionLoader &loader) {
 
     CreateTableFunctionInfo read_gobd_info(read_gobd);
     loader.RegisterFunction(read_gobd_info);
+
+    // stps_read_gobd_all(index_path, delimiter=';')
+    TableFunction read_gobd_all("stps_read_gobd_all",
+                               {LogicalType::VARCHAR},
+                               GobdReadAllFunction, GobdReadAllBind, GobdReadAllInit);
+
+    read_gobd_all.cardinality = GobdReadAllCardinality;
+    read_gobd_all.named_parameters["delimiter"] = LogicalType::VARCHAR;
+
+    CreateTableFunctionInfo read_gobd_all_info(read_gobd_all);
+    loader.RegisterFunction(read_gobd_all_info);
 
     // gobd_list_tables(index_path)
     TableFunction list_tables("gobd_list_tables",

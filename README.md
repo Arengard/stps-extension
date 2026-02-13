@@ -666,11 +666,24 @@ SELECT stps_read_xml_json('data.xml') AS json_data;
 
 ### 📊 GOBD Functions (German Business Data)
 
-#### `stps_read_gobd(file_path VARCHAR) → TABLE`
-Parse GoBD (Grundsätze zur ordnungsmäßigen Führung und Aufbewahrung von Büchern) XML files.
+#### `stps_read_gobd(file_path VARCHAR, table_name VARCHAR, delimiter := VARCHAR) → TABLE`
+Read a single table from a GoBD/GDPDU export. Requires specifying which table to read.
 ```sql
-SELECT * FROM stps_read_gobd('index.xml');
--- Returns: parsed business data according to GoBD standard
+SELECT * FROM stps_read_gobd('index.xml', 'Buchungsstapel');
+-- Returns: all columns of the specified table as VARCHAR
+```
+
+#### `stps_read_gobd_all(file_path VARCHAR, delimiter := VARCHAR) → TABLE`
+Read **all tables** from a GoBD/GDPDU export at once. Returns a unified result with a `_table_name` column to identify which table each row came from. Columns from all tables are merged — columns not present in a given table are NULL.
+```sql
+-- Read everything from a GoBD export
+SELECT * FROM stps_read_gobd_all('index.xml');
+
+-- Filter to a specific table
+SELECT * FROM stps_read_gobd_all('index.xml') WHERE _table_name = 'Buchungsstapel';
+
+-- See which tables have data
+SELECT _table_name, COUNT(*) FROM stps_read_gobd_all('index.xml') GROUP BY _table_name;
 ```
 
 #### `gobd_list_tables(file_path VARCHAR) → TABLE`
