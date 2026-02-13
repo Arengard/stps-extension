@@ -15,7 +15,7 @@ Successfully implemented a custom DuckDB function `stps_read_gobd` for reading G
 
 ### SQL Macros
 - **`gobd_extract_schema(json_data)`** - Extracts full schema from XML
-- **`gobd_list_tables(index_path)`** - Lists all available tables
+- **`stps_gobd_list_tables(index_path)`** - Lists all available tables
 
 ### Files Created/Modified
 
@@ -59,7 +59,7 @@ SELECT * FROM stps_read_gobd(
 ### List Available Tables
 
 ```sql
-SELECT * FROM gobd_list_tables('/Users/ramonljevo/Downloads/siebert/index.xml');
+SELECT * FROM stps_gobd_list_tables('/Users/ramonljevo/Downloads/siebert/index.xml');
 ```
 
 ### Extract Schema
@@ -144,7 +144,7 @@ SELECT * FROM stps_read_gobd(
 2. **Verify schema extraction**:
    ```sql
    .read gobd_macros.sql
-   SELECT * FROM gobd_list_tables('/Users/ramonljevo/Downloads/siebert/index.xml');
+   SELECT * FROM stps_gobd_list_tables('/Users/ramonljevo/Downloads/siebert/index.xml');
    ```
 
 3. **Run comprehensive tests**:

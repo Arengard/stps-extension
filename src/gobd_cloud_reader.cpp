@@ -542,7 +542,7 @@ static void GobdCloudFolderScan(ClientContext &context, TableFunctionInput &data
 }
 
 // ============================================================================
-// gobd_list_tables_cloud
+// stps_gobd_list_tables_cloud
 // ============================================================================
 
 struct GobdListTablesCloudBindData : public TableFunctionData {
@@ -615,7 +615,7 @@ static void GobdListTablesCloudScan(ClientContext &context, TableFunctionInput &
 }
 
 // ============================================================================
-// gobd_table_schema_cloud
+// stps_gobd_table_schema_cloud
 // ============================================================================
 
 struct GobdSchemaCloudBindData : public TableFunctionData {
@@ -988,9 +988,9 @@ void RegisterGobdCloudReaderFunctions(ExtensionLoader &loader) {
         loader.RegisterFunction(info);
     }
 
-    // gobd_list_tables_cloud(url, username, password)
+    // stps_gobd_list_tables_cloud(url, username, password)
     {
-        TableFunction func("gobd_list_tables_cloud",
+        TableFunction func("stps_gobd_list_tables_cloud",
                           {LogicalType::VARCHAR},
                           GobdListTablesCloudScan, GobdListTablesCloudBind, GobdListTablesCloudInit);
         func.named_parameters["username"] = LogicalType::VARCHAR;
@@ -1000,9 +1000,9 @@ void RegisterGobdCloudReaderFunctions(ExtensionLoader &loader) {
         loader.RegisterFunction(info);
     }
 
-    // gobd_table_schema_cloud(url, table_name, username, password)
+    // stps_gobd_table_schema_cloud(url, table_name, username, password)
     {
-        TableFunction func("gobd_table_schema_cloud",
+        TableFunction func("stps_gobd_table_schema_cloud",
                           {LogicalType::VARCHAR, LogicalType::VARCHAR},
                           GobdSchemaCloudScan, GobdSchemaCloudBind, GobdSchemaCloudInit);
         func.named_parameters["username"] = LogicalType::VARCHAR;

@@ -715,7 +715,7 @@ static unique_ptr<NodeStatistics> GobdReaderCardinality(ClientContext &context, 
     return make_uniq<NodeStatistics>();
 }
 
-// ============ gobd_list_tables ============
+// ============ stps_gobd_list_tables ============
 
 struct GobdListTablesBindData : public TableFunctionData {
     string index_path;
@@ -772,7 +772,7 @@ static void GobdListTablesFunction(ClientContext &context, TableFunctionInput &d
     output.SetCardinality(count);
 }
 
-// ============ gobd_table_schema ============
+// ============ stps_gobd_table_schema ============
 
 struct GobdSchemaBindData : public TableFunctionData {
     string index_path;
@@ -954,16 +954,16 @@ void RegisterGobdReaderFunctions(ExtensionLoader &loader) {
     CreateTableFunctionInfo read_gobd_all_info(read_gobd_all);
     loader.RegisterFunction(read_gobd_all_info);
 
-    // gobd_list_tables(index_path)
-    TableFunction list_tables("gobd_list_tables",
+    // stps_gobd_list_tables(index_path)
+    TableFunction list_tables("stps_gobd_list_tables",
                              {LogicalType::VARCHAR},
                              GobdListTablesFunction, GobdListTablesBind, GobdListTablesInit);
 
     CreateTableFunctionInfo list_tables_info(list_tables);
     loader.RegisterFunction(list_tables_info);
 
-    // gobd_table_schema(index_path, table_name)
-    TableFunction table_schema("gobd_table_schema",
+    // stps_gobd_table_schema(index_path, table_name)
+    TableFunction table_schema("stps_gobd_table_schema",
                               {LogicalType::VARCHAR, LogicalType::VARCHAR},
                               GobdSchemaFunction, GobdSchemaBind, GobdSchemaInit);
 

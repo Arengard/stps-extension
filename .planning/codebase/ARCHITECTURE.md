@@ -28,7 +28,7 @@
 - AI: `stps_ask_ai`, `stps_ai_classify`, `stps_ask_ai_gender`
 
 ### Table Functions (→ result set)
-- File reading: `stps_zip`, `stps_view_zip`, `next_cloud`
+- File reading: `stps_zip`, `stps_view_zip`, `stps_nextcloud`
 - Data manipulation: `stps_drop_null_columns`, `stps_drop_duplicates`, `stps_show_duplicates`
 - Search: `stps_search_columns`
 - Smart cast: `stps_smart_cast`

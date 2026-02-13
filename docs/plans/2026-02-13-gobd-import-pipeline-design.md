@@ -77,7 +77,7 @@ All three feed into `ExecuteGobdImportPipeline()` which handles steps 3-7.
 ## What Stays Unchanged
 
 - `stps_read_gobd` — Single-table read-only function (still useful for SELECT queries)
-- `gobd_list_tables` / `gobd_table_schema` — Discovery functions
+- `stps_gobd_list_tables` / `stps_gobd_table_schema` — Discovery functions
 - All cloud single-table functions
 - All existing utility functions (used internally by pipeline)
 

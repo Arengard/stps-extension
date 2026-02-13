@@ -50,7 +50,7 @@ stps-extension/
 | File | Functions |
 |------|-----------|
 | `zip_functions.cpp` | `stps_zip`, `stps_view_zip` |
-| `nextcloud_functions.cpp` | `next_cloud` |
+| `nextcloud_functions.cpp` | `stps_nextcloud` |
 | `drop_null_columns_function.cpp` | `stps_drop_null_columns` |
 | `drop_duplicates_function.cpp` | `stps_drop_duplicates`, `stps_show_duplicates` |
 | `search_columns_function.cpp` | `stps_search_columns` |

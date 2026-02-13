@@ -596,10 +596,10 @@ Move file. Creates parent directories if needed.
 SELECT stps_move_io('old_path.csv', 'new_path.csv') AS result;
 ```
 
-#### `stps_io_rename(old_path VARCHAR, new_path VARCHAR) → VARCHAR`
+#### `stps_rename_io(old_path VARCHAR, new_path VARCHAR) → VARCHAR`
 Rename file. Fails if destination already exists.
 ```sql
-SELECT stps_io_rename('old_name.csv', 'new_name.csv') AS result;
+SELECT stps_rename_io('old_name.csv', 'new_name.csv') AS result;
 ```
 
 #### `stps_delete_io(path VARCHAR) → VARCHAR`
@@ -638,7 +638,7 @@ Use `stps_scan` with IO functions to perform bulk file operations:
 
 ```sql
 -- Batch rename: remove 'abc' from all filenames
-SELECT stps_io_rename(path, parent_directory || '/' || replace(name, 'abc', ''))
+SELECT stps_rename_io(path, parent_directory || '/' || replace(name, 'abc', ''))
 FROM stps_scan('.')
 WHERE name LIKE '%abc%';
 
@@ -698,17 +698,17 @@ SELECT * FROM buchungsstapel;
 SELECT * FROM sachkontenplan;
 ```
 
-#### `gobd_list_tables(file_path VARCHAR) → TABLE`
+#### `stps_gobd_list_tables(file_path VARCHAR) → TABLE`
 List tables defined in GoBD file.
 ```sql
-SELECT * FROM gobd_list_tables('index.xml');
+SELECT * FROM stps_gobd_list_tables('index.xml');
 -- Returns: name, url, description, column_count
 ```
 
-#### `gobd_table_schema(file_path VARCHAR, table_name VARCHAR) → TABLE`
+#### `stps_gobd_table_schema(file_path VARCHAR, table_name VARCHAR) → TABLE`
 Get schema of specific GoBD table.
 ```sql
-SELECT * FROM gobd_table_schema('index.xml', 'transactions');
+SELECT * FROM stps_gobd_table_schema('index.xml', 'transactions');
 -- Returns: column_name, data_type, description
 ```
 
@@ -758,10 +758,10 @@ FROM stps_read_gobd_cloud_folder(
 
 **Returns:** `parent_folder`, `child_folder`, plus all data columns from the GoBD table (all VARCHAR).
 
-#### `gobd_list_tables_cloud(url VARCHAR, username := VARCHAR, password := VARCHAR) → TABLE`
+#### `stps_stps_gobd_list_tables_cloud(url VARCHAR, username := VARCHAR, password := VARCHAR) → TABLE`
 List all tables defined in a cloud-hosted GoBD `index.xml`.
 ```sql
-SELECT * FROM gobd_list_tables_cloud(
+SELECT * FROM stps_stps_gobd_list_tables_cloud(
   'https://cloud.example.com/remote.php/dav/files/user/export/',
   username := 'myuser',
   password := 'mypassword'
@@ -769,10 +769,10 @@ SELECT * FROM gobd_list_tables_cloud(
 -- Returns: table_name, table_url, description, column_count
 ```
 
-#### `gobd_table_schema_cloud(url VARCHAR, table_name VARCHAR, username := VARCHAR, password := VARCHAR) → TABLE`
+#### `stps_stps_gobd_table_schema_cloud(url VARCHAR, table_name VARCHAR, username := VARCHAR, password := VARCHAR) → TABLE`
 Show the column schema for a specific table in a cloud-hosted GoBD `index.xml`.
 ```sql
-SELECT * FROM gobd_table_schema_cloud(
+SELECT * FROM stps_stps_gobd_table_schema_cloud(
   'https://cloud.example.com/remote.php/dav/files/user/export/',
   'Buchungsstapel',
   username := 'myuser',
@@ -1251,7 +1251,7 @@ See [LICENSE](LICENSE) file.
 
 ## Nextcloud/WebDAV table functions
 
-### `next_cloud(url VARCHAR, ...) → TABLE`
+### `stps_nextcloud(url VARCHAR, ...) → TABLE`
 
 Fetch a file directly over WebDAV and return it as a table. File type is auto-detected from the URL extension. All file types are parsed via DuckDB's built-in readers (`read_csv_auto`, `read_parquet`, `read_sheet`).
 
@@ -1271,13 +1271,13 @@ Fetch a file directly over WebDAV and return it as a table. File type is auto-de
 
 ```sql
 -- CSV with auto-detected types
-SELECT * FROM next_cloud('https://your-server/path/file.csv', username:='user', password:='pass');
+SELECT * FROM stps_nextcloud('https://your-server/path/file.csv', username:='user', password:='pass');
 
 -- Parquet
-SELECT * FROM next_cloud('https://your-server/path/file.parquet', username:='user', password:='pass');
+SELECT * FROM stps_nextcloud('https://your-server/path/file.parquet', username:='user', password:='pass');
 
 -- Excel with all columns as text (avoids type errors from totals rows)
-SELECT * FROM next_cloud(
+SELECT * FROM stps_nextcloud(
   'https://your-server/path/file.xlsx',
   username := 'user',
   password := 'pass',
@@ -1285,7 +1285,7 @@ SELECT * FROM next_cloud(
 );
 
 -- Excel: specific sheet and range
-SELECT * FROM next_cloud(
+SELECT * FROM stps_nextcloud(
   'https://your-server/path/file.xlsx',
   username := 'user',
   password := 'pass',
@@ -1294,7 +1294,7 @@ SELECT * FROM next_cloud(
 );
 
 -- CSV with custom reader options
-SELECT * FROM next_cloud(
+SELECT * FROM stps_nextcloud(
   'https://your-server/path/file.csv',
   username := 'user',
   password := 'pass',
@@ -1302,7 +1302,7 @@ SELECT * FROM next_cloud(
 );
 
 -- Custom headers (bearer token, etc.)
-SELECT * FROM next_cloud(
+SELECT * FROM stps_nextcloud(
   'https://daten.example.cloud/path/file.csv',
   headers := 'X-API-Key: abc123'
 );
@@ -1314,7 +1314,7 @@ Notes:
 - XLSX/XLS requires the DuckDB `rusty_sheet` community extension (auto-installed).
 - If `read_csv_auto` fails for CSV files, falls back to a built-in CSV parser (all VARCHAR).
 
-### `next_cloud_folder(parent_url VARCHAR, ...) → TABLE`
+### `stps_nextcloud_folder(parent_url VARCHAR, ...) → TABLE`
 
 Scan a Nextcloud/WebDAV parent folder, enter each company subfolder's `child_folder`, read all matching files, and return a unified table with metadata columns.
 
@@ -1338,7 +1338,7 @@ The function uses WebDAV PROPFIND to discover subfolders and files. Column names
 ```sql
 -- Read all CSV files from each company's "bank" subfolder
 SELECT *
-FROM next_cloud_folder(
+FROM stps_nextcloud_folder(
   'https://cloud.example.com/remote.php/dav/files/user/mandanten',
   child_folder := 'bank',
   file_type := 'csv',
@@ -1348,7 +1348,7 @@ FROM next_cloud_folder(
 
 -- Read XLSX files with all_varchar to avoid type errors (e.g. totals rows)
 SELECT *
-FROM next_cloud_folder(
+FROM stps_nextcloud_folder(
   'https://cloud.example.com/remote.php/dav/files/user/mandanten',
   child_folder := 'Bank',
   file_type := 'xlsx',
@@ -1359,7 +1359,7 @@ FROM next_cloud_folder(
 
 -- XLSX with specific sheet
 SELECT *
-FROM next_cloud_folder(
+FROM stps_nextcloud_folder(
   'https://cloud.example.com/remote.php/dav/files/user/mandanten',
   child_folder := 'Bank',
   file_type := 'xlsx',
@@ -1371,7 +1371,7 @@ FROM next_cloud_folder(
 
 -- Read files directly from company folders (no child_folder)
 SELECT *
-FROM next_cloud_folder(
+FROM stps_nextcloud_folder(
   'https://cloud.example.com/remote.php/dav/files/user/mandanten',
   file_type := 'csv',
   username := 'myuser',

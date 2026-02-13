@@ -77,7 +77,7 @@ static unique_ptr<FunctionData> NextcloudBind(ClientContext &context, TableFunct
     auto result = make_uniq<NextcloudBindData>();
 
     if (input.inputs.empty()) {
-        throw BinderException("next_cloud requires a URL argument");
+        throw BinderException("stps_nextcloud requires a URL argument");
     }
     result->url = input.inputs[0].GetValue<std::string>();
 
@@ -454,7 +454,7 @@ static unique_ptr<FunctionData> NextcloudFolderBind(ClientContext &context, Tabl
     auto result = make_uniq<NextcloudFolderBindData>();
 
     if (input.inputs.empty()) {
-        throw BinderException("next_cloud_folder requires a parent URL argument");
+        throw BinderException("stps_nextcloud_folder requires a parent URL argument");
     }
     result->parent_url = input.inputs[0].GetValue<std::string>();
 
@@ -797,7 +797,7 @@ static void NextcloudFolderScan(ClientContext &context, TableFunctionInput &data
 
 void RegisterNextcloudFunctions(ExtensionLoader &loader) {
     // next_cloud - single file download
-    TableFunction func("next_cloud", {LogicalType::VARCHAR}, NextcloudScan, NextcloudBind, NextcloudInit);
+    TableFunction func("stps_nextcloud", {LogicalType::VARCHAR}, NextcloudScan, NextcloudBind, NextcloudInit);
     func.named_parameters["username"] = LogicalType::VARCHAR;
     func.named_parameters["password"] = LogicalType::VARCHAR;
     func.named_parameters["headers"] = LogicalType::VARCHAR;
@@ -809,7 +809,7 @@ void RegisterNextcloudFunctions(ExtensionLoader &loader) {
     loader.RegisterFunction(func);
 
     // next_cloud_folder - scan parent folder's company subfolders
-    TableFunction folder_func("next_cloud_folder", {LogicalType::VARCHAR},
+    TableFunction folder_func("stps_nextcloud_folder", {LogicalType::VARCHAR},
                               NextcloudFolderScan, NextcloudFolderBind, NextcloudFolderInit);
     folder_func.named_parameters["child_folder"] = LogicalType::VARCHAR;
     folder_func.named_parameters["file_type"] = LogicalType::VARCHAR;

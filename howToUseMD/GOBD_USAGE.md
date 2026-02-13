@@ -90,7 +90,7 @@ WHERE table_name = 'Debitor'
 ORDER BY column_order;
 ```
 
-### `gobd_list_tables(index_path)`
+### `stps_gobd_list_tables(index_path)`
 
 A macro that lists all tables defined in a GoBD index file.
 
@@ -108,7 +108,7 @@ A macro that lists all tables defined in a GoBD index file.
 .read gobd_macros.sql
 
 -- List all available tables
-SELECT * FROM gobd_list_tables('/Users/data/siebert/index.xml');
+SELECT * FROM stps_gobd_list_tables('/Users/data/siebert/index.xml');
 ```
 
 ## How It Works

@@ -446,8 +446,8 @@ void RegisterIoOperationFunctions(ExtensionLoader &loader) {
                                                      LogicalType::VARCHAR, StpsCreateFoldersIoFunction));
     loader.RegisterFunction(create_folders_io_set);
 
-    // stps_io_rename(old_name, new_name)
-    ScalarFunctionSet rename_io_set("stps_io_rename");
+    // stps_rename_io(old_name, new_name)
+    ScalarFunctionSet rename_io_set("stps_rename_io");
     rename_io_set.AddFunction(ScalarFunction({LogicalType::VARCHAR, LogicalType::VARCHAR},
                                              LogicalType::VARCHAR, StpsRenameIoFunction));
     loader.RegisterFunction(rename_io_set);
