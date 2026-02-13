@@ -8,6 +8,8 @@
 #include <fstream>
 #include <sstream>
 #include <algorithm>
+#include <set>
+#include <unordered_map>
 
 namespace duckdb {
 namespace stps {
@@ -194,6 +196,278 @@ vector<string> ParseCsvLine(const string &line, char delimiter) {
     fields.push_back(current_field);
 
     return fields;
+}
+
+// ============ Encoding Helpers ============
+
+// Windows-1252 code points for bytes 0x80-0x9F
+static const uint16_t CP1252_MAP[32] = {
+    0x20AC, 0x0081, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021,
+    0x02C6, 0x2030, 0x0160, 0x2039, 0x0152, 0x008D, 0x017D, 0x008F,
+    0x0090, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014,
+    0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0x009D, 0x017E, 0x0178
+};
+
+static void AppendUtf8Char(std::string &out, uint32_t cp) {
+    if (cp <= 0x7F) {
+        out.push_back(static_cast<char>(cp));
+    } else if (cp <= 0x7FF) {
+        out.push_back(static_cast<char>(0xC0 | (cp >> 6)));
+        out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+    } else if (cp <= 0xFFFF) {
+        out.push_back(static_cast<char>(0xE0 | (cp >> 12)));
+        out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+    }
+}
+
+bool IsValidUtf8(const std::string &str) {
+    const unsigned char *bytes = reinterpret_cast<const unsigned char *>(str.data());
+    size_t len = str.size();
+    for (size_t i = 0; i < len; ) {
+        if (bytes[i] <= 0x7F) {
+            i++;
+        } else if ((bytes[i] & 0xE0) == 0xC0) {
+            if (i + 1 >= len || (bytes[i + 1] & 0xC0) != 0x80) return false;
+            i += 2;
+        } else if ((bytes[i] & 0xF0) == 0xE0) {
+            if (i + 2 >= len || (bytes[i + 1] & 0xC0) != 0x80 || (bytes[i + 2] & 0xC0) != 0x80) return false;
+            i += 3;
+        } else if ((bytes[i] & 0xF8) == 0xF0) {
+            if (i + 3 >= len || (bytes[i + 1] & 0xC0) != 0x80 || (bytes[i + 2] & 0xC0) != 0x80 || (bytes[i + 3] & 0xC0) != 0x80) return false;
+            i += 4;
+        } else {
+            return false;
+        }
+    }
+    return true;
+}
+
+std::string ConvertWindows1252ToUtf8(const std::string &input) {
+    std::string output;
+    output.reserve(input.size() * 2);
+    for (unsigned char c : input) {
+        if (c <= 0x7F) {
+            output.push_back(static_cast<char>(c));
+        } else if (c >= 0x80 && c <= 0x9F) {
+            AppendUtf8Char(output, CP1252_MAP[c - 0x80]);
+        } else {
+            AppendUtf8Char(output, c);
+        }
+    }
+    return output;
+}
+
+std::string EnsureUtf8(const std::string &input) {
+    if (IsValidUtf8(input)) {
+        return input;
+    }
+    return ConvertWindows1252ToUtf8(input);
+}
+
+// ============ Shared Import Pipeline ============
+
+// Convert a name to snake_case: lowercase, replace non-alphanumeric with _, collapse multiples
+static string ToSnakeCase(const string &input) {
+    string result;
+    result.reserve(input.size());
+    bool last_was_underscore = false;
+
+    for (size_t i = 0; i < input.size(); i++) {
+        char c = input[i];
+        if (std::isalnum(static_cast<unsigned char>(c))) {
+            // Insert _ before uppercase if preceded by lowercase
+            if (std::isupper(static_cast<unsigned char>(c)) && !result.empty() && !last_was_underscore) {
+                char prev = result.back();
+                if (std::islower(static_cast<unsigned char>(prev)) || std::isdigit(static_cast<unsigned char>(prev))) {
+                    result += '_';
+                }
+            }
+            result += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            last_was_underscore = false;
+        } else {
+            // Replace special chars with _
+            if (!result.empty() && !last_was_underscore) {
+                result += '_';
+                last_was_underscore = true;
+            }
+        }
+    }
+
+    // Trim trailing _
+    while (!result.empty() && result.back() == '_') {
+        result.pop_back();
+    }
+
+    return result.empty() ? "column" : result;
+}
+
+// Escape a SQL identifier (double-quote)
+static string EscapeIdentifier(const string &name) {
+    string escaped;
+    for (char c : name) {
+        if (c == '"') escaped += "\"\"";
+        else escaped += c;
+    }
+    return "\"" + escaped + "\"";
+}
+
+// Escape a SQL string literal (single-quote)
+static string EscapeStringLiteral(const string &value) {
+    string escaped;
+    for (char c : value) {
+        if (c == '\'') escaped += "''";
+        else escaped += c;
+    }
+    return "'" + escaped + "'";
+}
+
+vector<GobdImportResult> ExecuteGobdImportPipeline(ClientContext &context,
+                                                    const GobdImportData &data,
+                                                    char delimiter,
+                                                    bool overwrite) {
+    vector<GobdImportResult> results;
+    Connection conn(context.db->GetDatabase(context));
+
+    for (auto &table : data.tables) {
+        GobdImportResult result;
+        result.rows_imported = 0;
+        result.columns_created = 0;
+
+        // Get CSV content for this table
+        auto csv_it = data.csv_contents.find(table.url);
+        if (csv_it == data.csv_contents.end() || csv_it->second.empty()) {
+            result.table_name = ToSnakeCase(table.name);
+            result.error = "CSV content not found for table: " + table.name;
+            results.push_back(result);
+            continue;
+        }
+
+        // Normalize table name
+        string table_name = ToSnakeCase(table.name);
+        result.table_name = table_name;
+        string escaped_table = EscapeIdentifier(table_name);
+
+        // Normalize column names, handle duplicates
+        vector<string> normalized_cols;
+        std::set<string> used_names;
+        for (auto &col : table.columns) {
+            string name = ToSnakeCase(col.name);
+            string base_name = name;
+            int suffix = 2;
+            while (used_names.count(name)) {
+                name = base_name + "_" + std::to_string(suffix++);
+            }
+            used_names.insert(name);
+            normalized_cols.push_back(name);
+        }
+
+        if (normalized_cols.empty()) {
+            result.error = "No columns found for table: " + table.name;
+            results.push_back(result);
+            continue;
+        }
+
+        // Check if table exists
+        {
+            auto check = conn.Query("SELECT 1 FROM information_schema.tables WHERE table_name = " +
+                                    EscapeStringLiteral(table_name) + " LIMIT 1");
+            if (check && check->RowCount() > 0) {
+                if (overwrite) {
+                    conn.Query("DROP TABLE IF EXISTS " + escaped_table);
+                } else {
+                    result.error = "Table already exists: " + table_name + " (use overwrite := true to replace)";
+                    results.push_back(result);
+                    continue;
+                }
+            }
+        }
+
+        // Step 1: CREATE TABLE with all VARCHAR columns
+        {
+            string create_sql = "CREATE TABLE " + escaped_table + " (";
+            for (size_t i = 0; i < normalized_cols.size(); i++) {
+                if (i > 0) create_sql += ", ";
+                create_sql += EscapeIdentifier(normalized_cols[i]) + " VARCHAR";
+            }
+            create_sql += ")";
+
+            auto create_result = conn.Query(create_sql);
+            if (create_result->HasError()) {
+                result.error = "Failed to create table: " + create_result->GetError();
+                results.push_back(result);
+                continue;
+            }
+        }
+
+        // Step 2: INSERT data from CSV content
+        std::string csv_content = EnsureUtf8(csv_it->second);
+        std::istringstream stream(csv_content);
+        string line;
+        int64_t row_count = 0;
+
+        // Build INSERT in batches
+        while (std::getline(stream, line)) {
+            if (line.empty()) continue;
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            if (line.empty()) continue;
+
+            auto fields = ParseCsvLine(line, delimiter);
+
+            string insert_sql = "INSERT INTO " + escaped_table + " VALUES (";
+            for (size_t i = 0; i < normalized_cols.size(); i++) {
+                if (i > 0) insert_sql += ", ";
+                if (i < fields.size() && !fields[i].empty()) {
+                    insert_sql += EscapeStringLiteral(fields[i]);
+                } else {
+                    insert_sql += "NULL";
+                }
+            }
+            insert_sql += ")";
+
+            conn.Query(insert_sql);
+            row_count++;
+        }
+
+        result.rows_imported = row_count;
+
+        // Step 3: Drop empty columns (all NULL or empty string)
+        {
+            vector<string> cols_to_drop;
+            for (auto &col_name : normalized_cols) {
+                string check_sql = "SELECT COUNT(*) FROM " + escaped_table +
+                                   " WHERE " + EscapeIdentifier(col_name) + " IS NOT NULL AND " +
+                                   EscapeIdentifier(col_name) + " <> ''";
+                auto check_result = conn.Query(check_sql);
+                if (check_result && check_result->RowCount() > 0) {
+                    auto count_val = check_result->GetValue(0, 0).GetValue<int64_t>();
+                    if (count_val == 0) {
+                        cols_to_drop.push_back(col_name);
+                    }
+                }
+            }
+
+            for (auto &col_name : cols_to_drop) {
+                conn.Query("ALTER TABLE " + escaped_table + " DROP COLUMN " + EscapeIdentifier(col_name));
+            }
+
+            result.columns_created = static_cast<int32_t>(normalized_cols.size() - cols_to_drop.size());
+        }
+
+        // Step 4: Smart cast types
+        if (row_count > 0) {
+            string cast_sql = "CREATE OR REPLACE TABLE " + escaped_table +
+                              " AS SELECT * FROM stps_smart_cast(" + EscapeStringLiteral(table_name) + ")";
+            auto cast_result = conn.Query(cast_sql);
+            if (cast_result && cast_result->HasError()) {
+                // Smart cast failed - keep VARCHAR table, not a fatal error
+            }
+        }
+
+        results.push_back(result);
+    }
+
+    return results;
 }
 
 // ============ stps_read_gobd ============
@@ -472,38 +746,24 @@ static void GobdSchemaFunction(ClientContext &context, TableFunctionInput &data_
     output.SetCardinality(count);
 }
 
-// ============ stps_read_gobd_all ============
+// ============ stps_read_gobd_all (table-creating pipeline) ============
 
 struct GobdReadAllBindData : public TableFunctionData {
-    string index_path;
-    char delimiter;
-    // Unified column names across all tables (excluding _table_name)
-    vector<string> column_names;
-    // Per-table info
-    struct TableInfo {
-        string name;
-        string csv_path;
-        // Maps unified column index -> table's CSV column index (-1 if not present)
-        vector<int> col_mapping;
-    };
-    vector<TableInfo> tables;
-
-    GobdReadAllBindData(string index_path_p, char delimiter_p)
-        : index_path(std::move(index_path_p)), delimiter(delimiter_p) {}
+    vector<GobdImportResult> import_results;
 };
 
 struct GobdReadAllGlobalState : public GlobalTableFunctionState {
-    idx_t current_table = 0;
-    std::shared_ptr<std::ifstream> file;
-    bool finished = false;
-    char delimiter = ';';
-
+    idx_t offset = 0;
     idx_t MaxThreads() const override { return 1; }
 };
 
 static unique_ptr<FunctionData> GobdReadAllBind(ClientContext &context, TableFunctionBindInput &input,
                                                  vector<LogicalType> &return_types, vector<string> &names) {
+    auto result = make_uniq<GobdReadAllBindData>();
+
+    string index_path = input.inputs[0].ToString();
     char delimiter = ';';
+    bool overwrite = false;
 
     for (auto &kv : input.named_parameters) {
         if (kv.first == "delimiter") {
@@ -511,152 +771,72 @@ static unique_ptr<FunctionData> GobdReadAllBind(ClientContext &context, TableFun
             if (!delim_str.empty()) {
                 delimiter = delim_str[0];
             }
+        } else if (kv.first == "overwrite") {
+            overwrite = BooleanValue::Get(kv.second);
         }
     }
 
-    auto result = make_uniq<GobdReadAllBindData>(input.inputs[0].ToString(), delimiter);
-
-    auto tables = ParseGobdIndex(result->index_path);
+    // Parse index.xml from local file
+    auto tables = ParseGobdIndex(index_path);
     if (tables.empty()) {
-        throw BinderException("No tables found in GoBD index: " + result->index_path);
+        throw BinderException("No tables found in GoBD index: " + index_path);
     }
 
-    string index_dir = GetDirectory(result->index_path);
+    string index_dir = GetDirectory(index_path);
 
-    // First pass: collect all unique column names in order
-    // Use a map to track insertion order
-    vector<string> all_columns;
-    std::unordered_map<string, idx_t> col_index_map;
+    // Build import data: read each CSV file from disk
+    GobdImportData import_data;
+    import_data.tables = tables;
 
-    for (auto &t : tables) {
-        for (auto &col : t.columns) {
-            if (col_index_map.find(col.name) == col_index_map.end()) {
-                col_index_map[col.name] = all_columns.size();
-                all_columns.push_back(col.name);
-            }
+    for (auto &table : tables) {
+        string csv_path = index_dir + "/" + table.url;
+        std::ifstream file(csv_path);
+        if (file.is_open()) {
+            std::stringstream buf;
+            buf << file.rdbuf();
+            import_data.csv_contents[table.url] = buf.str();
+            file.close();
         }
     }
 
-    result->column_names = all_columns;
+    // Execute the shared pipeline
+    result->import_results = ExecuteGobdImportPipeline(context, import_data, delimiter, overwrite);
 
-    // Second pass: build per-table column mappings
-    for (auto &t : tables) {
-        GobdReadAllBindData::TableInfo info;
-        info.name = t.name;
-        info.csv_path = index_dir + "/" + t.url;
-        info.col_mapping.resize(all_columns.size(), -1);
-
-        for (idx_t csv_col = 0; csv_col < t.columns.size(); csv_col++) {
-            auto it = col_index_map.find(t.columns[csv_col].name);
-            if (it != col_index_map.end()) {
-                info.col_mapping[it->second] = static_cast<int>(csv_col);
-            }
-        }
-
-        result->tables.push_back(std::move(info));
-    }
-
-    // Output schema: _table_name + all unified columns
-    names.emplace_back("_table_name");
+    // Output schema: summary table
+    names.emplace_back("table_name");
     return_types.emplace_back(LogicalType::VARCHAR);
-
-    for (auto &col_name : all_columns) {
-        names.push_back(col_name);
-        return_types.push_back(LogicalType::VARCHAR);
-    }
+    names.emplace_back("rows_imported");
+    return_types.emplace_back(LogicalType::BIGINT);
+    names.emplace_back("columns_created");
+    return_types.emplace_back(LogicalType::INTEGER);
+    names.emplace_back("error");
+    return_types.emplace_back(LogicalType::VARCHAR);
 
     return std::move(result);
 }
 
 static unique_ptr<GlobalTableFunctionState> GobdReadAllInit(ClientContext &context, TableFunctionInitInput &input) {
-    auto &bind_data = input.bind_data->Cast<GobdReadAllBindData>();
-    auto result = make_uniq<GobdReadAllGlobalState>();
-    result->delimiter = bind_data.delimiter;
-
-    if (!bind_data.tables.empty()) {
-        result->file = std::make_shared<std::ifstream>(bind_data.tables[0].csv_path);
-        if (!result->file->is_open()) {
-            // Skip files that can't be opened
-            result->file.reset();
-        }
-    } else {
-        result->finished = true;
-    }
-
-    return std::move(result);
+    return make_uniq<GobdReadAllGlobalState>();
 }
 
 static void GobdReadAllFunction(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
     auto &bind_data = data_p.bind_data->Cast<GobdReadAllBindData>();
     auto &state = data_p.global_state->Cast<GobdReadAllGlobalState>();
 
-    if (state.finished) {
-        output.SetCardinality(0);
-        return;
-    }
-
-    idx_t total_columns = bind_data.column_names.size();
     idx_t count = 0;
-    string line;
+    while (state.offset < bind_data.import_results.size() && count < STANDARD_VECTOR_SIZE) {
+        auto &r = bind_data.import_results[state.offset];
 
-    while (count < STANDARD_VECTOR_SIZE) {
-        // Try to read a line from the current file
-        bool got_line = false;
+        output.SetValue(0, count, Value(r.table_name));
+        output.SetValue(1, count, Value::BIGINT(r.rows_imported));
+        output.SetValue(2, count, Value::INTEGER(r.columns_created));
+        output.SetValue(3, count, r.error.empty() ? Value() : Value(r.error));
 
-        while (state.current_table < bind_data.tables.size()) {
-            if (state.file && state.file->is_open() && std::getline(*state.file, line)) {
-                if (line.empty()) continue;
-                if (!line.empty() && line.back() == '\r') {
-                    line.pop_back();
-                }
-                if (line.empty()) continue;
-                got_line = true;
-                break;
-            }
-
-            // Current file exhausted or not open, move to next table
-            if (state.file && state.file->is_open()) {
-                state.file->close();
-            }
-            state.current_table++;
-
-            if (state.current_table < bind_data.tables.size()) {
-                state.file = std::make_shared<std::ifstream>(bind_data.tables[state.current_table].csv_path);
-                if (!state.file->is_open()) {
-                    state.file.reset();
-                }
-            }
-        }
-
-        if (!got_line) {
-            state.finished = true;
-            break;
-        }
-
-        auto &table_info = bind_data.tables[state.current_table];
-        auto fields = ParseCsvLine(line, state.delimiter);
-
-        // Column 0: _table_name
-        output.SetValue(0, count, Value(table_info.name));
-
-        // Columns 1..N: mapped data columns
-        for (idx_t col = 0; col < total_columns; col++) {
-            int csv_idx = table_info.col_mapping[col];
-            if (csv_idx >= 0 && static_cast<idx_t>(csv_idx) < fields.size()) {
-                output.SetValue(col + 1, count, Value(fields[csv_idx]));
-            } else {
-                output.SetValue(col + 1, count, Value());  // NULL
-            }
-        }
-
+        state.offset++;
         count++;
     }
 
     output.SetCardinality(count);
-}
-
-static unique_ptr<NodeStatistics> GobdReadAllCardinality(ClientContext &context, const FunctionData *bind_data_p) {
-    return make_uniq<NodeStatistics>();
 }
 
 // ============ Registration ============
@@ -673,13 +853,13 @@ void RegisterGobdReaderFunctions(ExtensionLoader &loader) {
     CreateTableFunctionInfo read_gobd_info(read_gobd);
     loader.RegisterFunction(read_gobd_info);
 
-    // stps_read_gobd_all(index_path, delimiter=';')
+    // stps_read_gobd_all(index_path, delimiter=';', overwrite=false)
     TableFunction read_gobd_all("stps_read_gobd_all",
                                {LogicalType::VARCHAR},
                                GobdReadAllFunction, GobdReadAllBind, GobdReadAllInit);
 
-    read_gobd_all.cardinality = GobdReadAllCardinality;
     read_gobd_all.named_parameters["delimiter"] = LogicalType::VARCHAR;
+    read_gobd_all.named_parameters["overwrite"] = LogicalType::BOOLEAN;
 
     CreateTableFunctionInfo read_gobd_all_info(read_gobd_all);
     loader.RegisterFunction(read_gobd_all_info);

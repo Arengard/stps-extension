@@ -673,17 +673,24 @@ SELECT * FROM stps_read_gobd('index.xml', 'Buchungsstapel');
 -- Returns: all columns of the specified table as VARCHAR
 ```
 
-#### `stps_read_gobd_all(file_path VARCHAR, delimiter := VARCHAR) → TABLE`
-Read **all tables** from a GoBD/GDPDU export at once. Returns a unified result with a `_table_name` column to identify which table each row came from. Columns from all tables are merged — columns not present in a given table are NULL.
+#### `stps_read_gobd_all(file_path VARCHAR, delimiter := VARCHAR, overwrite := BOOLEAN) → TABLE`
+Import **all tables** from a local GoBD/GDPDU export into the database. Creates one DuckDB table per GoBD source table with:
+- **Normalized column names** (snake_case, lowercase)
+- **Empty columns removed** (all NULL/empty values)
+- **Smart type casting** (auto-detects integers, decimals, dates)
+
+Returns a summary of what was created.
 ```sql
--- Read everything from a GoBD export
-SELECT * FROM stps_read_gobd_all('index.xml');
+-- Import all tables from a GoBD export
+SELECT * FROM stps_read_gobd_all('C:/exports/datev/index.xml');
+-- Returns: table_name, rows_imported, columns_created, error
 
--- Filter to a specific table
-SELECT * FROM stps_read_gobd_all('index.xml') WHERE _table_name = 'Buchungsstapel';
+-- Re-import with overwrite
+SELECT * FROM stps_read_gobd_all('C:/exports/datev/index.xml', overwrite := true);
 
--- See which tables have data
-SELECT _table_name, COUNT(*) FROM stps_read_gobd_all('index.xml') GROUP BY _table_name;
+-- Then query the created tables directly
+SELECT * FROM buchungsstapel;
+SELECT * FROM sachkontenplan;
 ```
 
 #### `gobd_list_tables(file_path VARCHAR) → TABLE`
@@ -769,10 +776,36 @@ SELECT * FROM gobd_table_schema_cloud(
 -- Returns: column_name, data_type, accuracy, column_order
 ```
 
+#### `stps_read_gobd_cloud_all(url VARCHAR, username := VARCHAR, password := VARCHAR, delimiter := VARCHAR, overwrite := BOOLEAN) → TABLE`
+Import **all tables** from a cloud-hosted GoBD/GDPDU export into the database. Same pipeline as `stps_read_gobd_all` but reads from WebDAV/Nextcloud. Creates cleaned DuckDB tables with normalized column names, empty columns removed, and smart type casting.
+```sql
+SELECT * FROM stps_read_gobd_cloud_all(
+  'https://cloud.example.com/remote.php/dav/files/user/export/',
+  username := 'myuser',
+  password := 'mypassword'
+);
+-- Returns: table_name, rows_imported, columns_created, error
+
+-- Then query the created tables directly
+SELECT * FROM buchungsstapel;
+```
+
+#### `stps_read_gobd_cloud_zip_all(url VARCHAR, username := VARCHAR, password := VARCHAR, delimiter := VARCHAR, overwrite := BOOLEAN) → TABLE`
+Import **all tables** from a ZIP file hosted on cloud (WebDAV/Nextcloud). Downloads the ZIP, extracts `index.xml` and CSV files in-memory, then runs the same import pipeline: creates cleaned DuckDB tables with normalized column names, empty columns removed, and smart type casting.
+```sql
+SELECT * FROM stps_read_gobd_cloud_zip_all(
+  'https://cloud.example.com/remote.php/dav/files/user/export.zip',
+  username := 'myuser',
+  password := 'mypassword'
+);
+-- Returns: table_name, rows_imported, columns_created, error
+```
+
 **Notes (cloud GoBD functions):**
 - Requires `curl` (functions are only available when the extension is built with libcurl).
 - `index.xml` discovery: tries `<url>/index.xml` first, then PROPFIND listing, then one subfolder level.
 - All data columns are returned as VARCHAR (matching the local `stps_read_gobd` behavior).
+- The `*_all` functions create persistent DuckDB tables with normalized snake_case names.
 - Authentication uses HTTP Basic Auth via `username`/`password` parameters.
 - **Encoding:** Automatically detects and converts Windows-1252 (CP1252) encoded CSV files to UTF-8. This is common for GoBD/GDPDU exports from German accounting software (Navision, DATEV, etc.).
 

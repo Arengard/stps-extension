@@ -1,8 +1,10 @@
 #pragma once
 
 #include "duckdb.hpp"
+#include "duckdb/main/client_context.hpp"
 #include <vector>
 #include <string>
+#include <map>
 
 namespace duckdb {
 namespace stps {
@@ -21,6 +23,31 @@ struct GobdTable {
     string description;
     vector<GobdColumn> columns;
 };
+
+// Import pipeline data: populated by each source, consumed by shared pipeline
+struct GobdImportData {
+    vector<GobdTable> tables;                   // parsed from index.xml
+    std::map<string, string> csv_contents;      // table URL -> CSV content string
+};
+
+// Result of importing a single table
+struct GobdImportResult {
+    string table_name;      // snake_case DuckDB table name
+    int64_t rows_imported;
+    int32_t columns_created;
+    string error;           // empty if success
+};
+
+// Shared import pipeline: creates tables, normalizes columns, drops empty cols, smart-casts
+vector<GobdImportResult> ExecuteGobdImportPipeline(ClientContext &context,
+                                                    const GobdImportData &data,
+                                                    char delimiter,
+                                                    bool overwrite);
+
+// Encoding helpers
+bool IsValidUtf8(const std::string &str);
+std::string ConvertWindows1252ToUtf8(const std::string &input);
+std::string EnsureUtf8(const std::string &input);
 
 // Parse GoBD index.xml from an in-memory XML string
 vector<GobdTable> ParseGobdIndexFromString(const string &xml_content);

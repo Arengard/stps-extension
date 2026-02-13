@@ -7,87 +7,13 @@
 #include "duckdb/main/extension/extension_loader.hpp"
 #include "duckdb/common/types/data_chunk.hpp"
 #include "duckdb/main/client_context.hpp"
+#include "duckdb/main/connection.hpp"
+#include "../miniz/miniz.h"
 #include <sstream>
 #include <algorithm>
 
 namespace duckdb {
 namespace stps {
-
-// ============================================================================
-// Encoding helpers
-// ============================================================================
-
-// Check if a string is valid UTF-8
-static bool IsValidUtf8(const std::string &str) {
-    const unsigned char *bytes = reinterpret_cast<const unsigned char *>(str.data());
-    size_t len = str.size();
-    for (size_t i = 0; i < len; ) {
-        if (bytes[i] <= 0x7F) {
-            i++;
-        } else if ((bytes[i] & 0xE0) == 0xC0) {
-            if (i + 1 >= len || (bytes[i + 1] & 0xC0) != 0x80) return false;
-            i += 2;
-        } else if ((bytes[i] & 0xF0) == 0xE0) {
-            if (i + 2 >= len || (bytes[i + 1] & 0xC0) != 0x80 || (bytes[i + 2] & 0xC0) != 0x80) return false;
-            i += 3;
-        } else if ((bytes[i] & 0xF8) == 0xF0) {
-            if (i + 3 >= len || (bytes[i + 1] & 0xC0) != 0x80 || (bytes[i + 2] & 0xC0) != 0x80 || (bytes[i + 3] & 0xC0) != 0x80) return false;
-            i += 4;
-        } else {
-            return false;
-        }
-    }
-    return true;
-}
-
-// Windows-1252 code points for bytes 0x80-0x9F (the ones that differ from Latin-1)
-static const uint16_t CP1252_MAP[32] = {
-    0x20AC, 0x0081, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021,  // 80-87
-    0x02C6, 0x2030, 0x0160, 0x2039, 0x0152, 0x008D, 0x017D, 0x008F,  // 88-8F
-    0x0090, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014,  // 90-97
-    0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0x009D, 0x017E, 0x0178   // 98-9F
-};
-
-// Encode a Unicode code point as UTF-8 and append to output
-static void AppendUtf8(std::string &out, uint32_t cp) {
-    if (cp <= 0x7F) {
-        out.push_back(static_cast<char>(cp));
-    } else if (cp <= 0x7FF) {
-        out.push_back(static_cast<char>(0xC0 | (cp >> 6)));
-        out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
-    } else if (cp <= 0xFFFF) {
-        out.push_back(static_cast<char>(0xE0 | (cp >> 12)));
-        out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
-        out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
-    }
-}
-
-// Convert a Windows-1252 encoded string to UTF-8
-static std::string ConvertWindows1252ToUtf8(const std::string &input) {
-    std::string output;
-    output.reserve(input.size() * 2);  // worst case: all 2-byte UTF-8
-
-    for (unsigned char c : input) {
-        if (c <= 0x7F) {
-            output.push_back(static_cast<char>(c));
-        } else if (c >= 0x80 && c <= 0x9F) {
-            // Special Windows-1252 range
-            AppendUtf8(output, CP1252_MAP[c - 0x80]);
-        } else {
-            // 0xA0-0xFF: same code point as Unicode (Latin-1 supplement)
-            AppendUtf8(output, c);
-        }
-    }
-    return output;
-}
-
-// Ensure a string is valid UTF-8. If not, convert from Windows-1252.
-static std::string EnsureUtf8(const std::string &input) {
-    if (IsValidUtf8(input)) {
-        return input;
-    }
-    return ConvertWindows1252ToUtf8(input);
-}
 
 // ============================================================================
 // Shared helpers
@@ -769,6 +695,268 @@ static void GobdSchemaCloudScan(ClientContext &context, TableFunctionInput &data
 }
 
 // ============================================================================
+// stps_read_gobd_cloud_all (table-creating pipeline from cloud)
+// ============================================================================
+
+struct GobdCloudAllBindData : public TableFunctionData {
+    vector<GobdImportResult> import_results;
+};
+
+struct GobdCloudAllGlobalState : public GlobalTableFunctionState {
+    idx_t offset = 0;
+    idx_t MaxThreads() const override { return 1; }
+};
+
+static unique_ptr<FunctionData> GobdCloudAllBind(ClientContext &context, TableFunctionBindInput &input,
+                                                   vector<LogicalType> &return_types, vector<string> &names) {
+    auto result = make_uniq<GobdCloudAllBindData>();
+
+    std::string folder_url = input.inputs[0].ToString();
+    std::string username, password;
+    char delimiter = ';';
+    bool overwrite = false;
+
+    for (auto &kv : input.named_parameters) {
+        if (kv.first == "username") {
+            username = kv.second.ToString();
+        } else if (kv.first == "password") {
+            password = kv.second.ToString();
+        } else if (kv.first == "delimiter") {
+            string delim_str = kv.second.ToString();
+            if (!delim_str.empty()) delimiter = delim_str[0];
+        } else if (kv.first == "overwrite") {
+            overwrite = BooleanValue::Get(kv.second);
+        }
+    }
+
+    // Discover and download index.xml
+    std::string index_base_url;
+    std::string xml_content = DiscoverAndDownloadIndexXml(folder_url, username, password, index_base_url);
+    if (xml_content.empty()) {
+        throw IOException("Could not find or download index.xml from: " + folder_url);
+    }
+
+    // Parse tables
+    auto tables = ParseGobdIndexFromString(xml_content);
+    if (tables.empty()) {
+        throw BinderException("No tables found in GoBD index at: " + folder_url);
+    }
+
+    // Build import data: download each CSV
+    GobdImportData import_data;
+    import_data.tables = tables;
+
+    for (auto &table : tables) {
+        std::string csv_url = EnsureTrailingSlash(index_base_url) + table.url;
+        std::string csv_content = DownloadFile(csv_url, username, password);
+        if (!csv_content.empty()) {
+            import_data.csv_contents[table.url] = csv_content;
+        }
+    }
+
+    // Execute shared pipeline
+    result->import_results = ExecuteGobdImportPipeline(context, import_data, delimiter, overwrite);
+
+    // Output schema
+    names.emplace_back("table_name");
+    return_types.emplace_back(LogicalType::VARCHAR);
+    names.emplace_back("rows_imported");
+    return_types.emplace_back(LogicalType::BIGINT);
+    names.emplace_back("columns_created");
+    return_types.emplace_back(LogicalType::INTEGER);
+    names.emplace_back("error");
+    return_types.emplace_back(LogicalType::VARCHAR);
+
+    return std::move(result);
+}
+
+static unique_ptr<GlobalTableFunctionState> GobdCloudAllInit(ClientContext &context, TableFunctionInitInput &input) {
+    return make_uniq<GobdCloudAllGlobalState>();
+}
+
+static void GobdCloudAllScan(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
+    auto &bind_data = data_p.bind_data->Cast<GobdCloudAllBindData>();
+    auto &state = data_p.global_state->Cast<GobdCloudAllGlobalState>();
+
+    idx_t count = 0;
+    while (state.offset < bind_data.import_results.size() && count < STANDARD_VECTOR_SIZE) {
+        auto &r = bind_data.import_results[state.offset];
+        output.SetValue(0, count, Value(r.table_name));
+        output.SetValue(1, count, Value::BIGINT(r.rows_imported));
+        output.SetValue(2, count, Value::INTEGER(r.columns_created));
+        output.SetValue(3, count, r.error.empty() ? Value() : Value(r.error));
+        state.offset++;
+        count++;
+    }
+    output.SetCardinality(count);
+}
+
+// ============================================================================
+// stps_read_gobd_cloud_zip_all (table-creating pipeline from cloud ZIP)
+// ============================================================================
+
+struct GobdCloudZipAllBindData : public TableFunctionData {
+    vector<GobdImportResult> import_results;
+};
+
+struct GobdCloudZipAllGlobalState : public GlobalTableFunctionState {
+    idx_t offset = 0;
+    idx_t MaxThreads() const override { return 1; }
+};
+
+static unique_ptr<FunctionData> GobdCloudZipAllBind(ClientContext &context, TableFunctionBindInput &input,
+                                                      vector<LogicalType> &return_types, vector<string> &names) {
+    auto result = make_uniq<GobdCloudZipAllBindData>();
+
+    std::string zip_url = input.inputs[0].ToString();
+    std::string username, password;
+    char delimiter = ';';
+    bool overwrite = false;
+
+    for (auto &kv : input.named_parameters) {
+        if (kv.first == "username") {
+            username = kv.second.ToString();
+        } else if (kv.first == "password") {
+            password = kv.second.ToString();
+        } else if (kv.first == "delimiter") {
+            string delim_str = kv.second.ToString();
+            if (!delim_str.empty()) delimiter = delim_str[0];
+        } else if (kv.first == "overwrite") {
+            overwrite = BooleanValue::Get(kv.second);
+        }
+    }
+
+    // Download the ZIP file
+    std::string zip_data = DownloadFile(zip_url, username, password);
+    if (zip_data.empty()) {
+        throw IOException("Could not download ZIP file from: " + zip_url);
+    }
+
+    // Open ZIP from memory
+    mz_zip_archive zip_archive;
+    memset(&zip_archive, 0, sizeof(zip_archive));
+
+    if (!mz_zip_reader_init_mem(&zip_archive, zip_data.data(), zip_data.size(), 0)) {
+        throw IOException("Failed to open ZIP archive from: " + zip_url);
+    }
+
+    // Find index.xml in the ZIP
+    std::string xml_content;
+    std::string index_dir;  // directory prefix containing index.xml
+    int num_files = mz_zip_reader_get_num_files(&zip_archive);
+
+    for (int i = 0; i < num_files; i++) {
+        mz_zip_archive_file_stat file_stat;
+        if (!mz_zip_reader_file_stat(&zip_archive, i, &file_stat)) continue;
+        if (mz_zip_reader_is_file_a_directory(&zip_archive, i)) continue;
+
+        std::string filename = file_stat.m_filename;
+        // Get just the filename part
+        std::string basename = filename;
+        size_t slash_pos = filename.find_last_of("/\\");
+        if (slash_pos != std::string::npos) {
+            basename = filename.substr(slash_pos + 1);
+        }
+
+        // Case-insensitive check for index.xml
+        std::string lower_basename = basename;
+        std::transform(lower_basename.begin(), lower_basename.end(), lower_basename.begin(), ::tolower);
+
+        if (lower_basename == "index.xml") {
+            // Extract this file
+            size_t file_size = 0;
+            void *file_data = mz_zip_reader_extract_to_heap(&zip_archive, i, &file_size, 0);
+            if (file_data) {
+                xml_content = std::string(static_cast<char*>(file_data), file_size);
+                mz_free(file_data);
+
+                // Remember the directory prefix
+                if (slash_pos != std::string::npos) {
+                    index_dir = filename.substr(0, slash_pos + 1);
+                }
+            }
+            break;
+        }
+    }
+
+    if (xml_content.empty()) {
+        mz_zip_reader_end(&zip_archive);
+        throw IOException("No index.xml found in ZIP archive: " + zip_url);
+    }
+
+    xml_content = EnsureUtf8(xml_content);
+
+    // Parse tables
+    auto tables = ParseGobdIndexFromString(xml_content);
+    if (tables.empty()) {
+        mz_zip_reader_end(&zip_archive);
+        throw BinderException("No tables found in GoBD index within ZIP: " + zip_url);
+    }
+
+    // Build import data: extract each CSV from ZIP
+    GobdImportData import_data;
+    import_data.tables = tables;
+
+    for (auto &table : tables) {
+        // The CSV path in index.xml is relative to the index.xml location
+        std::string zip_path = index_dir + table.url;
+
+        int file_index = mz_zip_reader_locate_file(&zip_archive, zip_path.c_str(), nullptr, 0);
+        if (file_index < 0) {
+            // Try without directory prefix
+            file_index = mz_zip_reader_locate_file(&zip_archive, table.url.c_str(), nullptr, 0);
+        }
+
+        if (file_index >= 0) {
+            size_t file_size = 0;
+            void *file_data = mz_zip_reader_extract_to_heap(&zip_archive, file_index, &file_size, 0);
+            if (file_data) {
+                import_data.csv_contents[table.url] = std::string(static_cast<char*>(file_data), file_size);
+                mz_free(file_data);
+            }
+        }
+    }
+
+    mz_zip_reader_end(&zip_archive);
+
+    // Execute shared pipeline
+    result->import_results = ExecuteGobdImportPipeline(context, import_data, delimiter, overwrite);
+
+    // Output schema
+    names.emplace_back("table_name");
+    return_types.emplace_back(LogicalType::VARCHAR);
+    names.emplace_back("rows_imported");
+    return_types.emplace_back(LogicalType::BIGINT);
+    names.emplace_back("columns_created");
+    return_types.emplace_back(LogicalType::INTEGER);
+    names.emplace_back("error");
+    return_types.emplace_back(LogicalType::VARCHAR);
+
+    return std::move(result);
+}
+
+static unique_ptr<GlobalTableFunctionState> GobdCloudZipAllInit(ClientContext &context, TableFunctionInitInput &input) {
+    return make_uniq<GobdCloudZipAllGlobalState>();
+}
+
+static void GobdCloudZipAllScan(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
+    auto &bind_data = data_p.bind_data->Cast<GobdCloudZipAllBindData>();
+    auto &state = data_p.global_state->Cast<GobdCloudZipAllGlobalState>();
+
+    idx_t count = 0;
+    while (state.offset < bind_data.import_results.size() && count < STANDARD_VECTOR_SIZE) {
+        auto &r = bind_data.import_results[state.offset];
+        output.SetValue(0, count, Value(r.table_name));
+        output.SetValue(1, count, Value::BIGINT(r.rows_imported));
+        output.SetValue(2, count, Value::INTEGER(r.columns_created));
+        output.SetValue(3, count, r.error.empty() ? Value() : Value(r.error));
+        state.offset++;
+        count++;
+    }
+    output.SetCardinality(count);
+}
+
+// ============================================================================
 // Registration
 // ============================================================================
 
@@ -819,6 +1007,34 @@ void RegisterGobdCloudReaderFunctions(ExtensionLoader &loader) {
                           GobdSchemaCloudScan, GobdSchemaCloudBind, GobdSchemaCloudInit);
         func.named_parameters["username"] = LogicalType::VARCHAR;
         func.named_parameters["password"] = LogicalType::VARCHAR;
+
+        CreateTableFunctionInfo info(func);
+        loader.RegisterFunction(info);
+    }
+
+    // stps_read_gobd_cloud_all(url, username, password, delimiter, overwrite)
+    {
+        TableFunction func("stps_read_gobd_cloud_all",
+                          {LogicalType::VARCHAR},
+                          GobdCloudAllScan, GobdCloudAllBind, GobdCloudAllInit);
+        func.named_parameters["username"] = LogicalType::VARCHAR;
+        func.named_parameters["password"] = LogicalType::VARCHAR;
+        func.named_parameters["delimiter"] = LogicalType::VARCHAR;
+        func.named_parameters["overwrite"] = LogicalType::BOOLEAN;
+
+        CreateTableFunctionInfo info(func);
+        loader.RegisterFunction(info);
+    }
+
+    // stps_read_gobd_cloud_zip_all(url, username, password, delimiter, overwrite)
+    {
+        TableFunction func("stps_read_gobd_cloud_zip_all",
+                          {LogicalType::VARCHAR},
+                          GobdCloudZipAllScan, GobdCloudZipAllBind, GobdCloudZipAllInit);
+        func.named_parameters["username"] = LogicalType::VARCHAR;
+        func.named_parameters["password"] = LogicalType::VARCHAR;
+        func.named_parameters["delimiter"] = LogicalType::VARCHAR;
+        func.named_parameters["overwrite"] = LogicalType::BOOLEAN;
 
         CreateTableFunctionInfo info(func);
         loader.RegisterFunction(info);
