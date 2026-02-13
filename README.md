@@ -603,9 +603,14 @@ SELECT stps_io_rename('old_name.csv', 'new_name.csv') AS result;
 ```
 
 #### `stps_delete_io(path VARCHAR) → VARCHAR`
-Delete file.
+Delete a file or folder (recursively deletes all subfolders and contents). Handles read-only files on Windows.
 ```sql
+-- Delete a file
 SELECT stps_delete_io('temp_file.csv') AS result;
+
+-- Delete a folder and all its contents
+SELECT stps_delete_io('C:/data/old_export') AS result;
+-- Result: 'SUCCESS: Deleted folder and all contents: C:/data/old_export'
 ```
 
 #### `stps_create_folders_io(folder_path VARCHAR) → VARCHAR`
@@ -804,10 +809,17 @@ SELECT * FROM stps_read_gobd_cloud_zip_all(
 **Notes (cloud GoBD functions):**
 - Requires `curl` (functions are only available when the extension is built with libcurl).
 - `index.xml` discovery: tries `<url>/index.xml` first, then PROPFIND listing, then one subfolder level.
-- All data columns are returned as VARCHAR (matching the local `stps_read_gobd` behavior).
-- The `*_all` functions create persistent DuckDB tables with normalized snake_case names.
+- Single-table functions (`stps_read_gobd_cloud`, `stps_read_gobd_cloud_folder`) return all data as VARCHAR.
 - Authentication uses HTTP Basic Auth via `username`/`password` parameters.
 - **Encoding:** Automatically detects and converts Windows-1252 (CP1252) encoded CSV files to UTF-8. This is common for GoBD/GDPDU exports from German accounting software (Navision, DATEV, etc.).
+
+**Notes (`*_all` import pipeline functions):**
+- `stps_read_gobd_all`, `stps_read_gobd_cloud_all`, and `stps_read_gobd_cloud_zip_all` **create persistent DuckDB tables**.
+- Table names are normalized to snake_case (e.g. `Buchungsstapel` → `buchungsstapel`).
+- Column names are normalized to snake_case (e.g. `Konto Nr.` → `konto_nr`).
+- Columns that are entirely empty (NULL or `''`) are automatically dropped.
+- Types are auto-detected via `stps_smart_cast` (integers, decimals, dates).
+- Use `overwrite := true` to replace existing tables; default is to error if table exists.
 
 ---
 
