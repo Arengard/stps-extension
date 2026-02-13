@@ -210,7 +210,7 @@ static ImportFileResult ImportSingleFile(ClientContext &context, const string &f
                          " AS SELECT * FROM read_parquet(" + sql_path + ")";
         } else if (ext == "xlsx" || ext == "xls") {
             create_sql = "CREATE TABLE " + escaped_table +
-                         " AS SELECT * FROM read_sheet(" + sql_path + ")";
+                         " AS SELECT * FROM read_sheet(" + sql_path + ", all_varchar=true)";
         } else {
             result.error = "Unsupported file type: " + ext;
             return result;
