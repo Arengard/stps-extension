@@ -259,10 +259,33 @@ static ImportFileResult ImportSingleFile(ClientContext &context, const string &f
             conn.Query("LOAD rusty_sheet");
         }
 
-        // 6. CTAS with appropriate reader
+        // 6. For CSV/TSV: ensure file is UTF-8 (Windows-1252 → UTF-8 conversion)
+        string actual_file_path = file_path;
+        string temp_utf8_path;
+        if (ext == "csv" || ext == "tsv") {
+            std::ifstream ifs(file_path, std::ios::binary);
+            if (ifs) {
+                std::string raw_content((std::istreambuf_iterator<char>(ifs)),
+                                         std::istreambuf_iterator<char>());
+                ifs.close();
+                if (!IsValidUtf8(raw_content)) {
+                    std::string utf8_content = ConvertWindows1252ToUtf8(raw_content);
+                    temp_utf8_path = GenerateImportTempPath(file_name);
+                    std::ofstream ofs(temp_utf8_path, std::ios::binary);
+                    if (ofs) {
+                        ofs.write(utf8_content.data(), utf8_content.size());
+                        ofs.close();
+                        actual_file_path = temp_utf8_path;
+                    }
+                }
+            }
+        }
+        string actual_sql_path = EscapeStringLiteral(NormalizeSqlPath(actual_file_path));
+
+        // 7. CTAS with appropriate reader
         string create_sql;
         if (ext == "csv" || ext == "tsv") {
-            string reader_expr = "read_csv_auto(" + sql_path;
+            string reader_expr = "read_csv_auto(" + actual_sql_path;
             if (opts.all_varchar) reader_expr += ", all_varchar=true";
             if (opts.header_set) reader_expr += opts.header ? ", header=true" : ", header=false";
             if (opts.ignore_errors) reader_expr += ", ignore_errors=true";
@@ -275,18 +298,18 @@ static ImportFileResult ImportSingleFile(ClientContext &context, const string &f
             reader_expr += ")";
             create_sql = "CREATE TABLE " + escaped_table + " AS SELECT * FROM " + reader_expr;
         } else if (ext == "json") {
-            string reader_expr = "read_json_auto(" + sql_path;
+            string reader_expr = "read_json_auto(" + actual_sql_path;
             if (opts.ignore_errors) reader_expr += ", ignore_errors=true";
             if (!opts.reader_options.empty()) reader_expr += ", " + opts.reader_options;
             reader_expr += ")";
             create_sql = "CREATE TABLE " + escaped_table + " AS SELECT * FROM " + reader_expr;
         } else if (ext == "parquet") {
-            string reader_expr = "read_parquet(" + sql_path;
+            string reader_expr = "read_parquet(" + actual_sql_path;
             if (!opts.reader_options.empty()) reader_expr += ", " + opts.reader_options;
             reader_expr += ")";
             create_sql = "CREATE TABLE " + escaped_table + " AS SELECT * FROM " + reader_expr;
         } else if (ext == "xlsx" || ext == "xls") {
-            string sheet_expr = "read_sheet(" + sql_path;
+            string sheet_expr = "read_sheet(" + actual_sql_path;
             if (!opts.sheet.empty()) sheet_expr += ", sheet=" + EscapeStringLiteral(opts.sheet);
             if (!opts.range.empty()) sheet_expr += ", range=" + EscapeStringLiteral(opts.range);
             if (opts.header_set) sheet_expr += opts.header ? ", header=true" : ", header=false";
@@ -300,12 +323,33 @@ static ImportFileResult ImportSingleFile(ClientContext &context, const string &f
         }
 
         auto create_result = conn.Query(create_sql);
+
+        // Cleanup temp UTF-8 file if created
+        if (!temp_utf8_path.empty()) {
+            std::remove(temp_utf8_path.c_str());
+        }
+
         if (!create_result || create_result->HasError()) {
             result.error = "Failed to import: " + (create_result ? create_result->GetError() : "unknown error");
             return result;
         }
 
-        // 7. Rename columns to snake_case
+        // 8. Skip empty files (0 data rows → drop table, don't report)
+        {
+            auto row_check = conn.Query("SELECT COUNT(*) FROM " + escaped_table);
+            int64_t row_count = 0;
+            if (row_check && !row_check->HasError() && row_check->RowCount() > 0) {
+                row_count = row_check->GetValue(0, 0).GetValue<int64_t>();
+            }
+            if (row_count == 0) {
+                conn.Query("DROP TABLE IF EXISTS " + escaped_table);
+                result.rows_imported = 0;
+                result.columns_created = 0;
+                return result;  // skip silently
+            }
+        }
+
+        // 9. Rename columns to snake_case
         {
             vector<string> original_cols;
             auto cols_result = conn.Query(
@@ -334,7 +378,7 @@ static ImportFileResult ImportSingleFile(ClientContext &context, const string &f
             }
         }
 
-        // 8. Drop empty columns
+        // 10. Drop empty columns
         {
             vector<string> current_cols;
             auto cols_result = conn.Query(
@@ -390,7 +434,7 @@ static ImportFileResult ImportSingleFile(ClientContext &context, const string &f
             }
         }
 
-        // 9. Smart cast
+        // 11. Smart cast
         if (result.rows_imported > 0) {
             string cast_sql = "CREATE OR REPLACE TABLE " + escaped_table +
                               " AS SELECT * FROM stps_smart_cast(" + EscapeStringLiteral(table_name) + ")";
@@ -464,6 +508,8 @@ static unique_ptr<FunctionData> ImportFolderBind(ClientContext &context, TableFu
 
         string file_path_str = folder_path + filename;
         auto import_result = ImportSingleFile(context, file_path_str, filename, overwrite, used_table_names, opts);
+        // Skip empty files silently (0 rows, no error = empty/header-only file)
+        if (import_result.rows_imported == 0 && import_result.error.empty()) continue;
         result->results.push_back(import_result);
     } while (FindNextFileA(hFind, &find_data));
     FindClose(hFind);
@@ -484,6 +530,8 @@ static unique_ptr<FunctionData> ImportFolderBind(ClientContext &context, TableFu
         if (!IsSupportedImportFile(filename)) continue;
 
         auto import_result = ImportSingleFile(context, file_path_str, filename, overwrite, used_table_names, opts);
+        // Skip empty files silently (0 rows, no error = empty/header-only file)
+        if (import_result.rows_imported == 0 && import_result.error.empty()) continue;
         result->results.push_back(import_result);
     }
     closedir(dir);
@@ -687,10 +735,13 @@ static unique_ptr<FunctionData> ImportNextcloudFolderBind(ClientContext &context
 
         // Import the file
         auto import_result = ImportSingleFile(context, temp_path, filename, overwrite, used_table_names, opts);
-        result->results.push_back(import_result);
 
         // Cleanup temp file
         std::remove(temp_path.c_str());
+
+        // Skip empty files silently (0 rows, no error = empty/header-only file)
+        if (import_result.rows_imported == 0 && import_result.error.empty()) continue;
+        result->results.push_back(import_result);
     }
 
     // Run clean_database after all imports
