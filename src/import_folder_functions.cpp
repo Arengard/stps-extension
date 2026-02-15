@@ -415,6 +415,14 @@ static ImportFileResult ImportSingleFile(ClientContext &context, const string &f
                 for (auto &col_name : cols_to_drop) {
                     conn.Query("ALTER TABLE " + escaped_table + " DROP COLUMN " + EscapeIdentifier(col_name));
                 }
+
+                // If all columns were empty, drop the table entirely (garbage from empty files)
+                if (cols_to_drop.size() == current_cols.size()) {
+                    conn.Query("DROP TABLE IF EXISTS " + escaped_table);
+                    result.rows_imported = 0;
+                    result.columns_created = 0;
+                    return result;  // skip silently
+                }
             }
         }
 
