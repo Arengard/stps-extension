@@ -1,6 +1,7 @@
 #include "import_folder_functions.hpp"
 #include "gobd_reader.hpp"
 #include "shared/archive_utils.hpp"
+#include "case_transform.hpp"
 #include "duckdb/function/table_function.hpp"
 #include "duckdb/parser/parsed_data/create_table_function_info.hpp"
 #include "duckdb/main/extension/extension_loader.hpp"
@@ -34,34 +35,9 @@ namespace stps {
 // Shared helpers (same patterns as gobd_reader.cpp)
 // ============================================================================
 
+// Use to_snake_case from case_transform.hpp instead of duplicating
 static string ToSnakeCase(const string &input) {
-    string result;
-    result.reserve(input.size());
-    bool last_was_underscore = false;
-
-    for (size_t i = 0; i < input.size(); i++) {
-        char c = input[i];
-        if (std::isalnum(static_cast<unsigned char>(c))) {
-            if (std::isupper(static_cast<unsigned char>(c)) && !result.empty() && !last_was_underscore) {
-                char prev = result.back();
-                if (std::islower(static_cast<unsigned char>(prev)) || std::isdigit(static_cast<unsigned char>(prev))) {
-                    result += '_';
-                }
-            }
-            result += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-            last_was_underscore = false;
-        } else {
-            if (!result.empty() && !last_was_underscore) {
-                result += '_';
-                last_was_underscore = true;
-            }
-        }
-    }
-
-    while (!result.empty() && result.back() == '_') {
-        result.pop_back();
-    }
-
+    string result = to_snake_case(input);
     return result.empty() ? "column" : result;
 }
 

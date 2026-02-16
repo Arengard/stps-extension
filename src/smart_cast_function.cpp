@@ -51,7 +51,13 @@ static unique_ptr<FunctionData> SmartCastAnalyzeBind(ClientContext &context, Tab
 
     // Get table schema
     Connection conn(context.db->GetDatabase(context));
-    auto schema_result = conn.Query("SELECT * FROM " + result->table_name + " LIMIT 0");
+    // Escape identifier to prevent SQL injection
+    string escaped_table;
+    for (char c : result->table_name) {
+        if (c == '"') escaped_table += "\"\"";
+        else escaped_table += c;
+    }
+    auto schema_result = conn.Query("SELECT * FROM \"" + escaped_table + "\" LIMIT 0");
     if (schema_result->HasError()) {
         throw BinderException("Table '%s' does not exist: %s", result->table_name, schema_result->GetError());
     }

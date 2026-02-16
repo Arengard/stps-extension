@@ -576,13 +576,6 @@ SELECT name, path
 FROM stps_scan('.', content_search := 'TODO', file_type := 'cpp');
 ```
 
-#### `stps_read_folders(path VARCHAR) → TABLE`
-List directories only (non-recursive).
-```sql
-SELECT * FROM stps_read_folders('C:/data/');
--- Returns: folder_name, full_path
-```
-
 #### `stps_copy_io(source VARCHAR, destination VARCHAR) → VARCHAR`
 Copy file. Creates parent directories if needed.
 ```sql
