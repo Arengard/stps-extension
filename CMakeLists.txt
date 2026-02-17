@@ -60,6 +60,8 @@ set(EXTENSION_SOURCES
     src/miniz/miniz.c
     # Folder import functions (local + cloud via #ifdef HAVE_CURL)
     src/import_folder_functions.cpp
+    # GDPR masking function
+    src/mask_functions.cpp
 )
 
 # Add curl-dependent sources only if curl is available

@@ -296,5 +296,13 @@ static void MaskTableScan(
     output.SetCardinality(output_idx);
 }
 
+void RegisterMaskFunctions(ExtensionLoader &loader) {
+    TableFunction mask_func("stps_mask_table", {LogicalType::VARCHAR},
+                            MaskTableScan, MaskTableBind, MaskTableInit);
+    mask_func.named_parameters["exclude"] = LogicalType::LIST(LogicalType::VARCHAR);
+    mask_func.named_parameters["seed"] = LogicalType::VARCHAR;
+    loader.RegisterFunction(mask_func);
+}
+
 } // namespace stps
 } // namespace duckdb

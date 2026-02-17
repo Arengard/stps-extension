@@ -37,6 +37,7 @@
 #include "blz_lut_loader.hpp"
 #include "zip_functions.hpp"
 #include "import_folder_functions.hpp"
+#include "mask_functions.hpp"
 // #include "fill_functions.hpp"  // Temporarily disabled
 
 namespace duckdb {
@@ -110,6 +111,9 @@ public:
 
         // Register insolvency account mapping function
         stps::RegisterInsoAccountFunction(loader);
+
+        // Register GDPR masking function
+        stps::RegisterMaskFunctions(loader);
 
         // Register AI functions (Anthropic Claude integration)
 #ifdef HAVE_CURL
