@@ -148,5 +148,153 @@ static unique_ptr<FunctionData> MaskTableBind(
     return std::move(result);
 }
 
+static unique_ptr<GlobalTableFunctionState> MaskTableInit(
+    ClientContext &context,
+    TableFunctionInitInput &input
+) {
+    auto state = make_uniq<MaskTableGlobalState>();
+    state->finished = false;
+    return std::move(state);
+}
+
+static Value MaskValue(const Value &original, const LogicalType &type,
+                       const std::string &seed, const std::string &column_name) {
+    if (original.IsNull()) {
+        return Value(nullptr);
+    }
+
+    std::string str_val = original.ToString();
+    uint64_t hash = KeyedHash(seed, column_name, str_val);
+
+    switch (type.id()) {
+        case LogicalTypeId::VARCHAR: {
+            idx_t len = str_val.size();
+            return Value(HashToHexString(hash, len));
+        }
+        case LogicalTypeId::INTEGER: {
+            int32_t orig = original.GetValue<int32_t>();
+            int32_t magnitude = orig == 0 ? 1 : static_cast<int32_t>(std::pow(10, static_cast<int>(std::log10(std::abs(orig)))));
+            int32_t masked = static_cast<int32_t>(hash % (magnitude * 9) + magnitude);
+            if (orig < 0) masked = -masked;
+            return Value::INTEGER(masked);
+        }
+        case LogicalTypeId::BIGINT: {
+            int64_t orig = original.GetValue<int64_t>();
+            int64_t magnitude = orig == 0 ? 1 : static_cast<int64_t>(std::pow(10, static_cast<int>(std::log10(std::abs(static_cast<double>(orig))))));
+            int64_t masked = static_cast<int64_t>(hash % (magnitude * 9) + magnitude);
+            if (orig < 0) masked = -masked;
+            return Value::BIGINT(masked);
+        }
+        case LogicalTypeId::DOUBLE: {
+            double orig = original.GetValue<double>();
+            if (orig == 0.0) return Value::DOUBLE(0.0);
+            double magnitude = std::pow(10, std::floor(std::log10(std::abs(orig))));
+            double fraction = static_cast<double>(hash % 10000) / 10000.0;
+            double masked = magnitude * (1.0 + fraction * 9.0);
+            if (orig < 0) masked = -masked;
+            return Value::DOUBLE(masked);
+        }
+        case LogicalTypeId::FLOAT: {
+            float orig = original.GetValue<float>();
+            if (orig == 0.0f) return Value::FLOAT(0.0f);
+            double magnitude = std::pow(10, std::floor(std::log10(std::abs(orig))));
+            double fraction = static_cast<double>(hash % 10000) / 10000.0;
+            float masked = static_cast<float>(magnitude * (1.0 + fraction * 9.0));
+            if (orig < 0) masked = -masked;
+            return Value::FLOAT(masked);
+        }
+        case LogicalTypeId::DATE: {
+            auto date_val = original.GetValue<date_t>();
+            int32_t days_offset = static_cast<int32_t>(hash % 365) + 1;
+            date_t masked_date = date_t(date_val.days + days_offset);
+            return Value::DATE(masked_date);
+        }
+        case LogicalTypeId::TIMESTAMP:
+        case LogicalTypeId::TIMESTAMP_TZ: {
+            auto ts_val = original.GetValue<timestamp_t>();
+            auto date_part = Timestamp::GetDate(ts_val);
+            int32_t days_offset = static_cast<int32_t>(hash % 365) + 1;
+            date_t masked_date = date_t(date_part.days + days_offset);
+            auto masked_ts = Timestamp::FromDatetime(masked_date, dtime_t(0));
+            if (type.id() == LogicalTypeId::TIMESTAMP_TZ) {
+                return Value::TIMESTAMPTZ(masked_ts);
+            }
+            return Value::TIMESTAMP(masked_ts);
+        }
+        case LogicalTypeId::BOOLEAN: {
+            bool masked = (hash % 2) == 0;
+            return Value::BOOLEAN(masked);
+        }
+        case LogicalTypeId::DECIMAL: {
+            double orig = original.GetValue<double>();
+            if (orig == 0.0) return Value(0).DefaultCastAs(type);
+            double magnitude = std::pow(10, std::floor(std::log10(std::abs(orig))));
+            double fraction = static_cast<double>(hash % 10000) / 10000.0;
+            double masked = magnitude * (1.0 + fraction * 9.0);
+            if (orig < 0) masked = -masked;
+            return Value(masked).DefaultCastAs(type);
+        }
+        default: {
+            idx_t len = str_val.size();
+            return Value(HashToHexString(hash, len));
+        }
+    }
+}
+
+static void MaskTableScan(
+    ClientContext &context,
+    TableFunctionInput &data_p,
+    DataChunk &output
+) {
+    auto &bind_data = data_p.bind_data->Cast<MaskTableBindData>();
+    auto &state = data_p.global_state->Cast<MaskTableGlobalState>();
+
+    if (state.finished) {
+        output.SetCardinality(0);
+        return;
+    }
+
+    // On first call, execute the query
+    if (!state.query_result) {
+        Connection conn(context.db->GetDatabase(context));
+        state.query_result = conn.Query("SELECT * FROM \"" + bind_data.table_name + "\"");
+        if (state.query_result->HasError()) {
+            throw InternalException("stps_mask_table: Failed to query table '%s': %s",
+                                    bind_data.table_name.c_str(), state.query_result->GetError().c_str());
+        }
+    }
+
+    idx_t output_idx = 0;
+
+    while (output_idx < STANDARD_VECTOR_SIZE && !state.finished) {
+        if (!state.current_chunk || state.chunk_offset >= state.current_chunk->size()) {
+            state.current_chunk = state.query_result->Fetch();
+            state.chunk_offset = 0;
+
+            if (!state.current_chunk || state.current_chunk->size() == 0) {
+                state.finished = true;
+                break;
+            }
+        }
+
+        while (state.chunk_offset < state.current_chunk->size() && output_idx < STANDARD_VECTOR_SIZE) {
+            for (idx_t col = 0; col < bind_data.column_names.size(); col++) {
+                Value val = state.current_chunk->data[col].GetValue(state.chunk_offset);
+
+                if (bind_data.column_masked[col]) {
+                    val = MaskValue(val, bind_data.column_types[col],
+                                    bind_data.seed, bind_data.column_names[col]);
+                }
+
+                output.data[col].SetValue(output_idx, val);
+            }
+            output_idx++;
+            state.chunk_offset++;
+        }
+    }
+
+    output.SetCardinality(output_idx);
+}
+
 } // namespace stps
 } // namespace duckdb
