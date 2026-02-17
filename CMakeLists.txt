@@ -62,6 +62,8 @@ set(EXTENSION_SOURCES
     src/import_folder_functions.cpp
     # GDPR masking function
     src/mask_functions.cpp
+    # Time travel functions
+    src/time_travel.cpp
 )
 
 # Add curl-dependent sources only if curl is available

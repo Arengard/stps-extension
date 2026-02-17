@@ -1,0 +1,86 @@
+# name: test/sql/time_travel.test
+# description: Test time travel functions
+# group: [stps]
+
+require stps
+
+# Create a test table with data
+statement ok
+CREATE TABLE tt_test (id INTEGER, name VARCHAR, email VARCHAR);
+
+statement ok
+INSERT INTO tt_test VALUES (1, 'Alice', 'alice@example.com'), (2, 'Bob', 'bob@example.com');
+
+# Enable time travel tracking
+statement ok
+SELECT stps_tt_enable('tt_test', 'id');
+
+# Verify metadata table was created
+query ITII
+SELECT table_name, pk_column, current_version, (created_at IS NOT NULL)::INT FROM _stps_tt_tables;
+----
+tt_test	id	0	1
+
+# Verify history table was created with initial snapshot
+query I
+SELECT COUNT(*) FROM _stps_history_tt_test;
+----
+2
+
+# Verify initial snapshot has correct data
+query ITIT
+SELECT id, name, _tt_version, _tt_operation FROM _stps_history_tt_test ORDER BY id;
+----
+1	Alice	0	INSERT
+2	Bob	0	INSERT
+
+# Test stps_tt_disable
+statement ok
+CREATE TABLE tt_disable_test (id INTEGER, val VARCHAR);
+
+statement ok
+SELECT stps_tt_enable('tt_disable_test', 'id');
+
+statement ok
+SELECT stps_tt_disable('tt_disable_test');
+
+# Metadata should be removed
+query I
+SELECT COUNT(*) FROM _stps_tt_tables WHERE table_name = 'tt_disable_test';
+----
+0
+
+# History table should be dropped
+statement error
+SELECT * FROM _stps_history_tt_disable_test;
+----
+
+# Error cases: enable on non-existent table
+statement error
+SELECT stps_tt_enable('nonexistent_table', 'id');
+----
+
+# Error cases: enable with non-existent column
+statement error
+SELECT stps_tt_enable('tt_test', 'nonexistent_col');
+----
+
+# Error cases: enable on already tracked table
+statement error
+SELECT stps_tt_enable('tt_test', 'id');
+----
+
+# Error cases: disable on non-tracked table
+statement error
+SELECT stps_tt_disable('some_random_table');
+----
+
+# Cleanup
+statement ok
+SELECT stps_tt_disable('tt_test');
+
+statement ok
+DROP TABLE tt_test;
+
+statement ok
+DROP TABLE tt_disable_test;

@@ -38,6 +38,7 @@
 #include "zip_functions.hpp"
 #include "import_folder_functions.hpp"
 #include "mask_functions.hpp"
+#include "time_travel.hpp"
 // #include "fill_functions.hpp"  // Temporarily disabled
 
 namespace duckdb {
@@ -114,6 +115,10 @@ public:
 
         // Register GDPR masking function
         stps::RegisterMaskFunctions(loader);
+
+        // Register time travel functions and optimizer
+        stps::RegisterTimeTravelFunctions(loader);
+        stps::RegisterTimeTravelOptimizer(loader.GetDatabaseInstance());
 
         // Register AI functions (Anthropic Claude integration)
 #ifdef HAVE_CURL
