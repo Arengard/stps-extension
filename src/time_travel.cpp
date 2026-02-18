@@ -368,7 +368,12 @@ static void FlushPendingCapture(ClientContext &context) {
          << ", current_timestamp"
          << ", CAST(t." << esc_pk << " AS VARCHAR)"
          << " FROM " << esc_table << " t";
-    conn.Query(snap.str());
+    auto snap_result = conn.Query(snap.str());
+    if (snap_result->HasError()) {
+        g_pending_capture.active = false;
+        g_tt_capturing = false;
+        return;
+    }
 
     // 2. Insert DELETE markers for rows that existed before but no longer exist
     std::ostringstream del;
@@ -465,9 +470,25 @@ static void TimeTravelPreOptimize(OptimizerExtensionInput &input, unique_ptr<Log
     }
 }
 
-// Post-optimize: flush pending captures for non-DML queries (e.g., SELECT)
+// Post-optimize: flush pending captures ONLY for non-DML queries.
+// If PreOptimize just set a pending capture (DML detected), do NOT flush here —
+// the DML hasn't executed yet, so flushing would capture the pre-DML state.
 static void TimeTravelPostOptimize(OptimizerExtensionInput &input, unique_ptr<LogicalOperator> &plan) {
     if (g_tt_capturing) return;
+
+    // Check if the current query is DML on a tracked table
+    vector<LogicalOperator*> dml_nodes;
+    FindDMLNodes(*plan, dml_nodes);
+    for (auto *node : dml_nodes) {
+        string table_name = GetDMLTableName(*node);
+        if (table_name.empty()) continue;
+        if (table_name.find("_stps_history_") == 0 || table_name == "_stps_tt_tables") continue;
+        // This is a DML query — pending was just set by PreOptimize.
+        // Do NOT flush; the flush must happen on the NEXT query after the DML commits.
+        return;
+    }
+
+    // Non-DML query (e.g., SELECT) — safe to flush pending captures
     FlushPendingCapture(input.context);
 }
 

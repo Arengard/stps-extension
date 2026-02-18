@@ -502,6 +502,108 @@ SELECT dguid('{"a": 1, "b": 2}') AS guid;
 
 ---
 
+### ⏱️ Time Travel
+
+Track and query the full history of DuckDB tables. Every INSERT, UPDATE, and DELETE is automatically versioned after enabling time travel on a table.
+
+#### `stps_tt_enable(table_name VARCHAR, pk_column VARCHAR) → VARCHAR`
+Enable time travel tracking on a table. Creates a history table `_stps_history_{table_name}` and a metadata entry in `_stps_tt_tables`. Snapshots all existing rows as version 0.
+```sql
+SELECT stps_tt_enable('customers', 'id') AS result;
+-- Result: 'Time travel enabled for table customers'
+```
+
+#### `stps_tt_disable(table_name VARCHAR) → VARCHAR`
+Disable time travel tracking. Drops the history table and removes the metadata entry. All history is permanently lost.
+```sql
+SELECT stps_tt_disable('customers') AS result;
+-- Result: 'Time travel disabled for table customers'
+```
+
+#### `stps_time_travel(table_name VARCHAR, version := BIGINT) → TABLE`
+Reconstruct the full table state at a specific version number. Returns all original columns (no history metadata).
+```sql
+SELECT * FROM stps_time_travel('customers', version := 0);
+-- Returns: table as it was at version 0 (initial snapshot)
+
+SELECT * FROM stps_time_travel('customers', version := 3);
+-- Returns: table as it was after the 3rd tracked change
+```
+
+#### `stps_time_travel(table_name VARCHAR, as_of := TIMESTAMP) → TABLE`
+Reconstruct the table state at a specific point in time. Returns all original columns (no history metadata).
+```sql
+SELECT * FROM stps_time_travel('customers', as_of := TIMESTAMP '2026-01-15 10:30:00');
+-- Returns: table as it was at the given timestamp
+```
+
+#### `stps_tt_log(table_name VARCHAR) → TABLE`
+View the full change history for a table, including all operations, versions, and timestamps.
+```sql
+SELECT * FROM stps_tt_log('customers');
+-- Returns: all original columns plus _tt_version, _tt_operation, _tt_timestamp, _tt_pk_value
+```
+
+#### `stps_tt_diff(table_name VARCHAR, from_version := BIGINT, to_version := BIGINT) → TABLE`
+Show rows that changed between two versions. Each row includes a `_tt_change_type` column indicating whether it was an INSERT, UPDATE, or DELETE.
+```sql
+SELECT * FROM stps_tt_diff('customers', from_version := 1, to_version := 5);
+-- Returns: all original columns plus _tt_change_type (INSERT, UPDATE, or DELETE)
+```
+
+#### `stps_tt_status() → TABLE`
+List all tables with time travel tracking enabled and their metadata.
+```sql
+SELECT * FROM stps_tt_status();
+-- Returns: table_name, pk_column, current_version, created_at
+```
+
+#### Complete Workflow Example
+
+```sql
+-- 1. Create a table
+CREATE TABLE employees (id INTEGER PRIMARY KEY, name VARCHAR, dept VARCHAR);
+INSERT INTO employees VALUES (1, 'Alice', 'Engineering'), (2, 'Bob', 'Sales');
+
+-- 2. Enable time travel (snapshots existing rows as version 0)
+SELECT stps_tt_enable('employees', 'id');
+
+-- 3. Make changes (automatically tracked)
+INSERT INTO employees VALUES (3, 'Carol', 'Marketing');
+UPDATE employees SET dept = 'Management' WHERE id = 1;
+DELETE FROM employees WHERE id = 2;
+
+-- 4. Query the table as it was before changes
+SELECT * FROM stps_time_travel('employees', version := 0);
+-- id | name  | dept
+-- 1  | Alice | Engineering
+-- 2  | Bob   | Sales
+
+-- 5. View all changes
+SELECT * FROM stps_tt_log('employees');
+-- Shows every INSERT, UPDATE, DELETE with version numbers and timestamps
+
+-- 6. See what changed between versions
+SELECT * FROM stps_tt_diff('employees', from_version := 0, to_version := 3);
+-- Shows rows with _tt_change_type = INSERT, UPDATE, or DELETE
+
+-- 7. Check tracking status
+SELECT * FROM stps_tt_status();
+-- table_name | pk_column | current_version | created_at
+-- employees  | id        | 3               | 2026-02-18 12:00:00
+
+-- 8. Disable when no longer needed
+SELECT stps_tt_disable('employees');
+```
+
+#### Limitations
+
+- **Single-column primary key only** — composite primary keys are not supported.
+- **ALTER TABLE breaks tracking** — adding, removing, or renaming columns after enabling time travel will cause errors. Disable and re-enable time travel after schema changes.
+- **COPY INTO may bypass tracking** — bulk loads via `COPY INTO` may not trigger the optimizer extension and therefore may not be recorded in history.
+
+---
+
 ### 🗃️ Archive Functions (ZIP)
 
 #### `stps_zip(archive_path VARCHAR, inner_filename VARCHAR) → TABLE`
