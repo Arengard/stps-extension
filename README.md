@@ -544,6 +544,15 @@ SELECT * FROM stps_tt_log('customers');
 -- Returns: all original columns plus _tt_version, _tt_operation, _tt_timestamp, _tt_pk_value, _tt_changes
 -- _tt_changes is a list of {column, from_value, to_value} structs for each changed column
 -- NULL for the first version of each row (no previous state to compare) and for DELETE operations
+
+-- Extract individual change details with json_extract:
+SELECT
+  *,
+  json_extract(_tt_changes, '$[0].column') AS column,
+  json_extract(_tt_changes, '$[0].from_value') AS from_value,
+  json_extract(_tt_changes, '$[0].to_value') AS to_value
+FROM stps_tt_log('test')
+WHERE from_value IS NOT NULL;
 ```
 
 #### `stps_tt_diff(table_name VARCHAR, from_version := BIGINT, to_version := BIGINT) → TABLE`
