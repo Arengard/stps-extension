@@ -25,6 +25,16 @@ SELECT stps_to_snake_case('');
 ----
 (empty)
 
+query T
+SELECT stps_to_snake_case('BU-Schlüssel');
+----
+bu_schlüssel
+
+query T
+SELECT stps_to_snake_case('Größe der Fläche');
+----
+größe_der_fläche
+
 # stps_to_camel_case
 query T
 SELECT stps_to_camel_case('hello_world');

@@ -67,6 +67,26 @@ std::vector<std::string> split_words(const std::string& str) {
     bool last_was_lower = false;
 
     for (size_t i = 0; i < str.length(); i++) {
+        unsigned char uc = static_cast<unsigned char>(str[i]);
+
+        // Handle multi-byte UTF-8 characters — treat as lowercase letter
+        if (uc >= 0x80) {
+            // Determine UTF-8 sequence length from leading byte
+            size_t seq_len = 1;
+            if ((uc & 0xE0) == 0xC0) seq_len = 2;
+            else if ((uc & 0xF0) == 0xE0) seq_len = 3;
+            else if ((uc & 0xF8) == 0xF0) seq_len = 4;
+
+            // Append entire UTF-8 character to current word
+            for (size_t j = 0; j < seq_len && i < str.length(); j++) {
+                current_word += str[i];
+                if (j < seq_len - 1) i++;
+            }
+            last_was_upper = false;
+            last_was_lower = true;
+            continue;
+        }
+
         char c = str[i];
 
         // Handle delimiters (space, underscore, hyphen, etc.)
