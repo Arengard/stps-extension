@@ -89,6 +89,7 @@ struct ReaderOptions {
     bool ignore_errors = false;
 
     // CSV-specific
+    bool filename = false;
     string delimiter;
     string quote;
     string escape;
@@ -146,6 +147,8 @@ static ReaderOptions ParseReaderOptions(const named_parameter_map_t &params) {
             opts.header = BooleanValue::Get(kv.second);
         } else if (kv.first == "ignore_errors") {
             opts.ignore_errors = BooleanValue::Get(kv.second);
+        } else if (kv.first == "filename") {
+            opts.filename = BooleanValue::Get(kv.second);
         } else if (kv.first == "delimiter" || kv.first == "sep") {
             opts.delimiter = kv.second.ToString();
         } else if (kv.first == "quote") {
@@ -263,6 +266,7 @@ static ImportFileResult ImportSingleFile(ClientContext &context, const string &f
         if (ext == "csv" || ext == "tsv") {
             string reader_expr = "read_csv_auto(" + actual_sql_path;
             if (opts.all_varchar) reader_expr += ", all_varchar=true";
+            if (opts.filename) reader_expr += ", filename=true";
             if (opts.header_set) reader_expr += opts.header ? ", header=true" : ", header=false";
             if (opts.ignore_errors) reader_expr += ", ignore_errors=true";
             if (!opts.delimiter.empty()) reader_expr += ", delimiter=" + EscapeStringLiteral(opts.delimiter);
@@ -303,6 +307,12 @@ static ImportFileResult ImportSingleFile(ClientContext &context, const string &f
         // Cleanup temp UTF-8 file if created
         if (!temp_utf8_path.empty()) {
             std::remove(temp_utf8_path.c_str());
+        }
+
+        // Fix filename column: replace temp path with real path
+        if (opts.filename && !temp_utf8_path.empty() && create_result && !create_result->HasError()) {
+            string real_path_sql = EscapeStringLiteral(NormalizeSqlPath(file_path));
+            conn.Query("UPDATE " + escaped_table + " SET filename = " + real_path_sql);
         }
 
         if (!create_result || create_result->HasError()) {
@@ -783,6 +793,7 @@ static void RegisterReaderNamedParameters(TableFunction &func) {
     func.named_parameters["header"] = LogicalType::BOOLEAN;
     func.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
     // CSV-specific
+    func.named_parameters["filename"] = LogicalType::BOOLEAN;
     func.named_parameters["delimiter"] = LogicalType::VARCHAR;
     func.named_parameters["sep"] = LogicalType::VARCHAR;
     func.named_parameters["quote"] = LogicalType::VARCHAR;
