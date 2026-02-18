@@ -8,6 +8,8 @@
 #include "duckdb/planner/operator/logical_insert.hpp"
 #include "duckdb/planner/operator/logical_update.hpp"
 #include "duckdb/planner/operator/logical_delete.hpp"
+#include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
+#include "duckdb/function/table_function.hpp"
 
 #include <sstream>
 
@@ -454,7 +456,10 @@ static void TimeTravelPreOptimize(OptimizerExtensionInput &input, unique_ptr<Log
         g_tt_capturing = false;
 
         // Set pending capture — will be flushed on next query
-        g_pending_capture = {table_name, pk_column, new_version, true};
+        g_pending_capture.table_name = table_name;
+        g_pending_capture.pk_column = pk_column;
+        g_pending_capture.version = new_version;
+        g_pending_capture.active = true;
 
         break; // Only handle one DML per query
     }
@@ -464,6 +469,427 @@ static void TimeTravelPreOptimize(OptimizerExtensionInput &input, unique_ptr<Log
 static void TimeTravelPostOptimize(OptimizerExtensionInput &input, unique_ptr<LogicalOperator> &plan) {
     if (g_tt_capturing) return;
     FlushPendingCapture(input.context);
+}
+
+//===--------------------------------------------------------------------===//
+// Table Function: stps_time_travel(table_name, version := N, as_of := TS)
+//===--------------------------------------------------------------------===//
+
+struct TimeTravelBindData : public TableFunctionData {
+    string table_name;
+    int64_t version = -1;
+    timestamp_t as_of;
+    bool use_as_of = false;
+    vector<string> column_names;
+    vector<LogicalType> column_types;
+};
+
+struct TimeTravelGlobalState : public GlobalTableFunctionState {
+    unique_ptr<QueryResult> result;
+    bool finished = false;
+};
+
+static unique_ptr<FunctionData> TimeTravelBind(ClientContext &context, TableFunctionBindInput &input,
+                                                vector<LogicalType> &return_types, vector<string> &names) {
+    auto bind_data = make_uniq<TimeTravelBindData>();
+    bind_data->table_name = input.inputs[0].GetValue<string>();
+
+    // Get named parameters
+    auto version_it = input.named_parameters.find("version");
+    auto as_of_it = input.named_parameters.find("as_of");
+
+    if (version_it != input.named_parameters.end()) {
+        bind_data->version = version_it->second.GetValue<int64_t>();
+    } else if (as_of_it != input.named_parameters.end()) {
+        bind_data->as_of = as_of_it->second.GetValue<timestamp_t>();
+        bind_data->use_as_of = true;
+    } else {
+        throw BinderException("stps_time_travel requires either 'version' or 'as_of' parameter");
+    }
+
+    Connection conn(context.db->GetDatabase(context));
+
+    // Validate table is tracked
+    {
+        auto res = conn.Query(
+            "SELECT table_name FROM \"_stps_tt_tables\" WHERE table_name = " +
+            EscapeLiteral(bind_data->table_name));
+        if (res->HasError()) {
+            throw BinderException("stps_time_travel: metadata table does not exist. No tables are tracked.");
+        }
+        auto chunk = res->Fetch();
+        if (!chunk || chunk->size() == 0) {
+            throw BinderException("stps_time_travel: table '%s' is not tracked for time travel",
+                                  bind_data->table_name);
+        }
+    }
+
+    // Get original column names and types from the actual table
+    {
+        auto type_res = conn.Query("SELECT * FROM " + EscapeIdentifier(bind_data->table_name) + " LIMIT 0");
+        if (type_res->HasError()) {
+            throw BinderException("stps_time_travel: failed to query table '%s': %s",
+                                  bind_data->table_name, type_res->GetError());
+        }
+        bind_data->column_names = type_res->names;
+        bind_data->column_types = type_res->types;
+    }
+
+    for (idx_t i = 0; i < bind_data->column_names.size(); i++) {
+        return_types.push_back(bind_data->column_types[i]);
+        names.push_back(bind_data->column_names[i]);
+    }
+
+    return std::move(bind_data);
+}
+
+static unique_ptr<GlobalTableFunctionState> TimeTravelInit(ClientContext &context, TableFunctionInitInput &input) {
+    auto &bind_data = input.bind_data->Cast<TimeTravelBindData>();
+    auto gstate = make_uniq<TimeTravelGlobalState>();
+
+    string history_escaped = EscapeIdentifier("_stps_history_" + bind_data.table_name);
+
+    // Build original columns list
+    std::ostringstream cols;
+    for (idx_t c = 0; c < bind_data.column_names.size(); c++) {
+        if (c > 0) cols << ", ";
+        cols << EscapeIdentifier(bind_data.column_names[c]);
+    }
+
+    // Build the WHERE clause for version/timestamp filtering
+    string version_filter;
+    if (bind_data.use_as_of) {
+        version_filter = "\"_tt_timestamp\" <= '" + Timestamp::ToString(bind_data.as_of) + "'::TIMESTAMP";
+    } else {
+        version_filter = "\"_tt_version\" <= " + std::to_string(bind_data.version);
+    }
+
+    std::ostringstream sql;
+    sql << "WITH latest_per_pk AS ("
+        << "  SELECT *, ROW_NUMBER() OVER (PARTITION BY \"_tt_pk_value\" ORDER BY \"_tt_version\" DESC) as rn"
+        << "  FROM " << history_escaped
+        << "  WHERE " << version_filter
+        << ")"
+        << " SELECT " << cols.str()
+        << " FROM latest_per_pk"
+        << " WHERE rn = 1 AND \"_tt_operation\" != 'DELETE'";
+
+    Connection conn(context.db->GetDatabase(context));
+    gstate->result = conn.Query(sql.str());
+    if (gstate->result->HasError()) {
+        throw InternalException("stps_time_travel: query failed: %s", gstate->result->GetError());
+    }
+
+    return std::move(gstate);
+}
+
+static void TimeTravelScan(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
+    auto &gstate = data_p.global_state->Cast<TimeTravelGlobalState>();
+    if (gstate.finished) {
+        output.SetCardinality(0);
+        return;
+    }
+    auto chunk = gstate.result->Fetch();
+    if (!chunk || chunk->size() == 0) {
+        gstate.finished = true;
+        output.SetCardinality(0);
+        return;
+    }
+    for (idx_t col = 0; col < output.ColumnCount() && col < chunk->ColumnCount(); col++) {
+        output.data[col].Reference(chunk->data[col]);
+    }
+    output.SetCardinality(chunk->size());
+}
+
+//===--------------------------------------------------------------------===//
+// Table Function: stps_tt_log(table_name)
+//===--------------------------------------------------------------------===//
+
+struct TTLogBindData : public TableFunctionData {
+    string table_name;
+    vector<string> column_names;
+    vector<LogicalType> column_types;
+};
+
+struct TTLogGlobalState : public GlobalTableFunctionState {
+    unique_ptr<QueryResult> result;
+    bool finished = false;
+};
+
+static unique_ptr<FunctionData> TTLogBind(ClientContext &context, TableFunctionBindInput &input,
+                                           vector<LogicalType> &return_types, vector<string> &names) {
+    auto bind_data = make_uniq<TTLogBindData>();
+    bind_data->table_name = input.inputs[0].GetValue<string>();
+
+    Connection conn(context.db->GetDatabase(context));
+
+    // Validate table is tracked
+    {
+        auto res = conn.Query(
+            "SELECT table_name FROM \"_stps_tt_tables\" WHERE table_name = " +
+            EscapeLiteral(bind_data->table_name));
+        if (res->HasError()) {
+            throw BinderException("stps_tt_log: metadata table does not exist.");
+        }
+        auto chunk = res->Fetch();
+        if (!chunk || chunk->size() == 0) {
+            throw BinderException("stps_tt_log: table '%s' is not tracked for time travel",
+                                  bind_data->table_name);
+        }
+    }
+
+    // Get ALL columns from history table (including _tt_* columns)
+    string history_table = "_stps_history_" + bind_data->table_name;
+    {
+        auto type_res = conn.Query("SELECT * FROM " + EscapeIdentifier(history_table) + " LIMIT 0");
+        if (type_res->HasError()) {
+            throw BinderException("stps_tt_log: failed to query history table: %s", type_res->GetError());
+        }
+        bind_data->column_names = type_res->names;
+        bind_data->column_types = type_res->types;
+    }
+
+    for (idx_t i = 0; i < bind_data->column_names.size(); i++) {
+        return_types.push_back(bind_data->column_types[i]);
+        names.push_back(bind_data->column_names[i]);
+    }
+
+    return std::move(bind_data);
+}
+
+static unique_ptr<GlobalTableFunctionState> TTLogInit(ClientContext &context, TableFunctionInitInput &input) {
+    auto &bind_data = input.bind_data->Cast<TTLogBindData>();
+    auto gstate = make_uniq<TTLogGlobalState>();
+
+    string history_escaped = EscapeIdentifier("_stps_history_" + bind_data.table_name);
+    string sql = "SELECT * FROM " + history_escaped + " ORDER BY \"_tt_version\", \"_tt_pk_value\"";
+
+    Connection conn(context.db->GetDatabase(context));
+    gstate->result = conn.Query(sql);
+    if (gstate->result->HasError()) {
+        throw InternalException("stps_tt_log: query failed: %s", gstate->result->GetError());
+    }
+
+    return std::move(gstate);
+}
+
+static void TTLogScan(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
+    auto &gstate = data_p.global_state->Cast<TTLogGlobalState>();
+    if (gstate.finished) {
+        output.SetCardinality(0);
+        return;
+    }
+    auto chunk = gstate.result->Fetch();
+    if (!chunk || chunk->size() == 0) {
+        gstate.finished = true;
+        output.SetCardinality(0);
+        return;
+    }
+    for (idx_t col = 0; col < output.ColumnCount() && col < chunk->ColumnCount(); col++) {
+        output.data[col].Reference(chunk->data[col]);
+    }
+    output.SetCardinality(chunk->size());
+}
+
+//===--------------------------------------------------------------------===//
+// Table Function: stps_tt_diff(table_name, from_version, to_version)
+//===--------------------------------------------------------------------===//
+
+struct TTDiffBindData : public TableFunctionData {
+    string table_name;
+    int64_t from_version;
+    int64_t to_version;
+    vector<string> column_names;
+    vector<LogicalType> column_types;
+};
+
+struct TTDiffGlobalState : public GlobalTableFunctionState {
+    unique_ptr<QueryResult> result;
+    bool finished = false;
+};
+
+static unique_ptr<FunctionData> TTDiffBind(ClientContext &context, TableFunctionBindInput &input,
+                                            vector<LogicalType> &return_types, vector<string> &names) {
+    auto bind_data = make_uniq<TTDiffBindData>();
+    bind_data->table_name = input.inputs[0].GetValue<string>();
+
+    auto from_it = input.named_parameters.find("from_version");
+    auto to_it = input.named_parameters.find("to_version");
+
+    if (from_it == input.named_parameters.end() || to_it == input.named_parameters.end()) {
+        throw BinderException("stps_tt_diff requires both 'from_version' and 'to_version' parameters");
+    }
+
+    bind_data->from_version = from_it->second.GetValue<int64_t>();
+    bind_data->to_version = to_it->second.GetValue<int64_t>();
+
+    Connection conn(context.db->GetDatabase(context));
+
+    // Validate table is tracked
+    {
+        auto res = conn.Query(
+            "SELECT table_name FROM \"_stps_tt_tables\" WHERE table_name = " +
+            EscapeLiteral(bind_data->table_name));
+        if (res->HasError()) {
+            throw BinderException("stps_tt_diff: metadata table does not exist.");
+        }
+        auto chunk = res->Fetch();
+        if (!chunk || chunk->size() == 0) {
+            throw BinderException("stps_tt_diff: table '%s' is not tracked for time travel",
+                                  bind_data->table_name);
+        }
+    }
+
+    // Get original column names and types
+    {
+        auto type_res = conn.Query("SELECT * FROM " + EscapeIdentifier(bind_data->table_name) + " LIMIT 0");
+        if (type_res->HasError()) {
+            throw BinderException("stps_tt_diff: failed to query table '%s': %s",
+                                  bind_data->table_name, type_res->GetError());
+        }
+        bind_data->column_names = type_res->names;
+        bind_data->column_types = type_res->types;
+    }
+
+    // Return original columns + _tt_change_type
+    for (idx_t i = 0; i < bind_data->column_names.size(); i++) {
+        return_types.push_back(bind_data->column_types[i]);
+        names.push_back(bind_data->column_names[i]);
+    }
+    return_types.push_back(LogicalType::VARCHAR);
+    names.push_back("_tt_change_type");
+
+    return std::move(bind_data);
+}
+
+static unique_ptr<GlobalTableFunctionState> TTDiffInit(ClientContext &context, TableFunctionInitInput &input) {
+    auto &bind_data = input.bind_data->Cast<TTDiffBindData>();
+    auto gstate = make_uniq<TTDiffGlobalState>();
+
+    string history_escaped = EscapeIdentifier("_stps_history_" + bind_data.table_name);
+
+    // Build original columns list
+    std::ostringstream cols_f, cols_t;
+    for (idx_t c = 0; c < bind_data.column_names.size(); c++) {
+        if (c > 0) {
+            cols_f << ", ";
+            cols_t << ", ";
+        }
+        cols_f << "f." << EscapeIdentifier(bind_data.column_names[c]);
+        cols_t << "t." << EscapeIdentifier(bind_data.column_names[c]);
+    }
+
+    std::ostringstream sql;
+    sql << "WITH from_state AS ("
+        << "  SELECT *, ROW_NUMBER() OVER (PARTITION BY \"_tt_pk_value\" ORDER BY \"_tt_version\" DESC) as rn"
+        << "  FROM " << history_escaped
+        << "  WHERE \"_tt_version\" <= " << bind_data.from_version
+        << "), to_state AS ("
+        << "  SELECT *, ROW_NUMBER() OVER (PARTITION BY \"_tt_pk_value\" ORDER BY \"_tt_version\" DESC) as rn"
+        << "  FROM " << history_escaped
+        << "  WHERE \"_tt_version\" <= " << bind_data.to_version
+        << "), f AS (SELECT * FROM from_state WHERE rn = 1 AND \"_tt_operation\" != 'DELETE'),"
+        << " t AS (SELECT * FROM to_state WHERE rn = 1 AND \"_tt_operation\" != 'DELETE')"
+        // New rows (in to but not from)
+        << " SELECT " << cols_t.str() << ", 'INSERT' as \"_tt_change_type\" FROM t"
+        << " WHERE t.\"_tt_pk_value\" NOT IN (SELECT \"_tt_pk_value\" FROM f)"
+        << " UNION ALL"
+        // Deleted rows (in from but not to)
+        << " SELECT " << cols_f.str() << ", 'DELETE' as \"_tt_change_type\" FROM f"
+        << " WHERE f.\"_tt_pk_value\" NOT IN (SELECT \"_tt_pk_value\" FROM t)"
+        << " UNION ALL"
+        // Updated rows (in both but different version)
+        << " SELECT " << cols_t.str() << ", 'UPDATE' as \"_tt_change_type\" FROM t"
+        << " INNER JOIN f ON t.\"_tt_pk_value\" = f.\"_tt_pk_value\""
+        << " WHERE t.\"_tt_version\" != f.\"_tt_version\"";
+
+    Connection conn(context.db->GetDatabase(context));
+    gstate->result = conn.Query(sql.str());
+    if (gstate->result->HasError()) {
+        throw InternalException("stps_tt_diff: query failed: %s", gstate->result->GetError());
+    }
+
+    return std::move(gstate);
+}
+
+static void TTDiffScan(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
+    auto &gstate = data_p.global_state->Cast<TTDiffGlobalState>();
+    if (gstate.finished) {
+        output.SetCardinality(0);
+        return;
+    }
+    auto chunk = gstate.result->Fetch();
+    if (!chunk || chunk->size() == 0) {
+        gstate.finished = true;
+        output.SetCardinality(0);
+        return;
+    }
+    for (idx_t col = 0; col < output.ColumnCount() && col < chunk->ColumnCount(); col++) {
+        output.data[col].Reference(chunk->data[col]);
+    }
+    output.SetCardinality(chunk->size());
+}
+
+//===--------------------------------------------------------------------===//
+// Table Function: stps_tt_status()
+//===--------------------------------------------------------------------===//
+
+struct TTStatusBindData : public TableFunctionData {
+    // No input params needed
+};
+
+struct TTStatusGlobalState : public GlobalTableFunctionState {
+    unique_ptr<QueryResult> result;
+    bool finished = false;
+};
+
+static unique_ptr<FunctionData> TTStatusBind(ClientContext &context, TableFunctionBindInput &input,
+                                              vector<LogicalType> &return_types, vector<string> &names) {
+    auto bind_data = make_uniq<TTStatusBindData>();
+
+    return_types.push_back(LogicalType::VARCHAR);
+    names.push_back("table_name");
+
+    return_types.push_back(LogicalType::VARCHAR);
+    names.push_back("pk_column");
+
+    return_types.push_back(LogicalType::BIGINT);
+    names.push_back("current_version");
+
+    return_types.push_back(LogicalType::TIMESTAMP);
+    names.push_back("created_at");
+
+    return std::move(bind_data);
+}
+
+static unique_ptr<GlobalTableFunctionState> TTStatusInit(ClientContext &context, TableFunctionInitInput &input) {
+    auto gstate = make_uniq<TTStatusGlobalState>();
+
+    Connection conn(context.db->GetDatabase(context));
+    gstate->result = conn.Query("SELECT * FROM \"_stps_tt_tables\" ORDER BY table_name");
+    if (gstate->result->HasError()) {
+        throw InternalException("stps_tt_status: query failed: %s", gstate->result->GetError());
+    }
+
+    return std::move(gstate);
+}
+
+static void TTStatusScan(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
+    auto &gstate = data_p.global_state->Cast<TTStatusGlobalState>();
+    if (gstate.finished) {
+        output.SetCardinality(0);
+        return;
+    }
+    auto chunk = gstate.result->Fetch();
+    if (!chunk || chunk->size() == 0) {
+        gstate.finished = true;
+        output.SetCardinality(0);
+        return;
+    }
+    for (idx_t col = 0; col < output.ColumnCount() && col < chunk->ColumnCount(); col++) {
+        output.data[col].Reference(chunk->data[col]);
+    }
+    output.SetCardinality(chunk->size());
 }
 
 void RegisterTimeTravelOptimizer(DatabaseInstance &db) {
@@ -496,7 +922,29 @@ void RegisterTimeTravelFunctions(ExtensionLoader &loader) {
     tt_disable_set.AddFunction(tt_disable_func);
     loader.RegisterFunction(tt_disable_set);
 
-    // Placeholder: table functions for time travel queries will be registered here in later tasks
+    // stps_time_travel(table, version := N, as_of := TIMESTAMP)
+    TableFunction time_travel_func("stps_time_travel", {LogicalType::VARCHAR},
+                                    TimeTravelScan, TimeTravelBind, TimeTravelInit);
+    time_travel_func.named_parameters["version"] = LogicalType::BIGINT;
+    time_travel_func.named_parameters["as_of"] = LogicalType::TIMESTAMP;
+    loader.RegisterFunction(time_travel_func);
+
+    // stps_tt_log(table)
+    TableFunction log_func("stps_tt_log", {LogicalType::VARCHAR},
+                           TTLogScan, TTLogBind, TTLogInit);
+    loader.RegisterFunction(log_func);
+
+    // stps_tt_diff(table, from_version, to_version)
+    TableFunction diff_func("stps_tt_diff", {LogicalType::VARCHAR},
+                            TTDiffScan, TTDiffBind, TTDiffInit);
+    diff_func.named_parameters["from_version"] = LogicalType::BIGINT;
+    diff_func.named_parameters["to_version"] = LogicalType::BIGINT;
+    loader.RegisterFunction(diff_func);
+
+    // stps_tt_status()
+    TableFunction status_func("stps_tt_status", {},
+                              TTStatusScan, TTStatusBind, TTStatusInit);
+    loader.RegisterFunction(status_func);
 }
 
 } // namespace stps

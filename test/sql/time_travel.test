@@ -76,6 +76,108 @@ SELECT stps_tt_disable('some_random_table');
 ----
 
 # ============================================================
+# Test table functions: stps_time_travel, stps_tt_log,
+# stps_tt_status, stps_tt_diff
+# Uses manually inserted history records for deterministic tests.
+# ============================================================
+
+statement ok
+CREATE TABLE tt_travel (id INTEGER, name VARCHAR, score INTEGER);
+
+statement ok
+INSERT INTO tt_travel VALUES (1, 'Alice', 150);
+
+statement ok
+SELECT stps_tt_enable('tt_travel', 'id');
+
+# Manually populate history to simulate: version 0 = empty,
+# version 1 = INSERT Alice 100 + Bob 200, version 2 = UPDATE Alice 150 + Bob 200,
+# version 3 = DELETE Bob (Alice 150 remains)
+
+statement ok
+DELETE FROM "_stps_history_tt_travel";
+
+statement ok
+INSERT INTO "_stps_history_tt_travel" VALUES
+    (1, 'Alice', 100, 1, 'SNAPSHOT', '2025-01-01 00:00:00', '1'),
+    (2, 'Bob', 200, 1, 'SNAPSHOT', '2025-01-01 00:00:00', '2'),
+    (1, 'Alice', 150, 2, 'SNAPSHOT', '2025-01-02 00:00:00', '1'),
+    (2, 'Bob', 200, 2, 'SNAPSHOT', '2025-01-02 00:00:00', '2'),
+    (1, 'Alice', 150, 3, 'SNAPSHOT', '2025-01-03 00:00:00', '1'),
+    (2, 'Bob', 200, 3, 'DELETE', '2025-01-03 00:00:00', '2');
+
+statement ok
+UPDATE "_stps_tt_tables" SET current_version = 3 WHERE table_name = 'tt_travel';
+
+# Time travel to version 0 (before any DML)
+query I
+SELECT COUNT(*) FROM stps_time_travel('tt_travel', version := 0);
+----
+0
+
+# Time travel to version 1 (after INSERT: Alice 100, Bob 200)
+query ITI
+SELECT * FROM stps_time_travel('tt_travel', version := 1) ORDER BY id;
+----
+1	Alice	100
+2	Bob	200
+
+# Time travel to version 2 (after UPDATE: Alice 150, Bob 200)
+query ITI
+SELECT * FROM stps_time_travel('tt_travel', version := 2) ORDER BY id;
+----
+1	Alice	150
+2	Bob	200
+
+# Time travel to version 3 (after DELETE: only Alice 150)
+query ITI
+SELECT * FROM stps_time_travel('tt_travel', version := 3) ORDER BY id;
+----
+1	Alice	150
+
+# ============================================================
+# Test stps_tt_log
+# ============================================================
+
+query I
+SELECT COUNT(*) FROM stps_tt_log('tt_travel');
+----
+6
+
+query I
+SELECT COUNT(DISTINCT _tt_version) FROM stps_tt_log('tt_travel');
+----
+3
+
+# ============================================================
+# Test stps_tt_status
+# ============================================================
+
+# There are two tracked tables: tt_test and tt_travel
+query ITI
+SELECT table_name, pk_column, current_version FROM stps_tt_status() WHERE table_name = 'tt_travel';
+----
+tt_travel	id	3
+
+# ============================================================
+# Test stps_tt_diff
+# ============================================================
+
+# Diff from version 1 to version 3: Alice changed (UPDATE), Bob removed (DELETE)
+query ITI
+SELECT id, _tt_change_type, score FROM stps_tt_diff('tt_travel', from_version := 1, to_version := 3) ORDER BY id;
+----
+1	UPDATE	150
+2	DELETE	200
+
+# Cleanup travel test
+statement ok
+SELECT stps_tt_disable('tt_travel');
+
+statement ok
+DROP TABLE tt_travel;
+
+# ============================================================
 # Test transparent DML tracking via optimizer extension
 # ============================================================
 
