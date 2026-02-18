@@ -418,8 +418,8 @@ static ImportFileResult ImportSingleFile(ClientContext &context, const string &f
             }
         }
 
-        // 11. Smart cast
-        if (result.rows_imported > 0) {
+        // 11. Smart cast (skip when user explicitly requested all_varchar)
+        if (result.rows_imported > 0 && !opts.all_varchar) {
             string cast_sql = "CREATE OR REPLACE TABLE " + escaped_table +
                               " AS SELECT * FROM stps_smart_cast(" + EscapeStringLiteral(table_name) + ")";
             conn.Query(cast_sql);  // Non-fatal if fails
