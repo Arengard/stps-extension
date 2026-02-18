@@ -217,7 +217,7 @@ static Value MaskValue(const Value &original, const LogicalType &type,
             date_t masked_date = date_t(date_part.days + days_offset);
             auto masked_ts = Timestamp::FromDatetime(masked_date, dtime_t(0));
             if (type.id() == LogicalTypeId::TIMESTAMP_TZ) {
-                return Value::TIMESTAMPTZ(masked_ts);
+                return Value::TIMESTAMPTZ(timestamp_tz_t(masked_ts));
             }
             return Value::TIMESTAMP(masked_ts);
         }
