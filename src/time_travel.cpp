@@ -728,9 +728,9 @@ static unique_ptr<GlobalTableFunctionState> TTLogInit(ClientContext &context, Ta
         string col_lit = EscapeLiteral(bind_data.original_columns[c]);
         string prev_col = EscapeIdentifier("__p_" + bind_data.original_columns[c]);
         changes_expr << "CASE WHEN " << prev_col << " IS DISTINCT FROM " << col_esc
-                     << " THEN {column: " << col_lit
-                     << ", from_value: CAST(" << prev_col << " AS VARCHAR)"
-                     << ", to_value: CAST(" << col_esc << " AS VARCHAR)} END";
+                     << " THEN {'column': " << col_lit
+                     << ", 'from_value': CAST(" << prev_col << " AS VARCHAR)"
+                     << ", 'to_value': CAST(" << col_esc << " AS VARCHAR)} END";
     }
     changes_expr << "), x -> x IS NOT NULL) END as \"_tt_changes\"";
 
@@ -874,9 +874,9 @@ static unique_ptr<GlobalTableFunctionState> TTDiffInit(ClientContext &context, T
         string col_esc = EscapeIdentifier(bind_data.column_names[c]);
         string col_lit = EscapeLiteral(bind_data.column_names[c]);
         changes_expr << "CASE WHEN f." << col_esc << " IS DISTINCT FROM t." << col_esc
-                     << " THEN {column: " << col_lit
-                     << ", from_value: CAST(f." << col_esc << " AS VARCHAR)"
-                     << ", to_value: CAST(t." << col_esc << " AS VARCHAR)} END";
+                     << " THEN {'column': " << col_lit
+                     << ", 'from_value': CAST(f." << col_esc << " AS VARCHAR)"
+                     << ", 'to_value': CAST(t." << col_esc << " AS VARCHAR)} END";
     }
     changes_expr << "), x -> x IS NOT NULL) as \"_tt_changes\"";
 
