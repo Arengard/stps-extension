@@ -1000,7 +1000,7 @@ SELECT * FROM stps_read_gobd_cloud_zip_all(
 Import **all supported files** from a local folder into DuckDB tables. Scans the folder for CSV, TSV, Parquet, JSON, XLSX, and XLS files and creates one table per file with:
 - **Table name** derived from filename (snake_case, e.g. `Sales Report.xlsx` → `sales_report`)
 - **Normalized column names** (snake_case)
-- **Empty columns removed** (all NULL/empty values)
+- **Empty columns removed** (all NULL/empty values) — disable with `all_columns := true`
 - **Smart type casting** via `stps_smart_cast`
 - **Database cleanup** via `stps_clean_database()` after all imports
 
@@ -1010,6 +1010,7 @@ Import **all supported files** from a local folder into DuckDB tables. Scans the
 |-----------|------|---------|------------|-------------|
 | `overwrite` | BOOLEAN | false | All | Drop existing tables before re-importing |
 | `all_varchar` | BOOLEAN | false | CSV, XLSX | Read all columns as VARCHAR. For CSV: passes `all_varchar=true` to `read_csv_auto`. For XLSX/XLS: passes `columns={'*': 'VARCHAR'}` to `read_sheet`. Useful to avoid type detection errors from mixed-type columns or totals rows. |
+| `all_columns` | BOOLEAN | false | All | Keep all columns, including those that are entirely NULL/empty. By default, empty columns are dropped during import. |
 | `header` | BOOLEAN | true | CSV, XLSX | Whether the first row contains column headers |
 | `ignore_errors` | BOOLEAN | false | CSV, JSON | Skip rows that fail to parse instead of erroring |
 | `delimiter` | VARCHAR | auto | CSV | Column delimiter (e.g. `';'`, `'\t'`, `','`). Also accepts `sep` as alias. |
@@ -1080,6 +1081,7 @@ Import **all supported files** from a Nextcloud/WebDAV folder into DuckDB tables
 | `password` | VARCHAR | | Connection | WebDAV/Nextcloud password |
 | `overwrite` | BOOLEAN | false | All | Drop existing tables before re-importing |
 | `all_varchar` | BOOLEAN | false | CSV, XLSX | Read all columns as VARCHAR (see `stps_import_folder` above) |
+| `all_columns` | BOOLEAN | false | All | Keep all columns, including empty ones (see `stps_import_folder` above) |
 | `header` | BOOLEAN | true | CSV, XLSX | Whether the first row contains column headers |
 | `ignore_errors` | BOOLEAN | false | CSV, JSON | Skip rows that fail to parse |
 | `delimiter` | VARCHAR | auto | CSV | Column delimiter. Also accepts `sep`. |

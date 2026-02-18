@@ -84,6 +84,7 @@ static bool IsSupportedImportFile(const string &filename) {
 struct ReaderOptions {
     // Common
     bool all_varchar = false;
+    bool all_columns = false;
     bool header_set = false;
     bool header = true;
     bool ignore_errors = false;
@@ -142,6 +143,8 @@ static ReaderOptions ParseReaderOptions(const named_parameter_map_t &params) {
     for (auto &kv : params) {
         if (kv.first == "all_varchar") {
             opts.all_varchar = BooleanValue::Get(kv.second);
+        } else if (kv.first == "all_columns") {
+            opts.all_columns = BooleanValue::Get(kv.second);
         } else if (kv.first == "header") {
             opts.header_set = true;
             opts.header = BooleanValue::Get(kv.second);
@@ -364,8 +367,8 @@ static ImportFileResult ImportSingleFile(ClientContext &context, const string &f
             }
         }
 
-        // 10. Drop empty columns
-        {
+        // 10. Drop empty columns (skip when all_columns=true)
+        if (!opts.all_columns) {
             vector<string> current_cols;
             auto cols_result = conn.Query(
                 "SELECT column_name FROM information_schema.columns WHERE table_name = " +
@@ -790,6 +793,7 @@ static void ImportNextcloudFolderScan(ClientContext &context, TableFunctionInput
 static void RegisterReaderNamedParameters(TableFunction &func) {
     // Common
     func.named_parameters["all_varchar"] = LogicalType::BOOLEAN;
+    func.named_parameters["all_columns"] = LogicalType::BOOLEAN;
     func.named_parameters["header"] = LogicalType::BOOLEAN;
     func.named_parameters["ignore_errors"] = LogicalType::BOOLEAN;
     // CSV-specific
