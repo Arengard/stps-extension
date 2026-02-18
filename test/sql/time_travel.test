@@ -75,6 +75,58 @@ statement error
 SELECT stps_tt_disable('some_random_table');
 ----
 
+# ============================================================
+# Test transparent DML tracking via optimizer extension
+# ============================================================
+
+statement ok
+CREATE TABLE tt_dml (id INTEGER, name VARCHAR, score INTEGER);
+
+statement ok
+SELECT stps_tt_enable('tt_dml', 'id');
+
+# INSERT should be tracked automatically
+statement ok
+INSERT INTO tt_dml VALUES (1, 'Alice', 100);
+
+# Trigger flush by querying history — the SELECT goes through the optimizer
+# which flushes the pending capture from the INSERT above
+query I
+SELECT COUNT(*) FROM _stps_history_tt_dml WHERE _tt_operation = 'SNAPSHOT' AND _tt_version = 1;
+----
+1
+
+# UPDATE should be tracked
+statement ok
+UPDATE tt_dml SET score = 200 WHERE id = 1;
+
+# Trigger flush
+query I
+SELECT COUNT(*) FROM _stps_history_tt_dml WHERE _tt_version = 2;
+----
+1
+
+# DELETE should be tracked
+statement ok
+DELETE FROM tt_dml WHERE id = 1;
+
+# Trigger flush — should have a DELETE marker
+query I
+SELECT COUNT(*) FROM _stps_history_tt_dml WHERE _tt_operation = 'DELETE' AND _tt_version = 3;
+----
+1
+
+# Cleanup DML test
+statement ok
+SELECT stps_tt_disable('tt_dml');
+
+statement ok
+DROP TABLE tt_dml;
+
+# ============================================================
+# Cleanup from earlier tests
+# ============================================================
+
 # Cleanup
 statement ok
 SELECT stps_tt_disable('tt_test');
