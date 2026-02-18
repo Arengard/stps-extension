@@ -630,6 +630,7 @@ struct TTLogBindData : public TableFunctionData {
     string table_name;
     vector<string> column_names;
     vector<LogicalType> column_types;
+    vector<string> original_columns;
 };
 
 struct TTLogGlobalState : public GlobalTableFunctionState {
@@ -675,6 +676,23 @@ static unique_ptr<FunctionData> TTLogBind(ClientContext &context, TableFunctionB
         names.push_back(bind_data->column_names[i]);
     }
 
+    // Identify original columns (non-_tt_* metadata) for change tracking
+    for (const auto &name : bind_data->column_names) {
+        if (name != "_tt_version" && name != "_tt_operation" &&
+            name != "_tt_timestamp" && name != "_tt_pk_value") {
+            bind_data->original_columns.push_back(name);
+        }
+    }
+
+    // Add _tt_changes column
+    auto changes_type = LogicalType::LIST(LogicalType::STRUCT({
+        {"column", LogicalType::VARCHAR},
+        {"from_value", LogicalType::VARCHAR},
+        {"to_value", LogicalType::VARCHAR}
+    }));
+    return_types.push_back(changes_type);
+    names.push_back("_tt_changes");
+
     return std::move(bind_data);
 }
 
@@ -683,10 +701,50 @@ static unique_ptr<GlobalTableFunctionState> TTLogInit(ClientContext &context, Ta
     auto gstate = make_uniq<TTLogGlobalState>();
 
     string history_escaped = EscapeIdentifier("_stps_history_" + bind_data.table_name);
-    string sql = "SELECT * FROM " + history_escaped + " ORDER BY \"_tt_version\", \"_tt_pk_value\"";
+
+    // Build LAG expressions for each original column
+    std::ostringstream lag_cols;
+    lag_cols << ", LAG(\"_tt_version\") OVER (PARTITION BY \"_tt_pk_value\" ORDER BY \"_tt_version\") as \"__p_version\"";
+    for (idx_t c = 0; c < bind_data.original_columns.size(); c++) {
+        string col_esc = EscapeIdentifier(bind_data.original_columns[c]);
+        string prev_col = EscapeIdentifier("__p_" + bind_data.original_columns[c]);
+        lag_cols << ", LAG(" << col_esc << ") OVER (PARTITION BY \"_tt_pk_value\" ORDER BY \"_tt_version\") as " << prev_col;
+    }
+
+    // Build explicit column list for outer SELECT (all history columns in order)
+    std::ostringstream select_cols;
+    for (idx_t c = 0; c < bind_data.column_names.size(); c++) {
+        if (c > 0) select_cols << ", ";
+        select_cols << EscapeIdentifier(bind_data.column_names[c]);
+    }
+
+    // Build _tt_changes expression
+    std::ostringstream changes_expr;
+    changes_expr << "CASE WHEN \"__p_version\" IS NOT NULL"
+                 << " AND \"_tt_operation\" != 'DELETE' THEN list_filter(list_value(";
+    for (idx_t c = 0; c < bind_data.original_columns.size(); c++) {
+        if (c > 0) changes_expr << ", ";
+        string col_esc = EscapeIdentifier(bind_data.original_columns[c]);
+        string col_lit = EscapeLiteral(bind_data.original_columns[c]);
+        string prev_col = EscapeIdentifier("__p_" + bind_data.original_columns[c]);
+        changes_expr << "CASE WHEN " << prev_col << " IS DISTINCT FROM " << col_esc
+                     << " THEN {column: " << col_lit
+                     << ", from_value: CAST(" << prev_col << " AS VARCHAR)"
+                     << ", to_value: CAST(" << col_esc << " AS VARCHAR)} END";
+    }
+    changes_expr << "), x -> x IS NOT NULL) END as \"_tt_changes\"";
+
+    std::ostringstream sql;
+    sql << "WITH history AS ("
+        << "  SELECT *" << lag_cols.str()
+        << "  FROM " << history_escaped
+        << ")"
+        << " SELECT " << select_cols.str() << ", " << changes_expr.str()
+        << " FROM history"
+        << " ORDER BY \"_tt_version\", \"_tt_pk_value\"";
 
     Connection conn(context.db->GetDatabase(context));
-    gstate->result = conn.Query(sql);
+    gstate->result = conn.Query(sql.str());
     if (gstate->result->HasError()) {
         throw InternalException("stps_tt_log: query failed: %s", gstate->result->GetError());
     }
@@ -772,13 +830,21 @@ static unique_ptr<FunctionData> TTDiffBind(ClientContext &context, TableFunction
         bind_data->column_types = type_res->types;
     }
 
-    // Return original columns + _tt_change_type
+    // Return original columns + _tt_change_type + _tt_changes
     for (idx_t i = 0; i < bind_data->column_names.size(); i++) {
         return_types.push_back(bind_data->column_types[i]);
         names.push_back(bind_data->column_names[i]);
     }
     return_types.push_back(LogicalType::VARCHAR);
     names.push_back("_tt_change_type");
+
+    auto changes_type = LogicalType::LIST(LogicalType::STRUCT({
+        {"column", LogicalType::VARCHAR},
+        {"from_value", LogicalType::VARCHAR},
+        {"to_value", LogicalType::VARCHAR}
+    }));
+    return_types.push_back(changes_type);
+    names.push_back("_tt_changes");
 
     return std::move(bind_data);
 }
@@ -800,6 +866,20 @@ static unique_ptr<GlobalTableFunctionState> TTDiffInit(ClientContext &context, T
         cols_t << "t." << EscapeIdentifier(bind_data.column_names[c]);
     }
 
+    // Build _tt_changes expression for UPDATE branch
+    std::ostringstream changes_expr;
+    changes_expr << "list_filter(list_value(";
+    for (idx_t c = 0; c < bind_data.column_names.size(); c++) {
+        if (c > 0) changes_expr << ", ";
+        string col_esc = EscapeIdentifier(bind_data.column_names[c]);
+        string col_lit = EscapeLiteral(bind_data.column_names[c]);
+        changes_expr << "CASE WHEN f." << col_esc << " IS DISTINCT FROM t." << col_esc
+                     << " THEN {column: " << col_lit
+                     << ", from_value: CAST(f." << col_esc << " AS VARCHAR)"
+                     << ", to_value: CAST(t." << col_esc << " AS VARCHAR)} END";
+    }
+    changes_expr << "), x -> x IS NOT NULL) as \"_tt_changes\"";
+
     std::ostringstream sql;
     sql << "WITH from_state AS ("
         << "  SELECT *, ROW_NUMBER() OVER (PARTITION BY \"_tt_pk_value\" ORDER BY \"_tt_version\" DESC) as rn"
@@ -811,18 +891,18 @@ static unique_ptr<GlobalTableFunctionState> TTDiffInit(ClientContext &context, T
         << "  WHERE \"_tt_version\" <= " << bind_data.to_version
         << "), f AS (SELECT * FROM from_state WHERE rn = 1 AND \"_tt_operation\" != 'DELETE'),"
         << " t AS (SELECT * FROM to_state WHERE rn = 1 AND \"_tt_operation\" != 'DELETE')"
+        // UPDATE first (establishes _tt_changes struct type for UNION ALL)
+        << " SELECT " << cols_t.str() << ", 'UPDATE' as \"_tt_change_type\", " << changes_expr.str()
+        << " FROM t INNER JOIN f ON t.\"_tt_pk_value\" = f.\"_tt_pk_value\""
+        << " WHERE t.\"_tt_version\" != f.\"_tt_version\""
+        << " UNION ALL"
         // New rows (in to but not from)
-        << " SELECT " << cols_t.str() << ", 'INSERT' as \"_tt_change_type\" FROM t"
-        << " WHERE t.\"_tt_pk_value\" NOT IN (SELECT \"_tt_pk_value\" FROM f)"
+        << " SELECT " << cols_t.str() << ", 'INSERT' as \"_tt_change_type\", NULL as \"_tt_changes\""
+        << " FROM t WHERE t.\"_tt_pk_value\" NOT IN (SELECT \"_tt_pk_value\" FROM f)"
         << " UNION ALL"
         // Deleted rows (in from but not to)
-        << " SELECT " << cols_f.str() << ", 'DELETE' as \"_tt_change_type\" FROM f"
-        << " WHERE f.\"_tt_pk_value\" NOT IN (SELECT \"_tt_pk_value\" FROM t)"
-        << " UNION ALL"
-        // Updated rows (in both but different version)
-        << " SELECT " << cols_t.str() << ", 'UPDATE' as \"_tt_change_type\" FROM t"
-        << " INNER JOIN f ON t.\"_tt_pk_value\" = f.\"_tt_pk_value\""
-        << " WHERE t.\"_tt_version\" != f.\"_tt_version\"";
+        << " SELECT " << cols_f.str() << ", 'DELETE' as \"_tt_change_type\", NULL as \"_tt_changes\""
+        << " FROM f WHERE f.\"_tt_pk_value\" NOT IN (SELECT \"_tt_pk_value\" FROM t)";
 
     Connection conn(context.db->GetDatabase(context));
     gstate->result = conn.Query(sql.str());

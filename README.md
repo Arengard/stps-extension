@@ -1,6 +1,6 @@
 # STPS DuckDB Extension
 
-A comprehensive DuckDB extension providing 50+ functions for data transformation, validation, file operations, German business data processing, and **AI-powered data enhancement with Anthropic Claude**.
+A comprehensive DuckDB extension providing 50+ functions for data transformation, validation, file operations, German business data processing, data masking/pseudonymization, and **AI-powered data enhancement with Anthropic Claude**.
 
 ## 📦 Installation
 
@@ -538,17 +538,21 @@ SELECT * FROM stps_time_travel('customers', as_of := TIMESTAMP '2026-01-15 10:30
 ```
 
 #### `stps_tt_log(table_name VARCHAR) → TABLE`
-View the full change history for a table, including all operations, versions, and timestamps.
+View the full change history for a table, including all operations, versions, and timestamps. Each row includes a `_tt_changes` column showing which columns changed from the previous version.
 ```sql
 SELECT * FROM stps_tt_log('customers');
--- Returns: all original columns plus _tt_version, _tt_operation, _tt_timestamp, _tt_pk_value
+-- Returns: all original columns plus _tt_version, _tt_operation, _tt_timestamp, _tt_pk_value, _tt_changes
+-- _tt_changes is a list of {column, from_value, to_value} structs for each changed column
+-- NULL for the first version of each row (no previous state to compare) and for DELETE operations
 ```
 
 #### `stps_tt_diff(table_name VARCHAR, from_version := BIGINT, to_version := BIGINT) → TABLE`
-Show rows that changed between two versions. Each row includes a `_tt_change_type` column indicating whether it was an INSERT, UPDATE, or DELETE.
+Show rows that changed between two versions. Each row includes a `_tt_change_type` column indicating whether it was an INSERT, UPDATE, or DELETE, and a `_tt_changes` column showing which columns changed.
 ```sql
 SELECT * FROM stps_tt_diff('customers', from_version := 1, to_version := 5);
--- Returns: all original columns plus _tt_change_type (INSERT, UPDATE, or DELETE)
+-- Returns: all original columns plus _tt_change_type and _tt_changes
+-- _tt_changes is a list of {column, from_value, to_value} structs for UPDATE rows
+-- NULL for INSERT and DELETE rows (no from/to comparison available)
 ```
 
 #### `stps_tt_status() → TABLE`
@@ -581,11 +585,12 @@ SELECT * FROM stps_time_travel('employees', version := 0);
 
 -- 5. View all changes
 SELECT * FROM stps_tt_log('employees');
--- Shows every INSERT, UPDATE, DELETE with version numbers and timestamps
+-- Shows every INSERT, UPDATE, DELETE with version numbers, timestamps, and _tt_changes
 
 -- 6. See what changed between versions
 SELECT * FROM stps_tt_diff('employees', from_version := 0, to_version := 3);
--- Shows rows with _tt_change_type = INSERT, UPDATE, or DELETE
+-- Shows rows with _tt_change_type and _tt_changes
+-- UPDATE rows include: [{column: 'dept', from_value: 'Engineering', to_value: 'Management'}]
 
 -- 7. Check tracking status
 SELECT * FROM stps_tt_status();
@@ -601,6 +606,68 @@ SELECT stps_tt_disable('employees');
 - **Single-column primary key only** — composite primary keys are not supported.
 - **ALTER TABLE breaks tracking** — adding, removing, or renaming columns after enabling time travel will cause errors. Disable and re-enable time travel after schema changes.
 - **COPY INTO may bypass tracking** — bulk loads via `COPY INTO` may not trigger the optimizer extension and therefore may not be recorded in history.
+
+---
+
+### 🔒 Data Masking
+
+#### `stps_mask_table(table_name VARCHAR, seed := VARCHAR, exclude := VARCHAR[]) → TABLE`
+Deterministically mask (pseudonymize) all columns in a table. Every value is replaced with a realistic-looking fake value of the same type and magnitude. The masking is **deterministic** — the same input always produces the same masked output for a given seed, so referential integrity across tables is preserved.
+
+**Named Parameters:**
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `seed` | VARCHAR | `'stps_default_seed'` | Secret key that controls the masking. Same seed = same output. Change the seed to get different masked values. |
+| `exclude` | VARCHAR[] | `[]` | List of column names to pass through unmasked |
+
+**Supported types and masking behavior:**
+| Type | Masking Strategy |
+|------|-----------------|
+| VARCHAR | Hex string of same length |
+| INTEGER / BIGINT | Random number of same magnitude and sign |
+| FLOAT / DOUBLE | Random number of same magnitude and sign |
+| DECIMAL | Random number of same magnitude and sign |
+| DATE | Shifted by 1–365 days |
+| TIMESTAMP / TIMESTAMPTZ | Date shifted by 1–365 days, time set to midnight |
+| BOOLEAN | Random true/false |
+| Other types | Hex string fallback |
+
+```sql
+-- Mask all columns in a table
+SELECT * FROM stps_mask_table('customers');
+
+-- Mask with a custom seed (different seed = different output)
+SELECT * FROM stps_mask_table('customers', seed := 'my-secret-2024');
+
+-- Keep some columns unmasked (e.g. ID and country for joins/grouping)
+SELECT * FROM stps_mask_table('customers', exclude := ['id', 'country']);
+
+-- Combine seed + exclude
+SELECT * FROM stps_mask_table('orders',
+    seed := 'project-x',
+    exclude := ['order_id', 'status']
+);
+
+-- Create a masked copy of a table
+CREATE TABLE customers_masked AS
+SELECT * FROM stps_mask_table('customers', seed := 'demo-seed');
+
+-- Export masked data for sharing
+COPY (SELECT * FROM stps_mask_table('invoices', seed := 's3cret'))
+TO 'invoices_masked.csv' (HEADER, DELIMITER ',');
+```
+
+**Use Cases:**
+- Share production data with developers without exposing PII
+- Create realistic demo/test datasets
+- GDPR-compliant data exports for third parties
+- Anonymize data for analytics while preserving statistical properties (magnitude, distribution shape)
+
+**Notes:**
+- NULL values are preserved (not masked)
+- Masking is deterministic per seed: `customer_id = 42` always maps to the same masked value with the same seed, so foreign key relationships survive if you mask related tables with the same seed
+- The `exclude` parameter is validated — passing a non-existent column name raises an error
+- The function reads the full table into memory; for very large tables, consider filtering first
 
 ---
 
