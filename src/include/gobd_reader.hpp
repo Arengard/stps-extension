@@ -48,6 +48,7 @@ vector<GobdImportResult> ExecuteGobdImportPipeline(ClientContext &context,
 bool IsValidUtf8(const std::string &str);
 std::string ConvertWindows1252ToUtf8(const std::string &input);
 std::string EnsureUtf8(const std::string &input);
+std::string ConvertToUtf8(const std::string &input, const std::string &encoding);
 
 // Parse GoBD index.xml from an in-memory XML string
 vector<GobdTable> ParseGobdIndexFromString(const string &xml_content);

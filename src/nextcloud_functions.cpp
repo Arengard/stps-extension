@@ -3,6 +3,7 @@
 #include "shared/archive_utils.hpp"
 #include "curl_utils.hpp"
 #include "case_transform.hpp"
+#include "gobd_reader.hpp"
 #include "duckdb/function/table_function.hpp"
 #include "duckdb/parser/parsed_data/create_table_function_info.hpp"
 #include "duckdb/main/extension/extension_loader.hpp"
@@ -31,6 +32,7 @@ struct NextcloudBindData : public TableFunctionData {
     std::string reader_options;
     std::string sheet;
     std::string range;
+    std::string encoding;
 
     // Fetched data stored in bind for schema detection
     std::string fetched_body;
@@ -71,7 +73,8 @@ static bool ReadFileViaDuckDB(ClientContext &context, const std::string &body, c
                                const std::string &sheet, const std::string &range,
                                std::vector<std::string> &col_names, std::vector<LogicalType> &col_types,
                                std::vector<std::vector<Value>> &rows,
-                               std::string *error_out = nullptr);
+                               std::string *error_out = nullptr,
+                               const std::string &encoding = "");
 
 static unique_ptr<FunctionData> NextcloudBind(ClientContext &context, TableFunctionBindInput &input,
                                              vector<LogicalType> &return_types, vector<string> &names) {
@@ -110,6 +113,8 @@ static unique_ptr<FunctionData> NextcloudBind(ClientContext &context, TableFunct
             result->sheet = kv.second.ToString();
         } else if (kv.first == "range") {
             result->range = kv.second.ToString();
+        } else if (kv.first == "encoding") {
+            result->encoding = kv.second.ToString();
         }
     }
 
@@ -158,7 +163,7 @@ static unique_ptr<FunctionData> NextcloudBind(ClientContext &context, TableFunct
     bool read_ok = ReadFileViaDuckDB(context, result->fetched_body, result->file_extension,
                                       result->all_varchar, result->ignore_errors, result->reader_options,
                                       result->sheet, result->range,
-                                      col_names, col_types, mat_rows);
+                                      col_names, col_types, mat_rows, nullptr, result->encoding);
 
     if (!read_ok) {
         // DuckDB reader failed - try custom CSV parser as fallback for text files
@@ -261,6 +266,7 @@ struct NextcloudFolderBindData : public TableFunctionData {
     std::string reader_options;
     std::string sheet;
     std::string range;
+    std::string encoding;
 
     // Discovered files
     std::vector<NextcloudFolderFileInfo> files;
@@ -334,7 +340,8 @@ static bool ReadFileViaDuckDB(ClientContext &context, const std::string &body, c
                                const std::string &sheet, const std::string &range,
                                std::vector<std::string> &col_names, std::vector<LogicalType> &col_types,
                                std::vector<std::vector<Value>> &rows,
-                               std::string *error_out) {
+                               std::string *error_out,
+                               const std::string &encoding) {
     // Validate reader_options to prevent SQL injection
     if (!reader_options.empty() && !ValidateReaderOptions(reader_options)) {
         if (error_out) *error_out = "Invalid reader_options: contains disallowed characters (;, --, /*)";
@@ -343,9 +350,24 @@ static bool ReadFileViaDuckDB(ClientContext &context, const std::string &body, c
 
     std::string ext = file_type.empty() ? "csv" : file_type;
     std::string temp_path = GenerateTempFilename(ext);
+
+    // For text-based formats, convert encoding to UTF-8 if specified
+    bool is_text = (ext == "csv" || ext == "tsv" || ext == "txt");
+    const std::string *write_ptr = &body;
+    std::string converted;
+    if (is_text) {
+        if (!encoding.empty()) {
+            converted = ConvertToUtf8(body, encoding);
+            write_ptr = &converted;
+        } else {
+            converted = EnsureUtf8(body);
+            write_ptr = &converted;
+        }
+    }
+
     std::ofstream out(temp_path, std::ios::binary);
     if (!out) return false;
-    out.write(body.data(), body.size());
+    out.write(write_ptr->data(), write_ptr->size());
     out.close();
 
     try {
@@ -490,6 +512,8 @@ static unique_ptr<FunctionData> NextcloudFolderBind(ClientContext &context, Tabl
             result->sheet = kv.second.ToString();
         } else if (kv.first == "range") {
             result->range = kv.second.ToString();
+        } else if (kv.first == "encoding") {
+            result->encoding = kv.second.ToString();
         }
     }
 
@@ -678,7 +702,7 @@ static unique_ptr<FunctionData> NextcloudFolderBind(ClientContext &context, Tabl
         if (!ReadFileViaDuckDB(context, body, result->file_type, result->all_varchar,
                                result->ignore_errors, result->reader_options,
                                result->sheet, result->range,
-                               col_names, col_types, rows, &read_error)) {
+                               col_names, col_types, rows, &read_error, result->encoding)) {
             if (!IsBinaryFileType(result->file_type)) {
                 ParseCSVContent(body, col_names, col_types, rows);
             }
@@ -873,6 +897,7 @@ void RegisterNextcloudFunctions(ExtensionLoader &loader) {
     func.named_parameters["reader_options"] = LogicalType::VARCHAR;
     func.named_parameters["sheet"] = LogicalType::VARCHAR;
     func.named_parameters["range"] = LogicalType::VARCHAR;
+    func.named_parameters["encoding"] = LogicalType::VARCHAR;
     loader.RegisterFunction(func);
 
     // next_cloud_folder - scan parent folder's company subfolders
@@ -887,6 +912,7 @@ void RegisterNextcloudFunctions(ExtensionLoader &loader) {
     folder_func.named_parameters["reader_options"] = LogicalType::VARCHAR;
     folder_func.named_parameters["sheet"] = LogicalType::VARCHAR;
     folder_func.named_parameters["range"] = LogicalType::VARCHAR;
+    folder_func.named_parameters["encoding"] = LogicalType::VARCHAR;
     loader.RegisterFunction(folder_func);
 }
 
