@@ -16,6 +16,7 @@
 #include <sstream>
 #include <random>
 #include <chrono>
+#include <unordered_map>
 
 namespace duckdb {
 namespace stps {
@@ -264,14 +265,12 @@ struct NextcloudFolderBindData : public TableFunctionData {
     // Discovered files
     std::vector<NextcloudFolderFileInfo> files;
 
-    // Schema from first file
+    // Unified schema from all files (UNION ALL BY NAME)
     std::vector<std::string> column_names;
     std::vector<LogicalType> column_types;
 
-    // Materialized rows from first file (transferred to init)
-    std::vector<std::vector<Value>> first_file_rows;
-    idx_t first_file_col_count = 0;
-    idx_t schema_file_idx = 0;  // Index of file used for schema detection
+    // All materialized rows (metadata + data columns)
+    std::vector<std::vector<Value>> all_rows;
 };
 
 struct NextcloudFolderGlobalState : public GlobalTableFunctionState {
@@ -627,17 +626,25 @@ static unique_ptr<FunctionData> NextcloudFolderBind(ClientContext &context, Tabl
         return result;
     }
 
-    // Step 3: Loop through files to find the first one with data rows for schema detection
-    for (size_t schema_idx = 0; schema_idx < result->files.size(); schema_idx++) {
+    // Step 3: Download and parse ALL files (UNION ALL BY NAME)
+    struct ParsedFileData {
+        std::vector<std::string> col_names;
+        std::vector<LogicalType> col_types;
+        std::vector<std::vector<Value>> rows;
+        size_t file_idx;
+    };
+    std::vector<ParsedFileData> parsed_files;
+
+    for (size_t file_idx = 0; file_idx < result->files.size(); file_idx++) {
         CurlHeaders headers;
         BuildAuthHeaders(headers, result->username, result->password);
 
         long http_code = 0;
-        std::string request_url = NormalizeRequestUrl(result->files[schema_idx].download_url);
+        std::string request_url = NormalizeRequestUrl(result->files[file_idx].download_url);
         std::string body = curl_get(request_url, headers, &http_code);
 
         if (body.find("ERROR:") == 0 || http_code >= 400 || body.empty()) {
-            continue;  // Skip files that fail to download
+            continue;
         }
 
         std::vector<std::string> col_names;
@@ -652,12 +659,12 @@ static unique_ptr<FunctionData> NextcloudFolderBind(ClientContext &context, Tabl
             if (!IsBinaryFileType(result->file_type)) {
                 ParseCSVContent(body, col_names, col_types, rows);
             } else {
-                continue;  // Skip binary files that fail to parse
+                continue;
             }
         }
 
         if (col_names.empty() || rows.empty()) {
-            continue;  // Skip files with no columns or no data rows (header-only)
+            continue;
         }
 
         // Normalize column names to snake_case
@@ -665,33 +672,64 @@ static unique_ptr<FunctionData> NextcloudFolderBind(ClientContext &context, Tabl
             name = NormalizeColumnName(name);
         }
 
-        result->column_names = col_names;
-        result->column_types = col_types;
-        result->first_file_col_count = col_names.size();
-        result->schema_file_idx = schema_idx;
-
-        // Store first file rows with metadata prepended
-        for (auto &row : rows) {
-            std::vector<Value> full_row;
-            full_row.push_back(Value(result->files[schema_idx].parent_folder));
-            full_row.push_back(Value(result->files[schema_idx].child_folder));
-            full_row.push_back(Value(result->files[schema_idx].file_name));
-            for (auto &val : row) {
-                full_row.push_back(std::move(val));
-            }
-            result->first_file_rows.push_back(std::move(full_row));
-        }
-        break;  // Found a valid file with data, stop searching
+        ParsedFileData pf;
+        pf.col_names = std::move(col_names);
+        pf.col_types = std::move(col_types);
+        pf.rows = std::move(rows);
+        pf.file_idx = file_idx;
+        parsed_files.push_back(std::move(pf));
     }
 
-    // If no file with data was found, return minimal schema
-    if (result->column_names.empty()) {
+    // If no files with data were found, return minimal schema
+    if (parsed_files.empty()) {
         names = {"parent_folder", "child_folder", "file_name"};
         return_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR};
         return result;
     }
 
-    // Build return schema: metadata columns + data columns
+    // Build unified schema: superset of all column names (UNION ALL BY NAME)
+    std::unordered_map<std::string, size_t> col_name_to_idx;
+    for (auto &pf : parsed_files) {
+        for (size_t i = 0; i < pf.col_names.size(); i++) {
+            if (col_name_to_idx.find(pf.col_names[i]) == col_name_to_idx.end()) {
+                col_name_to_idx[pf.col_names[i]] = result->column_names.size();
+                result->column_names.push_back(pf.col_names[i]);
+                result->column_types.push_back(pf.col_types[i]);
+            }
+        }
+    }
+
+    // Map each file's rows to the unified schema, NULLs for missing columns
+    for (auto &pf : parsed_files) {
+        // Build column mapping: unified_col_idx -> file_col_idx (-1 if missing)
+        std::vector<int> col_map(result->column_names.size(), -1);
+        for (size_t i = 0; i < pf.col_names.size(); i++) {
+            auto it = col_name_to_idx.find(pf.col_names[i]);
+            if (it != col_name_to_idx.end()) {
+                col_map[it->second] = static_cast<int>(i);
+            }
+        }
+
+        for (auto &row : pf.rows) {
+            std::vector<Value> full_row;
+            full_row.reserve(3 + result->column_names.size());
+            // Metadata columns
+            full_row.push_back(Value(result->files[pf.file_idx].parent_folder));
+            full_row.push_back(Value(result->files[pf.file_idx].child_folder));
+            full_row.push_back(Value(result->files[pf.file_idx].file_name));
+            // Data columns mapped to unified schema
+            for (size_t col = 0; col < result->column_names.size(); col++) {
+                if (col_map[col] >= 0 && static_cast<size_t>(col_map[col]) < row.size()) {
+                    full_row.push_back(row[col_map[col]]);
+                } else {
+                    full_row.push_back(Value());
+                }
+            }
+            result->all_rows.push_back(std::move(full_row));
+        }
+    }
+
+    // Build return schema: metadata columns + unified data columns
     names.push_back("parent_folder");
     return_types.push_back(LogicalType::VARCHAR);
     names.push_back("child_folder");
@@ -711,64 +749,9 @@ static unique_ptr<GlobalTableFunctionState> NextcloudFolderInit(ClientContext &c
     auto &bind = input.bind_data->Cast<NextcloudFolderBindData>();
     auto state = make_uniq<NextcloudFolderGlobalState>();
 
-    // Copy first file rows
-    for (auto &row : bind.first_file_rows) {
+    // All rows are already materialized in bind phase (UNION ALL BY NAME)
+    for (const auto &row : bind.all_rows) {
         state->rows.push_back(row);
-    }
-
-    // Download and parse remaining files (skip files up to and including the schema file)
-    for (size_t file_idx = bind.schema_file_idx + 1; file_idx < bind.files.size(); file_idx++) {
-        auto &file_info = bind.files[file_idx];
-
-        CurlHeaders headers;
-        BuildAuthHeaders(headers, bind.username, bind.password);
-
-        long http_code = 0;
-        std::string request_url = NormalizeRequestUrl(file_info.download_url);
-        std::string body = curl_get(request_url, headers, &http_code);
-
-        // Skip files that fail to download
-        if (body.find("ERROR:") == 0 || http_code >= 400 || body.empty()) {
-            continue;
-        }
-
-        std::vector<std::string> col_names;
-        std::vector<LogicalType> col_types;
-        std::vector<std::vector<Value>> rows;
-
-        if (!ReadFileViaDuckDB(context, body, bind.file_type, bind.all_varchar,
-                               bind.ignore_errors, bind.reader_options,
-                               bind.sheet, bind.range,
-                               col_names, col_types, rows)) {
-            // Fallback for text files
-            if (!IsBinaryFileType(bind.file_type)) {
-                ParseCSVContent(body, col_names, col_types, rows);
-            } else {
-                continue;  // Skip binary files that fail to parse
-            }
-        }
-
-        // Skip files with different column count (schema mismatch)
-        if (col_names.size() != bind.first_file_col_count) {
-            continue;
-        }
-
-        // Skip files with no data rows (header-only or empty)
-        if (rows.empty()) {
-            continue;
-        }
-
-        // Prepend metadata columns to each row
-        for (auto &row : rows) {
-            std::vector<Value> full_row;
-            full_row.push_back(Value(file_info.parent_folder));
-            full_row.push_back(Value(file_info.child_folder));
-            full_row.push_back(Value(file_info.file_name));
-            for (auto &val : row) {
-                full_row.push_back(std::move(val));
-            }
-            state->rows.push_back(std::move(full_row));
-        }
     }
 
     return state;
