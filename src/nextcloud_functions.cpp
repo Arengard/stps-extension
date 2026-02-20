@@ -271,6 +271,13 @@ struct NextcloudFolderBindData : public TableFunctionData {
 
     // All materialized rows (metadata + data columns)
     std::vector<std::vector<Value>> all_rows;
+
+    // Track skipped subfolders for error reporting
+    struct SkippedFolder {
+        std::string folder_name;
+        std::string error;
+    };
+    std::vector<SkippedFolder> skipped_folders;
 };
 
 struct NextcloudFolderGlobalState : public GlobalTableFunctionState {
@@ -562,8 +569,12 @@ static unique_ptr<FunctionData> NextcloudFolderBind(ClientContext &context, Tabl
             std::string child_request_url = NormalizeRequestUrl(child_url);
             std::string child_response = curl_propfind(child_request_url, PROPFIND_BODY, child_headers, &child_http_code);
 
-            // Skip if child_folder doesn't exist (404) or other error
+            // Track if child_folder doesn't exist (404) or other error
             if (child_response.find("ERROR:") == 0 || child_http_code >= 400) {
+                result->skipped_folders.push_back({company_name,
+                    child_http_code >= 400
+                        ? "PROPFIND failed: HTTP " + std::to_string(child_http_code)
+                        : "PROPFIND failed: " + child_response.substr(0, 200)});
                 continue;
             }
 
@@ -620,9 +631,15 @@ static unique_ptr<FunctionData> NextcloudFolderBind(ClientContext &context, Tabl
     }
 
     if (result->files.empty()) {
-        // No files found - return a minimal schema with metadata columns only
-        names = {"parent_folder", "child_folder", "file_name"};
-        return_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR};
+        // No files found - return a minimal schema with metadata columns + _read_status
+        names = {"parent_folder", "child_folder", "file_name", "_read_status"};
+        return_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR};
+        // Include error rows for any skipped subfolders
+        for (auto &sf : result->skipped_folders) {
+            result->all_rows.push_back({
+                Value(sf.folder_name), Value(""), Value(""), Value(sf.error)
+            });
+        }
         return result;
     }
 
@@ -632,6 +649,7 @@ static unique_ptr<FunctionData> NextcloudFolderBind(ClientContext &context, Tabl
         std::vector<LogicalType> col_types;
         std::vector<std::vector<Value>> rows;
         size_t file_idx;
+        std::string error;  // empty = success
     };
     std::vector<ParsedFileData> parsed_files;
 
@@ -644,6 +662,11 @@ static unique_ptr<FunctionData> NextcloudFolderBind(ClientContext &context, Tabl
         std::string body = curl_get(request_url, headers, &http_code);
 
         if (body.find("ERROR:") == 0 || http_code >= 400 || body.empty()) {
+            ParsedFileData pf;
+            pf.file_idx = file_idx;
+            pf.error = body.empty() ? "Empty response from server"
+                     : (http_code >= 400 ? "HTTP " + std::to_string(http_code) : body.substr(0, 200));
+            parsed_files.push_back(std::move(pf));
             continue;
         }
 
@@ -658,12 +681,21 @@ static unique_ptr<FunctionData> NextcloudFolderBind(ClientContext &context, Tabl
                                col_names, col_types, rows, &read_error)) {
             if (!IsBinaryFileType(result->file_type)) {
                 ParseCSVContent(body, col_names, col_types, rows);
-            } else {
+            }
+            if (col_names.empty() || rows.empty()) {
+                ParsedFileData pf;
+                pf.file_idx = file_idx;
+                pf.error = read_error.empty() ? "Failed to parse file" : read_error;
+                parsed_files.push_back(std::move(pf));
                 continue;
             }
         }
 
         if (col_names.empty() || rows.empty()) {
+            ParsedFileData pf;
+            pf.file_idx = file_idx;
+            pf.error = "File has no data rows";
+            parsed_files.push_back(std::move(pf));
             continue;
         }
 
@@ -680,16 +712,36 @@ static unique_ptr<FunctionData> NextcloudFolderBind(ClientContext &context, Tabl
         parsed_files.push_back(std::move(pf));
     }
 
-    // If no files with data were found, return minimal schema
-    if (parsed_files.empty()) {
-        names = {"parent_folder", "child_folder", "file_name"};
-        return_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR};
+    // Check if ANY files were parsed successfully
+    bool has_successful_files = false;
+    for (auto &pf : parsed_files) {
+        if (pf.error.empty()) { has_successful_files = true; break; }
+    }
+
+    if (!has_successful_files) {
+        // No files with data — return metadata + _read_status with error rows
+        names = {"parent_folder", "child_folder", "file_name", "_read_status"};
+        return_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR};
+        for (auto &sf : result->skipped_folders) {
+            result->all_rows.push_back({
+                Value(sf.folder_name), Value(""), Value(""), Value(sf.error)
+            });
+        }
+        for (auto &pf : parsed_files) {
+            result->all_rows.push_back({
+                Value(result->files[pf.file_idx].parent_folder),
+                Value(result->files[pf.file_idx].child_folder),
+                Value(result->files[pf.file_idx].file_name),
+                Value(pf.error)
+            });
+        }
         return result;
     }
 
-    // Build unified schema: superset of all column names (UNION ALL BY NAME)
+    // Build unified schema: superset of all column names from successful files (UNION ALL BY NAME)
     std::unordered_map<std::string, size_t> col_name_to_idx;
     for (auto &pf : parsed_files) {
+        if (!pf.error.empty()) continue;
         for (size_t i = 0; i < pf.col_names.size(); i++) {
             if (col_name_to_idx.find(pf.col_names[i]) == col_name_to_idx.end()) {
                 col_name_to_idx[pf.col_names[i]] = result->column_names.size();
@@ -699,8 +751,37 @@ static unique_ptr<FunctionData> NextcloudFolderBind(ClientContext &context, Tabl
         }
     }
 
+    // Add error rows for skipped subfolders
+    for (auto &sf : result->skipped_folders) {
+        std::vector<Value> row;
+        row.reserve(4 + result->column_names.size());
+        row.push_back(Value(sf.folder_name));
+        row.push_back(Value(""));
+        row.push_back(Value(""));
+        row.push_back(Value(sf.error));
+        for (size_t i = 0; i < result->column_names.size(); i++) {
+            row.push_back(Value());
+        }
+        result->all_rows.push_back(std::move(row));
+    }
+
     // Map each file's rows to the unified schema, NULLs for missing columns
     for (auto &pf : parsed_files) {
+        if (!pf.error.empty()) {
+            // Error row: metadata + error status + NULL data columns
+            std::vector<Value> row;
+            row.reserve(4 + result->column_names.size());
+            row.push_back(Value(result->files[pf.file_idx].parent_folder));
+            row.push_back(Value(result->files[pf.file_idx].child_folder));
+            row.push_back(Value(result->files[pf.file_idx].file_name));
+            row.push_back(Value(pf.error));
+            for (size_t i = 0; i < result->column_names.size(); i++) {
+                row.push_back(Value());
+            }
+            result->all_rows.push_back(std::move(row));
+            continue;
+        }
+
         // Build column mapping: unified_col_idx -> file_col_idx (-1 if missing)
         std::vector<int> col_map(result->column_names.size(), -1);
         for (size_t i = 0; i < pf.col_names.size(); i++) {
@@ -712,11 +793,12 @@ static unique_ptr<FunctionData> NextcloudFolderBind(ClientContext &context, Tabl
 
         for (auto &row : pf.rows) {
             std::vector<Value> full_row;
-            full_row.reserve(3 + result->column_names.size());
+            full_row.reserve(4 + result->column_names.size());
             // Metadata columns
             full_row.push_back(Value(result->files[pf.file_idx].parent_folder));
             full_row.push_back(Value(result->files[pf.file_idx].child_folder));
             full_row.push_back(Value(result->files[pf.file_idx].file_name));
+            full_row.push_back(Value());  // _read_status = NULL (success)
             // Data columns mapped to unified schema
             for (size_t col = 0; col < result->column_names.size(); col++) {
                 if (col_map[col] >= 0 && static_cast<size_t>(col_map[col]) < row.size()) {
@@ -729,12 +811,14 @@ static unique_ptr<FunctionData> NextcloudFolderBind(ClientContext &context, Tabl
         }
     }
 
-    // Build return schema: metadata columns + unified data columns
+    // Build return schema: metadata columns + _read_status + unified data columns
     names.push_back("parent_folder");
     return_types.push_back(LogicalType::VARCHAR);
     names.push_back("child_folder");
     return_types.push_back(LogicalType::VARCHAR);
     names.push_back("file_name");
+    return_types.push_back(LogicalType::VARCHAR);
+    names.push_back("_read_status");
     return_types.push_back(LogicalType::VARCHAR);
 
     for (size_t i = 0; i < result->column_names.size(); i++) {
