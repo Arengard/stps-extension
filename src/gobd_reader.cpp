@@ -517,7 +517,7 @@ vector<GobdImportResult> ExecuteGobdImportPipeline(ClientContext &context,
                 string create_sql = "CREATE TABLE " + escaped_table +
                                     " AS SELECT * FROM read_csv(" + sql_path +
                                     ", delim=" + delim_escaped +
-                                    ", header=false, all_varchar=true, columns=" + columns_spec +
+                                    ", header=false, all_varchar=true, quote='', columns=" + columns_spec +
                                     ", ignore_errors=true, null_padding=true)";
 
                 auto create_result = conn.Query(create_sql);
