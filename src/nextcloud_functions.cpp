@@ -387,6 +387,9 @@ static bool ReadFileViaDuckDB(ClientContext &context, const std::string &body, c
             if (!range.empty()) {
                 read_expr += ", range='" + EscapeSqlLiteral(range) + "'";
             }
+            if (all_varchar) {
+                read_expr += ", columns={'*': 'VARCHAR'}";
+            }
             if (!reader_options.empty()) {
                 read_expr += ", " + reader_options;
             }

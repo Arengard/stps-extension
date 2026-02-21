@@ -1536,6 +1536,7 @@ Fetch a file directly over WebDAV and return it as a table. File type is auto-de
 | `sheet` | VARCHAR | | Excel sheet name (XLSX/XLS only) |
 | `range` | VARCHAR | | Excel cell range, e.g. `'A1:D100'` (XLSX/XLS only) |
 | `reader_options` | VARCHAR | | Additional DuckDB reader options passed through verbatim |
+| `encoding` | VARCHAR | | Source file encoding. Converts to UTF-8 before parsing. Supported: `cp1250`, `cp1252`, `latin1`, `iso-8859-1`, `utf-8`. Auto-detects if omitted. |
 
 ```sql
 -- CSV with auto-detected types
@@ -1567,6 +1568,14 @@ SELECT * FROM stps_nextcloud(
   username := 'user',
   password := 'pass',
   reader_options := 'delim='';'', header=true'
+);
+
+-- CSV with explicit encoding (e.g. Central European)
+SELECT * FROM stps_nextcloud(
+  'https://your-server/path/file.csv',
+  username := 'user',
+  password := 'pass',
+  encoding := 'cp1250'
 );
 
 -- Custom headers (bearer token, etc.)
@@ -1602,6 +1611,7 @@ The function uses WebDAV PROPFIND to discover subfolders and files. Column names
 | `sheet` | VARCHAR | | Excel sheet name (XLSX/XLS only) |
 | `range` | VARCHAR | | Excel cell range, e.g. `'A1:D100'` (XLSX/XLS only) |
 | `reader_options` | VARCHAR | | Additional DuckDB reader options passed through verbatim |
+| `encoding` | VARCHAR | | Source file encoding. Converts to UTF-8 before parsing. Supported: `cp1250`, `cp1252`, `latin1`, `iso-8859-1`, `utf-8`. Auto-detects if omitted. |
 
 ```sql
 -- Read all CSV files from each company's "bank" subfolder
