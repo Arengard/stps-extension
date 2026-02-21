@@ -492,15 +492,39 @@ vector<GobdImportResult> ExecuteGobdImportPipeline(ClientContext &context,
             }
         }
 
-        // Step 1+2: Bulk load CSV via temp file + DuckDB's read_csv (vectorized, ~100x faster)
+        // Step 1+2: Pre-process CSV (strip quotes, handle encoding), then bulk load via read_csv
         std::string csv_content = EnsureUtf8(csv_it->second);
         std::string temp_path = GenerateGobdTempFilename();
         bool bulk_loaded = false;
 
+        // Pre-process: parse each line with our quote-aware parser to strip quotes,
+        // then re-write with the same delimiter. read_csv loads with quote='' since
+        // the data is already clean.
         {
+            std::string clean_csv;
+            clean_csv.reserve(csv_content.size());
+            std::istringstream stream(csv_content);
+            string line;
+
+            while (std::getline(stream, line)) {
+                if (line.empty()) continue;
+                if (!line.empty() && line.back() == '\r') line.pop_back();
+                if (line.empty()) continue;
+
+                auto fields = ParseCsvLine(line, delimiter);
+
+                for (size_t i = 0; i < normalized_cols.size(); i++) {
+                    if (i > 0) clean_csv += delimiter;
+                    if (i < fields.size()) {
+                        clean_csv += fields[i];
+                    }
+                }
+                clean_csv += '\n';
+            }
+
             std::ofstream out(temp_path, std::ios::binary);
             if (out) {
-                out.write(csv_content.data(), csv_content.size());
+                out.write(clean_csv.data(), clean_csv.size());
                 out.close();
 
                 // Build columns={col1: 'VARCHAR', col2: 'VARCHAR', ...} for read_csv
@@ -588,6 +612,17 @@ vector<GobdImportResult> ExecuteGobdImportPipeline(ClientContext &context,
             if (batch_count > 0) {
                 conn.Query(insert_prefix + batch_sql);
             }
+        }
+
+        // Convert empty strings to NULL
+        {
+            string nullify_sql = "UPDATE " + escaped_table + " SET ";
+            for (size_t i = 0; i < normalized_cols.size(); i++) {
+                if (i > 0) nullify_sql += ", ";
+                string col_id = EscapeIdentifier(normalized_cols[i]);
+                nullify_sql += col_id + " = CASE WHEN " + col_id + " = '' THEN NULL ELSE " + col_id + " END";
+            }
+            conn.Query(nullify_sql);
         }
 
         // Get row count

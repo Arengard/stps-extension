@@ -631,8 +631,8 @@ static unique_ptr<FunctionData> NextcloudFolderBind(ClientContext &context, Tabl
         }
     }
 
-    // Fallback: if no files found in subfolders, check for files directly in the parent folder
-    if (result->files.empty() && !parent_entries.empty()) {
+    // Also check for files directly in the parent folder (not just in subfolders)
+    if (!parent_entries.empty()) {
         std::string ext_suffix = "." + result->file_type;
         std::string parent_folder_name = GetLastPathSegment(
             PercentDecodePath(result->parent_url));
