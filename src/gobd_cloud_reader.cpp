@@ -68,6 +68,49 @@ static std::string DownloadFile(const std::string &url, const std::string &usern
     return body;
 }
 
+// Download a file from a folder with case-insensitive filename fallback.
+// First tries direct GET. If that fails (404 / empty), does a PROPFIND of the
+// parent folder and looks for a filename match ignoring case.
+static std::string DownloadFileCaseInsensitive(const std::string &folder_url,
+                                                const std::string &filename,
+                                                const std::string &username,
+                                                const std::string &password) {
+    std::string base = EnsureTrailingSlash(folder_url);
+    std::string server_base = GetBaseUrl(folder_url);
+
+    // Try exact name first
+    long http_code = 0;
+    std::string content = DownloadFile(base + filename, username, password, &http_code);
+    if (!content.empty()) return content;
+
+    // Fallback: PROPFIND and match case-insensitively
+    std::string target_lower = filename;
+    std::transform(target_lower.begin(), target_lower.end(), target_lower.begin(), ::tolower);
+
+    CurlHeaders headers;
+    BuildAuthHeaders(headers, username, password);
+    headers.append("Depth: 1");
+    headers.append("Content-Type: application/xml");
+
+    http_code = 0;
+    std::string request_url = NormalizeRequestUrl(base);
+    std::string response = curl_propfind(request_url, PROPFIND_BODY, headers, &http_code);
+    if (response.find("ERROR:") == 0 || http_code >= 400) return "";
+
+    auto entries = ParsePropfindResponse(response);
+    for (auto &entry : entries) {
+        if (entry.is_collection) continue;
+        std::string decoded = PercentDecodePath(entry.href);
+        std::string entry_name = GetLastPathSegment(decoded);
+        std::string entry_lower = entry_name;
+        std::transform(entry_lower.begin(), entry_lower.end(), entry_lower.begin(), ::tolower);
+        if (entry_lower == target_lower) {
+            return DownloadFile(server_base + entry.href, username, password);
+        }
+    }
+    return "";
+}
+
 // PROPFIND a folder, return entries
 static std::vector<PropfindEntry> PropfindFolder(const std::string &url, const std::string &username,
                                                   const std::string &password) {
@@ -246,12 +289,11 @@ static unique_ptr<FunctionData> GobdCloudReaderBind(ClientContext &context, Tabl
             }());
     }
 
-    // Download the CSV file
-    std::string csv_url = EnsureTrailingSlash(index_base_url) + found_table->url;
-    result->csv_content = DownloadFile(csv_url, username, password);
+    // Download the CSV file (case-insensitive fallback for mismatched filenames)
+    result->csv_content = DownloadFileCaseInsensitive(index_base_url, found_table->url, username, password);
 
     if (result->csv_content.empty()) {
-        throw IOException("Could not download CSV file: " + csv_url);
+        throw IOException("Could not download CSV file: " + EnsureTrailingSlash(index_base_url) + found_table->url);
     }
 
     // Convert encoding to UTF-8 if needed (GoBD exports are often Windows-1252)
@@ -431,9 +473,8 @@ static unique_ptr<FunctionData> GobdCloudFolderBind(ClientContext &context, Tabl
         // Check column count matches (schema consistency)
         if (found_table->columns.size() != result->data_col_count) continue;
 
-        // Download CSV
-        std::string csv_url = EnsureTrailingSlash(index_base_url) + found_table->url;
-        std::string csv_content = DownloadFile(csv_url, username, password);
+        // Download CSV (case-insensitive fallback for mismatched filenames)
+        std::string csv_content = DownloadFileCaseInsensitive(index_base_url, found_table->url, username, password);
         if (csv_content.empty()) continue;
 
         // Convert encoding to UTF-8 if needed (GoBD exports are often Windows-1252)
@@ -747,8 +788,7 @@ static unique_ptr<FunctionData> GobdCloudAllBind(ClientContext &context, TableFu
     import_data.tables = tables;
 
     for (auto &table : tables) {
-        std::string csv_url = EnsureTrailingSlash(index_base_url) + table.url;
-        std::string csv_content = DownloadFile(csv_url, username, password);
+        std::string csv_content = DownloadFileCaseInsensitive(index_base_url, table.url, username, password);
         if (!csv_content.empty()) {
             import_data.csv_contents[table.url] = csv_content;
         }
