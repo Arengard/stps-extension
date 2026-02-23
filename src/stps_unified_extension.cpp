@@ -29,6 +29,7 @@
 #include "ai_functions.hpp"
 #include "nextcloud_functions.hpp"
 #include "gobd_cloud_reader.hpp"
+#include "scan_nextcloud.hpp"
 #endif
 #include "account_validation.hpp"
 #include "smart_cast_scalar.hpp"
@@ -99,6 +100,7 @@ public:
 #ifdef HAVE_CURL
         stps::RegisterNextcloudFunctions(loader);
         stps::RegisterGobdCloudReaderFunctions(loader);
+        stps::RegisterScanNextcloudFunction(loader);
 #endif
 
         // Register search columns function

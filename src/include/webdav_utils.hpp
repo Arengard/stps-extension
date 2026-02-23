@@ -11,6 +11,8 @@ namespace stps {
 struct PropfindEntry {
     std::string href;
     bool is_collection;
+    int64_t content_length = -1;   // -1 means unknown
+    std::string last_modified;     // raw HTTP-date string, empty if unknown
 };
 
 // Base64 encode for Basic auth
@@ -34,6 +36,9 @@ std::string PercentDecodePath(const std::string &encoded);
 // Parse WebDAV PROPFIND XML response into entries
 std::vector<PropfindEntry> ParsePropfindResponse(const std::string &xml);
 
+// Parse WebDAV PROPFIND XML response with extended properties (size, lastmodified)
+std::vector<PropfindEntry> ParsePropfindResponseExtended(const std::string &xml);
+
 // Extract the last path segment from a URL path (filename or folder name)
 std::string GetLastPathSegment(const std::string &path);
 
@@ -45,6 +50,9 @@ void BuildAuthHeaders(CurlHeaders &headers, const std::string &username, const s
 
 // PROPFIND request body for depth-1 directory listing
 extern const char* PROPFIND_BODY;
+
+// PROPFIND request body requesting extended properties (size, lastmodified)
+extern const char* PROPFIND_BODY_EXTENDED;
 
 } // namespace stps
 } // namespace duckdb

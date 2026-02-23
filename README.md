@@ -1519,6 +1519,78 @@ See [LICENSE](LICENSE) file.
 
 ## Nextcloud/WebDAV table functions
 
+### `scan_nextcloud(url VARCHAR, ...) → TABLE`
+
+Scan a Nextcloud/WebDAV directory and return file/folder metadata — like `stps_scan` but for remote WebDAV servers. Uses PROPFIND to list entries with size and last-modified timestamps, with optional recursive traversal and filtering.
+
+**Returns:** `name`, `path`, `type`, `size`, `modified_time`, `extension`, `parent_directory`
+
+**Named Parameters:**
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `username` | VARCHAR | | WebDAV/Nextcloud username |
+| `password` | VARCHAR | | WebDAV/Nextcloud password |
+| `recursive` | BOOLEAN | false | Recurse into subdirectories |
+| `file_type` | VARCHAR | | Filter by file extension (e.g. `'csv'`) |
+| `pattern` | VARCHAR | | Glob pattern for filenames (e.g. `'*report*'`) |
+| `max_depth` | INTEGER | | Maximum recursion depth |
+| `include_hidden` | BOOLEAN | false | Include hidden files (starting with `.`) |
+| `min_size` | BIGINT | | Minimum file size in bytes |
+| `max_size` | BIGINT | | Maximum file size in bytes |
+| `min_date` | BIGINT | | Minimum modified time (Unix timestamp) |
+| `max_date` | BIGINT | | Maximum modified time (Unix timestamp) |
+
+```sql
+-- List all files and folders in a Nextcloud directory
+SELECT * FROM scan_nextcloud(
+    'https://cloud.example.com/remote.php/dav/files/user/Documents/',
+    username := 'myuser',
+    password := 'mypass'
+);
+
+-- Find all CSV files recursively
+SELECT name, path, size
+FROM scan_nextcloud(
+    'https://cloud.example.com/remote.php/dav/files/user/',
+    username := 'myuser',
+    password := 'mypass',
+    file_type := 'csv'
+);
+
+-- Find large files (> 10MB), non-recursive
+SELECT name, path, size
+FROM scan_nextcloud(
+    'https://cloud.example.com/remote.php/dav/files/user/Data/',
+    username := 'myuser',
+    password := 'mypass',
+    recursive := false,
+    min_size := 10000000
+);
+
+-- Combine with stps_nextcloud to read discovered files
+SELECT nc.*
+FROM scan_nextcloud(
+    'https://cloud.example.com/remote.php/dav/files/user/Reports/',
+    username := 'myuser',
+    password := 'mypass',
+    file_type := 'csv'
+) AS files,
+LATERAL (
+    SELECT * FROM stps_nextcloud(
+        'https://cloud.example.com' || files.path,
+        username := 'myuser',
+        password := 'mypass'
+    )
+) AS nc;
+```
+
+**Notes:**
+- Requires `libcurl` at build time (enabled by default).
+- `size` is NULL for directories. `modified_time` is a Unix timestamp (seconds since epoch).
+- Uses WebDAV PROPFIND with `Depth: 1` per directory for recursive traversal.
+
+---
+
 ### `stps_nextcloud(url VARCHAR, ...) → TABLE`
 
 Fetch a file directly over WebDAV and return it as a table. File type is auto-detected from the URL extension. All file types are parsed via DuckDB's built-in readers (`read_csv_auto`, `read_parquet`, `read_sheet`).

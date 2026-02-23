@@ -230,5 +230,95 @@ const char* PROPFIND_BODY =
     "<d:prop><d:resourcetype/></d:prop>"
     "</d:propfind>";
 
+const char* PROPFIND_BODY_EXTENDED =
+    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+    "<d:propfind xmlns:d=\"DAV:\">"
+    "<d:prop>"
+    "<d:resourcetype/>"
+    "<d:getcontentlength/>"
+    "<d:getlastmodified/>"
+    "</d:prop>"
+    "</d:propfind>";
+
+// Helper to extract text between XML tags (case-insensitive prefix d:/D:)
+static std::string ExtractXmlTagValue(const std::string &block, const char *tag_name) {
+    // Try both d: and D: prefixes
+    for (const char *prefix : {"d:", "D:"}) {
+        std::string open_tag = std::string("<") + prefix + tag_name + ">";
+        size_t start = block.find(open_tag);
+        if (start != std::string::npos) {
+            start += open_tag.size();
+            size_t end = block.find("</", start);
+            if (end != std::string::npos) {
+                return block.substr(start, end - start);
+            }
+        }
+    }
+    return "";
+}
+
+std::vector<PropfindEntry> ParsePropfindResponseExtended(const std::string &xml) {
+    std::vector<PropfindEntry> entries;
+
+    size_t pos = 0;
+    while (pos < xml.size()) {
+        // Find response opening tag
+        size_t resp_start = std::string::npos;
+        for (const char *tag : {"<d:response>", "<D:response>", "<d:response ", "<D:response "}) {
+            size_t found = xml.find(tag, pos);
+            if (found != std::string::npos && (resp_start == std::string::npos || found < resp_start)) {
+                resp_start = found;
+            }
+        }
+        if (resp_start == std::string::npos) break;
+
+        // Find response closing tag
+        size_t resp_end = std::string::npos;
+        for (const char *tag : {"</d:response>", "</D:response>"}) {
+            size_t found = xml.find(tag, resp_start);
+            if (found != std::string::npos && (resp_end == std::string::npos || found < resp_end)) {
+                resp_end = found;
+            }
+        }
+        if (resp_end == std::string::npos) break;
+
+        std::string block = xml.substr(resp_start, resp_end - resp_start);
+
+        PropfindEntry entry;
+        entry.is_collection = false;
+        entry.content_length = -1;
+
+        // Extract href
+        entry.href = ExtractXmlTagValue(block, "href");
+
+        // Check if it's a collection
+        if (block.find("<d:collection") != std::string::npos ||
+            block.find("<D:collection") != std::string::npos) {
+            entry.is_collection = true;
+        }
+
+        // Extract content length
+        std::string length_str = ExtractXmlTagValue(block, "getcontentlength");
+        if (!length_str.empty()) {
+            try {
+                entry.content_length = std::stoll(length_str);
+            } catch (...) {
+                entry.content_length = -1;
+            }
+        }
+
+        // Extract last modified
+        entry.last_modified = ExtractXmlTagValue(block, "getlastmodified");
+
+        if (!entry.href.empty()) {
+            entries.push_back(entry);
+        }
+
+        pos = resp_end + 1;
+    }
+
+    return entries;
+}
+
 } // namespace stps
 } // namespace duckdb

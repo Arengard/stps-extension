@@ -74,6 +74,7 @@ if(CURL_FOUND)
         src/nextcloud_functions.cpp
         src/webdav_utils.cpp
         src/gobd_cloud_reader.cpp
+        src/scan_nextcloud.cpp
     )
 endif()
 
