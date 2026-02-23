@@ -445,64 +445,77 @@ static bool ReadFileViaDuckDB(ClientContext &context, const std::string &body, c
             if ((ext == "xlsx" || ext == "xls") &&
                 err.find("duplicate column name") != std::string::npos) {
 
-                // Build read_sheet expression with header=false
-                std::string noheader_expr = "read_sheet('" + temp_path + "', header=false";
+                // Step 1: Read with header=false + all VARCHAR to get correct column names
+                // (text headers stay as strings instead of becoming NULL in numeric columns)
+                std::string names_expr = "read_sheet('" + temp_path + "', header=false, columns={'*': 'VARCHAR'}";
                 if (!sheet.empty()) {
-                    noheader_expr += ", sheet='" + EscapeSqlLiteral(sheet) + "'";
+                    names_expr += ", sheet='" + EscapeSqlLiteral(sheet) + "'";
                 }
                 if (!range.empty()) {
-                    noheader_expr += ", range='" + EscapeSqlLiteral(range) + "'";
+                    names_expr += ", range='" + EscapeSqlLiteral(range) + "'";
                 }
-                if (!reader_options.empty()) {
-                    noheader_expr += ", " + reader_options;
-                }
-                noheader_expr += ")";
+                names_expr += ")";
 
-                auto noheader_result = conn.Query("SELECT * FROM " + noheader_expr);
-                if (noheader_result->HasError()) {
-                    if (error_out) *error_out = noheader_result->GetError();
+                auto names_result = conn.Query("SELECT * FROM " + names_expr + " LIMIT 1");
+                if (names_result->HasError()) {
+                    if (error_out) *error_out = names_result->GetError();
                     std::remove(temp_path.c_str());
                     return false;
                 }
 
-                // Collect all rows (first row = header)
-                std::vector<std::vector<Value>> all_data;
+                // Extract column names from first row, deduplicate
+                auto names_chunk = names_result->Fetch();
+                if (!names_chunk || names_chunk->size() == 0) {
+                    if (error_out) *error_out = "No rows found (including header)";
+                    std::remove(temp_path.c_str());
+                    return false;
+                }
+                for (idx_t c = 0; c < names_chunk->ColumnCount(); c++) {
+                    auto val = names_chunk->GetValue(c, 0);
+                    col_names.push_back(val.IsNull() ? "column" : val.ToString());
+                }
+                DeduplicateColumnNames(col_names);
+
+                // Step 2: Read data with native types (skip header row via OFFSET 1)
+                std::string data_expr = "read_sheet('" + temp_path + "', header=false";
+                if (!sheet.empty()) {
+                    data_expr += ", sheet='" + EscapeSqlLiteral(sheet) + "'";
+                }
+                if (!range.empty()) {
+                    data_expr += ", range='" + EscapeSqlLiteral(range) + "'";
+                }
+                if (all_varchar) {
+                    data_expr += ", columns={'*': 'VARCHAR'}";
+                }
+                if (!reader_options.empty()) {
+                    data_expr += ", " + reader_options;
+                }
+                data_expr += ")";
+
+                std::string data_query = "SELECT * FROM " + data_expr + " OFFSET 1";
+                auto data_result = conn.Query(data_query);
+                if (data_result->HasError()) {
+                    if (error_out) *error_out = data_result->GetError();
+                    std::remove(temp_path.c_str());
+                    return false;
+                }
+
+                // Use actual column types from the data query
+                for (idx_t i = 0; i < data_result->ColumnCount(); i++) {
+                    col_types.push_back(data_result->types[i]);
+                }
+
+                // Collect data rows with native values (preserving DOUBLE precision)
                 while (true) {
-                    auto chunk = noheader_result->Fetch();
+                    auto chunk = data_result->Fetch();
                     if (!chunk || chunk->size() == 0) break;
                     for (idx_t r = 0; r < chunk->size(); r++) {
                         std::vector<Value> rv;
                         for (idx_t c = 0; c < chunk->ColumnCount(); c++) {
                             rv.push_back(chunk->GetValue(c, r));
                         }
-                        all_data.push_back(std::move(rv));
+                        rows.push_back(std::move(rv));
                     }
-                }
-
-                if (all_data.empty()) {
-                    if (error_out) *error_out = "No rows found (including header)";
-                    std::remove(temp_path.c_str());
-                    return false;
-                }
-
-                // Extract column names from first row, deduplicate
-                for (auto &val : all_data[0]) {
-                    col_names.push_back(val.IsNull() ? "column" : val.ToString());
-                }
-                DeduplicateColumnNames(col_names);
-
-                // All columns as VARCHAR for safety
-                for (size_t i = 0; i < col_names.size(); i++) {
-                    col_types.push_back(LogicalType::VARCHAR);
-                }
-
-                // Data rows (skip header row)
-                for (size_t i = 1; i < all_data.size(); i++) {
-                    std::vector<Value> row;
-                    for (auto &val : all_data[i]) {
-                        row.push_back(val.IsNull() ? Value() : Value(val.ToString()));
-                    }
-                    rows.push_back(std::move(row));
                 }
 
                 std::remove(temp_path.c_str());
