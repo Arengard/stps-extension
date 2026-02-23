@@ -332,6 +332,25 @@ static bool ValidateReaderOptions(const std::string &opts) {
     return true;
 }
 
+// Deduplicate column names by appending _1, _2, etc. for repeats
+static void DeduplicateColumnNames(std::vector<std::string> &col_names) {
+    std::unordered_map<std::string, int> name_counts;
+    // First pass: count occurrences
+    for (const auto &name : col_names) {
+        name_counts[name]++;
+    }
+    // Second pass: rename duplicates (first occurrence keeps original name)
+    std::unordered_map<std::string, int> name_seen;
+    for (auto &name : col_names) {
+        if (name_counts[name] > 1) {
+            int idx = name_seen[name]++;
+            if (idx > 0) {
+                name = name + "_" + std::to_string(idx);
+            }
+        }
+    }
+}
+
 // Unified file reader: writes content to temp file, reads via DuckDB's built-in readers with options.
 // Handles CSV, TSV, Parquet, Arrow, Feather, XLSX, XLS.
 // Returns true on success, false on failure.
@@ -420,7 +439,77 @@ static bool ReadFileViaDuckDB(ClientContext &context, const std::string &body, c
         // Get schema
         auto schema_result = conn.Query(base_query + " LIMIT 0");
         if (schema_result->HasError()) {
-            if (error_out) *error_out = schema_result->GetError();
+            std::string err = schema_result->GetError();
+
+            // Handle duplicate column names in Excel files by retrying with header=false
+            if ((ext == "xlsx" || ext == "xls") &&
+                err.find("duplicate column name") != std::string::npos) {
+
+                // Build read_sheet expression with header=false
+                std::string noheader_expr = "read_sheet('" + temp_path + "', header=false";
+                if (!sheet.empty()) {
+                    noheader_expr += ", sheet='" + EscapeSqlLiteral(sheet) + "'";
+                }
+                if (!range.empty()) {
+                    noheader_expr += ", range='" + EscapeSqlLiteral(range) + "'";
+                }
+                if (!reader_options.empty()) {
+                    noheader_expr += ", " + reader_options;
+                }
+                noheader_expr += ")";
+
+                auto noheader_result = conn.Query("SELECT * FROM " + noheader_expr);
+                if (noheader_result->HasError()) {
+                    if (error_out) *error_out = noheader_result->GetError();
+                    std::remove(temp_path.c_str());
+                    return false;
+                }
+
+                // Collect all rows (first row = header)
+                std::vector<std::vector<Value>> all_data;
+                while (true) {
+                    auto chunk = noheader_result->Fetch();
+                    if (!chunk || chunk->size() == 0) break;
+                    for (idx_t r = 0; r < chunk->size(); r++) {
+                        std::vector<Value> rv;
+                        for (idx_t c = 0; c < chunk->ColumnCount(); c++) {
+                            rv.push_back(chunk->GetValue(c, r));
+                        }
+                        all_data.push_back(std::move(rv));
+                    }
+                }
+
+                if (all_data.empty()) {
+                    if (error_out) *error_out = "No rows found (including header)";
+                    std::remove(temp_path.c_str());
+                    return false;
+                }
+
+                // Extract column names from first row, deduplicate
+                for (auto &val : all_data[0]) {
+                    col_names.push_back(val.IsNull() ? "column" : val.ToString());
+                }
+                DeduplicateColumnNames(col_names);
+
+                // All columns as VARCHAR for safety
+                for (size_t i = 0; i < col_names.size(); i++) {
+                    col_types.push_back(LogicalType::VARCHAR);
+                }
+
+                // Data rows (skip header row)
+                for (size_t i = 1; i < all_data.size(); i++) {
+                    std::vector<Value> row;
+                    for (auto &val : all_data[i]) {
+                        row.push_back(val.IsNull() ? Value() : Value(val.ToString()));
+                    }
+                    rows.push_back(std::move(row));
+                }
+
+                std::remove(temp_path.c_str());
+                return true;
+            }
+
+            if (error_out) *error_out = err;
             std::remove(temp_path.c_str());
             return false;
         }
@@ -730,6 +819,8 @@ static unique_ptr<FunctionData> NextcloudFolderBind(ClientContext &context, Tabl
         for (auto &name : col_names) {
             name = NormalizeColumnName(name);
         }
+        // Deduplicate after normalization (e.g. "Zeitraum A" and "ZeitraumA" both -> "zeitraum_a")
+        DeduplicateColumnNames(col_names);
 
         ParsedFileData pf;
         pf.col_names = std::move(col_names);
@@ -766,14 +857,23 @@ static unique_ptr<FunctionData> NextcloudFolderBind(ClientContext &context, Tabl
     }
 
     // Build unified schema: superset of all column names from successful files (UNION ALL BY NAME)
+    // When the same column appears with different types across files, promote to the wider type
+    // (e.g., BIGINT + DOUBLE → DOUBLE) to avoid truncating decimal values.
     std::unordered_map<std::string, size_t> col_name_to_idx;
     for (auto &pf : parsed_files) {
         if (!pf.error.empty()) continue;
         for (size_t i = 0; i < pf.col_names.size(); i++) {
-            if (col_name_to_idx.find(pf.col_names[i]) == col_name_to_idx.end()) {
+            auto it = col_name_to_idx.find(pf.col_names[i]);
+            if (it == col_name_to_idx.end()) {
                 col_name_to_idx[pf.col_names[i]] = result->column_names.size();
                 result->column_names.push_back(pf.col_names[i]);
                 result->column_types.push_back(pf.col_types[i]);
+            } else {
+                // Promote to wider type if types differ across files
+                auto &existing_type = result->column_types[it->second];
+                if (existing_type != pf.col_types[i]) {
+                    existing_type = LogicalType::ForceMaxLogicalType(existing_type, pf.col_types[i]);
+                }
             }
         }
     }
