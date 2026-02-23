@@ -476,12 +476,17 @@ static bool ReadFileViaDuckDB(ClientContext &context, const std::string &body, c
                 }
                 DeduplicateColumnNames(col_names);
 
-                // Step 2: Read data with native types (skip header row via OFFSET 1)
+                // Step 2: Read data with range='A2' to skip the header row entirely.
+                // This gives rusty_sheet native type detection (DOUBLE for numbers,
+                // DATE for dates) instead of all-VARCHAR (which happens when the
+                // text header row is included in type detection with header=false).
                 std::string data_expr = "read_sheet('" + temp_path + "', header=false";
                 if (!sheet.empty()) {
                     data_expr += ", sheet='" + EscapeSqlLiteral(sheet) + "'";
                 }
-                if (!range.empty()) {
+                if (range.empty()) {
+                    data_expr += ", range='A2'";
+                } else {
                     data_expr += ", range='" + EscapeSqlLiteral(range) + "'";
                 }
                 if (all_varchar) {
@@ -492,7 +497,11 @@ static bool ReadFileViaDuckDB(ClientContext &context, const std::string &body, c
                 }
                 data_expr += ")";
 
-                std::string data_query = "SELECT * FROM " + data_expr + " OFFSET 1";
+                // With range='A2', header row is excluded. With user range, OFFSET 1.
+                std::string data_query = "SELECT * FROM " + data_expr;
+                if (!range.empty()) {
+                    data_query += " OFFSET 1";
+                }
                 auto data_result = conn.Query(data_query);
                 if (data_result->HasError()) {
                     if (error_out) *error_out = data_result->GetError();
@@ -500,12 +509,18 @@ static bool ReadFileViaDuckDB(ClientContext &context, const std::string &body, c
                     return false;
                 }
 
-                // Use actual column types from the data query
+                // Use types from the data query result
                 for (idx_t i = 0; i < data_result->ColumnCount(); i++) {
                     col_types.push_back(data_result->types[i]);
                 }
 
-                // Collect data rows with native values (preserving DOUBLE precision)
+                // Trim column names to match data column count (range='A2' may
+                // exclude trailing columns that only had header text, no data)
+                if (col_names.size() > data_result->ColumnCount()) {
+                    col_names.resize(data_result->ColumnCount());
+                }
+
+                // Collect data rows with native values
                 while (true) {
                     auto chunk = data_result->Fetch();
                     if (!chunk || chunk->size() == 0) break;
