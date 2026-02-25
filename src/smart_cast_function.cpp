@@ -4,6 +4,8 @@
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/main/connection.hpp"
 #include <map>
+#include <chrono>
+#include <random>
 
 namespace duckdb {
 namespace stps {
@@ -458,6 +460,268 @@ static void SmartCastScan(ClientContext &context, TableFunctionInput &data_p, Da
 }
 
 //=============================================================================
+// stps_smart_cast_table - Accepts SQL query, returns smart-casted result
+//=============================================================================
+
+struct SmartCastTableBindData : public TableFunctionData {
+    vector<string> column_names;
+    vector<LogicalType> column_types;
+    vector<vector<Value>> rows;
+};
+
+struct SmartCastTableGlobalState : public GlobalTableFunctionState {
+    idx_t current_row = 0;
+};
+
+static string MakeTempTableName() {
+    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    std::random_device rd;
+    return "__scast_" + std::to_string(ms) + "_" + std::to_string(rd() % 10000);
+}
+
+// Escape column name for SQL (double-quote)
+static string QuoteIdent(const string &name) {
+    string out;
+    for (char c : name) {
+        if (c == '"') out += '"';
+        out += c;
+    }
+    return "\"" + out + "\"";
+}
+
+static unique_ptr<FunctionData> SmartCastTableBind(ClientContext &context, TableFunctionBindInput &input,
+                                                    vector<LogicalType> &return_types, vector<string> &names) {
+    auto data = make_uniq<SmartCastTableBindData>();
+
+    if (input.inputs.empty()) {
+        throw BinderException("stps_smart_cast_table requires a SQL query or table name");
+    }
+    string query = input.inputs[0].GetValue<string>();
+
+    // Parse optional parameters
+    double min_success_rate = 0.9;
+    NumberLocale forced_locale = NumberLocale::AUTO;
+    DateFormat forced_date_format = DateFormat::AUTO;
+    for (auto &kv : input.named_parameters) {
+        if (kv.first == "min_success_rate") {
+            min_success_rate = kv.second.GetValue<double>();
+        } else if (kv.first == "locale") {
+            string loc = kv.second.GetValue<string>();
+            if (loc == "de" || loc == "german") forced_locale = NumberLocale::GERMAN;
+            else if (loc == "en" || loc == "us") forced_locale = NumberLocale::US;
+        } else if (kv.first == "date_format") {
+            string fmt = kv.second.GetValue<string>();
+            if (fmt == "dmy") forced_date_format = DateFormat::DMY;
+            else if (fmt == "mdy") forced_date_format = DateFormat::MDY;
+            else if (fmt == "ymd") forced_date_format = DateFormat::YMD;
+        }
+    }
+
+    Connection conn(context.db->GetDatabase(context));
+    string tmp = MakeTempTableName();
+
+    // Try as SQL query first, then as table name
+    auto cr = conn.Query("CREATE TEMP TABLE " + tmp + " AS " + query);
+    if (cr->HasError()) {
+        // Escape as identifier for table name fallback
+        string escaped;
+        for (char c : query) {
+            if (c == '"') escaped += "\"\"";
+            else escaped += c;
+        }
+        cr = conn.Query("CREATE TEMP TABLE " + tmp + " AS SELECT * FROM \"" + escaped + "\"");
+        if (cr->HasError()) {
+            throw InvalidInputException("stps_smart_cast_table: " + cr->GetError());
+        }
+    }
+
+    // RAII guard for cleanup
+    struct TempGuard {
+        Connection &conn;
+        string name;
+        ~TempGuard() { conn.Query("DROP TABLE IF EXISTS " + name); }
+    } guard{conn, tmp};
+
+    // Get schema
+    auto schema_result = conn.Query("SELECT * FROM " + tmp + " LIMIT 0");
+    if (schema_result->HasError()) {
+        throw InvalidInputException("stps_smart_cast_table: " + schema_result->GetError());
+    }
+
+    idx_t ncols = schema_result->names.size();
+    vector<string> col_names = schema_result->names;
+    vector<LogicalType> orig_types = schema_result->types;
+
+    // Analyze each VARCHAR column and determine target type
+    vector<LogicalType> target_types = orig_types;
+    vector<ColumnAnalysis> col_analysis(ncols);
+
+    for (idx_t c = 0; c < ncols; c++) {
+        col_analysis[c].column_name = col_names[c];
+        col_analysis[c].original_type = orig_types[c];
+        col_analysis[c].detected_type = DetectedType::VARCHAR;
+        col_analysis[c].target_type = orig_types[c];
+
+        if (orig_types[c] != LogicalType::VARCHAR) continue;
+
+        // Get all values for this column
+        auto col_result = conn.Query("SELECT " + QuoteIdent(col_names[c]) + " FROM " + tmp);
+        if (col_result->HasError()) continue;
+
+        std::vector<std::string> values;
+        int64_t total_rows = 0, null_count = 0;
+
+        while (auto chunk = col_result->Fetch()) {
+            for (idx_t row = 0; row < chunk->size(); row++) {
+                total_rows++;
+                auto val = chunk->GetValue(0, row);
+                if (val.IsNull()) {
+                    null_count++;
+                } else {
+                    std::string processed;
+                    if (SmartCastUtils::Preprocess(val.GetValue<string>(), processed)) {
+                        values.push_back(processed);
+                    } else {
+                        null_count++;
+                    }
+                }
+            }
+        }
+
+        NumberLocale locale = forced_locale != NumberLocale::AUTO
+            ? forced_locale : SmartCastUtils::DetectLocale(values);
+        DateFormat date_format = forced_date_format != DateFormat::AUTO
+            ? forced_date_format : SmartCastUtils::DetectDateFormat(values);
+
+        col_analysis[c].detected_locale = locale;
+        col_analysis[c].detected_date_format = date_format;
+
+        std::map<DetectedType, int64_t> type_counts;
+        for (const auto &val : values) {
+            type_counts[SmartCastUtils::DetectType(val, locale, date_format)]++;
+        }
+
+        DetectedType best_type = DetectedType::VARCHAR;
+        int64_t best_count = 0;
+        for (const auto &kv : type_counts) {
+            if (kv.first != DetectedType::VARCHAR && kv.first != DetectedType::UNKNOWN && kv.second > best_count) {
+                best_type = kv.first;
+                best_count = kv.second;
+            }
+        }
+
+        int64_t non_null_count = total_rows - null_count;
+        if (non_null_count > 0 && best_type != DetectedType::VARCHAR) {
+            double success_rate = static_cast<double>(best_count) / static_cast<double>(non_null_count);
+            if (success_rate >= min_success_rate) {
+                col_analysis[c].detected_type = best_type;
+            }
+        }
+
+        col_analysis[c].target_type = SmartCastUtils::ToLogicalType(col_analysis[c].detected_type);
+        target_types[c] = col_analysis[c].target_type;
+    }
+
+    // Fetch all rows and cast values
+    auto all_result = conn.Query("SELECT * FROM " + tmp);
+    if (all_result->HasError()) {
+        throw InvalidInputException("stps_smart_cast_table: " + all_result->GetError());
+    }
+
+    while (auto chunk = all_result->Fetch()) {
+        for (idx_t r = 0; r < chunk->size(); r++) {
+            vector<Value> row;
+            for (idx_t c = 0; c < ncols; c++) {
+                auto val = chunk->GetValue(c, r);
+
+                if (val.IsNull() || orig_types[c] != LogicalType::VARCHAR ||
+                    col_analysis[c].detected_type == DetectedType::VARCHAR) {
+                    row.push_back(val);
+                    continue;
+                }
+
+                std::string str = val.GetValue<string>();
+                std::string processed;
+                if (!SmartCastUtils::Preprocess(str, processed)) {
+                    row.push_back(Value());
+                    continue;
+                }
+
+                switch (col_analysis[c].detected_type) {
+                    case DetectedType::BOOLEAN: {
+                        bool parsed;
+                        row.push_back(SmartCastUtils::ParseBoolean(processed, parsed)
+                            ? Value::BOOLEAN(parsed) : Value());
+                        break;
+                    }
+                    case DetectedType::INTEGER: {
+                        int64_t parsed;
+                        row.push_back(SmartCastUtils::ParseInteger(processed, col_analysis[c].detected_locale, parsed)
+                            ? Value::BIGINT(parsed) : Value());
+                        break;
+                    }
+                    case DetectedType::DOUBLE: {
+                        double parsed;
+                        row.push_back(SmartCastUtils::ParseDouble(processed, col_analysis[c].detected_locale, parsed)
+                            ? Value::DOUBLE(parsed) : Value());
+                        break;
+                    }
+                    case DetectedType::DATE: {
+                        date_t parsed;
+                        row.push_back(SmartCastUtils::ParseDate(processed, col_analysis[c].detected_date_format, parsed)
+                            ? Value::DATE(parsed) : Value());
+                        break;
+                    }
+                    case DetectedType::TIMESTAMP: {
+                        timestamp_t parsed;
+                        row.push_back(SmartCastUtils::ParseTimestamp(processed, col_analysis[c].detected_date_format, parsed)
+                            ? Value::TIMESTAMP(parsed) : Value());
+                        break;
+                    }
+                    case DetectedType::UUID: {
+                        std::string parsed;
+                        row.push_back(SmartCastUtils::ParseUUID(processed, parsed)
+                            ? Value(parsed) : Value());
+                        break;
+                    }
+                    default:
+                        row.push_back(val);
+                        break;
+                }
+            }
+            data->rows.push_back(std::move(row));
+        }
+    }
+
+    data->column_names = col_names;
+    data->column_types = target_types;
+    names = col_names;
+    return_types = target_types;
+    return std::move(data);
+}
+
+static unique_ptr<GlobalTableFunctionState> SmartCastTableInit(ClientContext &context, TableFunctionInitInput &input) {
+    return make_uniq<SmartCastTableGlobalState>();
+}
+
+static void SmartCastTableScan(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
+    auto &data = data_p.bind_data->Cast<SmartCastTableBindData>();
+    auto &state = data_p.global_state->Cast<SmartCastTableGlobalState>();
+
+    idx_t count = 0;
+    while (state.current_row < data.rows.size() && count < STANDARD_VECTOR_SIZE) {
+        auto &row = data.rows[state.current_row];
+        for (idx_t c = 0; c < output.ColumnCount(); c++) {
+            output.SetValue(c, count, c < row.size() ? row[c] : Value());
+        }
+        count++;
+        state.current_row++;
+    }
+    output.SetCardinality(count);
+}
+
+//=============================================================================
 // Registration
 //=============================================================================
 
@@ -477,6 +741,14 @@ void RegisterSmartCastTableFunctions(ExtensionLoader &loader) {
     cast_func.named_parameters["locale"] = LogicalType::VARCHAR;
     cast_func.named_parameters["date_format"] = LogicalType::VARCHAR;
     loader.RegisterFunction(cast_func);
+
+    // stps_smart_cast_table - accepts SQL query string or table name
+    TableFunction table_func("stps_smart_cast_table", {LogicalType::VARCHAR},
+                             SmartCastTableScan, SmartCastTableBind, SmartCastTableInit);
+    table_func.named_parameters["min_success_rate"] = LogicalType::DOUBLE;
+    table_func.named_parameters["locale"] = LogicalType::VARCHAR;
+    table_func.named_parameters["date_format"] = LogicalType::VARCHAR;
+    loader.RegisterFunction(table_func);
 }
 
 } // namespace stps
