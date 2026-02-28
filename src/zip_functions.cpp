@@ -24,6 +24,13 @@ struct ViewZipGlobalState : public GlobalTableFunctionState {
     idx_t total_files = 0;
     bool initialized = false;
     string error_message;
+
+    ~ViewZipGlobalState() override {
+        if (initialized) {
+            mz_zip_reader_end(&zip_archive);
+            initialized = false;
+        }
+    }
 };
 
 // Bind function for stps_view_zip

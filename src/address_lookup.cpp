@@ -39,23 +39,34 @@ struct CacheEntry {
 };
 
 static std::mutex cache_mutex;
+static std::mutex rate_limit_mutex;
 static std::unordered_map<std::string, CacheEntry> address_cache;
 static std::chrono::steady_clock::time_point last_request_time;
 static const int MIN_REQUEST_INTERVAL_MS = 2000; // 2 seconds between requests
 static const int CACHE_TTL_SECONDS = 3600; // 1 hour cache
 
 static void rate_limit_delay() {
-    std::lock_guard<std::mutex> lock(cache_mutex);
+    int sleep_time = 0;
 
-    auto now = std::chrono::steady_clock::now();
-    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_request_time).count();
+    {
+        std::lock_guard<std::mutex> lock(rate_limit_mutex);
+        auto now = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_request_time).count();
 
-    if (elapsed < MIN_REQUEST_INTERVAL_MS) {
-        int sleep_time = MIN_REQUEST_INTERVAL_MS - static_cast<int>(elapsed);
+        if (elapsed < MIN_REQUEST_INTERVAL_MS) {
+            sleep_time = MIN_REQUEST_INTERVAL_MS - static_cast<int>(elapsed);
+        }
+    }
+
+    // Sleep outside the lock so other threads can access rate limit state
+    if (sleep_time > 0) {
         std::this_thread::sleep_for(std::chrono::milliseconds(sleep_time));
     }
 
-    last_request_time = std::chrono::steady_clock::now();
+    {
+        std::lock_guard<std::mutex> lock(rate_limit_mutex);
+        last_request_time = std::chrono::steady_clock::now();
+    }
 }
 
 static bool get_cached_address(const std::string& company_name, AddressResult& result) {

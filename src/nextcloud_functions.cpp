@@ -37,9 +37,7 @@ struct NextcloudBindData : public TableFunctionData {
     // Fetched data stored in bind for schema detection
     std::string fetched_body;
     std::string file_extension;
-    std::string temp_file_path;
     bool is_binary = false;
-    bool needs_temp_file = false;  // Only for formats that absolutely require file access
 
     // Schema detected in bind
     vector<std::string> column_names;
@@ -202,7 +200,6 @@ static unique_ptr<FunctionData> NextcloudBind(ClientContext &context, TableFunct
 
     // Free fetched body to save memory
     result->fetched_body.clear();
-    result->fetched_body.shrink_to_fit();
 
     return result;
 }
@@ -211,9 +208,10 @@ static unique_ptr<GlobalTableFunctionState> NextcloudInit(ClientContext &context
     auto &bind = input.bind_data->Cast<NextcloudBindData>();
     auto state = make_uniq<NextcloudGlobalState>();
 
-    // All data is materialized in bind phase
-    for (const auto &row : bind.materialized_rows) {
-        state->rows.push_back(row);
+    // Copy rows from bind phase
+    state->rows.reserve(bind.materialized_rows.size());
+    for (auto &row : bind.materialized_rows) {
+        state->rows.emplace_back(row.begin(), row.end());
     }
 
     return state;
@@ -384,12 +382,12 @@ static bool ReadFileViaDuckDB(ClientContext &context, const std::string &body, c
         }
     }
 
-    std::ofstream out(temp_path, std::ios::binary);
-    if (!out) return false;
-    out.write(write_ptr->data(), write_ptr->size());
-    out.close();
-
     try {
+        std::ofstream out(temp_path, std::ios::binary);
+        if (!out) return false;
+        out.write(write_ptr->data(), write_ptr->size());
+        out.close();
+
         auto &db = DatabaseInstance::GetDatabase(context);
         Connection conn(db);
 
@@ -988,9 +986,10 @@ static unique_ptr<GlobalTableFunctionState> NextcloudFolderInit(ClientContext &c
     auto &bind = input.bind_data->Cast<NextcloudFolderBindData>();
     auto state = make_uniq<NextcloudFolderGlobalState>();
 
-    // All rows are already materialized in bind phase (UNION ALL BY NAME)
-    for (const auto &row : bind.all_rows) {
-        state->rows.push_back(row);
+    // Copy rows from bind phase
+    state->rows.reserve(bind.all_rows.size());
+    for (auto &row : bind.all_rows) {
+        state->rows.emplace_back(row.begin(), row.end());
     }
 
     return state;

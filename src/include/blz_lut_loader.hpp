@@ -4,6 +4,7 @@
 #include <unordered_map>
 #include <vector>
 #include <cstdint>
+#include <mutex>
 #include "duckdb.hpp"
 
 namespace duckdb {
@@ -55,6 +56,9 @@ private:
     // Disable copy/move
     BlzLutLoader(const BlzLutLoader&) = delete;
     BlzLutLoader& operator=(const BlzLutLoader&) = delete;
+
+    // Thread-safety mutex for lazy init
+    static std::mutex& GetMutex();
 
     // Internal helpers
     bool EnsureLutDirectory();

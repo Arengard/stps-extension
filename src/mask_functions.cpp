@@ -83,11 +83,23 @@ static unique_ptr<FunctionData> MaskTableBind(
         }
     }
 
+    // Escape table name for safe SQL interpolation
+    std::string escaped_table_name;
+    for (char c : result->table_name) {
+        if (c == '\'') escaped_table_name += "''";
+        else escaped_table_name += c;
+    }
+    std::string quoted_table_name;
+    for (char c : result->table_name) {
+        if (c == '"') quoted_table_name += "\"\"";
+        else quoted_table_name += c;
+    }
+
     // Discover table schema
     Connection conn(context.db->GetDatabase(context));
     auto schema_result = conn.Query(
         "SELECT column_name, data_type FROM information_schema.columns "
-        "WHERE table_name = '" + result->table_name + "' "
+        "WHERE table_name = '" + escaped_table_name + "' "
         "AND table_schema NOT IN ('information_schema', 'pg_catalog') "
         "ORDER BY ordinal_position"
     );
@@ -123,7 +135,7 @@ static unique_ptr<FunctionData> MaskTableBind(
     }
 
     // Get actual types by querying the table with LIMIT 0
-    auto type_result = conn.Query("SELECT * FROM \"" + result->table_name + "\" LIMIT 0");
+    auto type_result = conn.Query("SELECT * FROM \"" + quoted_table_name + "\" LIMIT 0");
     if (type_result->HasError()) {
         throw BinderException("stps_mask_table: Failed to query table '%s': %s",
                               result->table_name.c_str(), type_result->GetError().c_str());
@@ -257,7 +269,12 @@ static void MaskTableScan(
     // On first call, execute the query
     if (!state.query_result) {
         Connection conn(context.db->GetDatabase(context));
-        state.query_result = conn.Query("SELECT * FROM \"" + bind_data.table_name + "\"");
+        std::string q_name;
+        for (char c : bind_data.table_name) {
+            if (c == '"') q_name += "\"\"";
+            else q_name += c;
+        }
+        state.query_result = conn.Query("SELECT * FROM \"" + q_name + "\"");
         if (state.query_result->HasError()) {
             throw InternalException("stps_mask_table: Failed to query table '%s': %s",
                                     bind_data.table_name.c_str(), state.query_result->GetError().c_str());

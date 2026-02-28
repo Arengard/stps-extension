@@ -196,6 +196,32 @@ XmlNode parse_xml_node(const std::string& xml, size_t& pos) {
     return node;
 }
 
+// Escape a string for safe embedding in a JSON string value
+static std::string escape_json(const std::string& str) {
+    std::string result;
+    result.reserve(str.size());
+    for (char c : str) {
+        switch (c) {
+            case '"':  result += "\\\""; break;
+            case '\\': result += "\\\\"; break;
+            case '\b': result += "\\b"; break;
+            case '\f': result += "\\f"; break;
+            case '\n': result += "\\n"; break;
+            case '\r': result += "\\r"; break;
+            case '\t': result += "\\t"; break;
+            default:
+                if (static_cast<unsigned char>(c) < 0x20) {
+                    char buf[8];
+                    snprintf(buf, sizeof(buf), "\\u%04x", static_cast<unsigned char>(c));
+                    result += buf;
+                } else {
+                    result += c;
+                }
+        }
+    }
+    return result;
+}
+
 // Convert XML node to JSON
 std::string node_to_json(const XmlNode& node, int indent = 0) {
     std::string json;
@@ -204,7 +230,7 @@ std::string node_to_json(const XmlNode& node, int indent = 0) {
     json += "{\n";
 
     // Add tag name
-    json += indent_str + "  \"_tag\": \"" + node.name + "\"";
+    json += indent_str + "  \"_tag\": \"" + escape_json(node.name) + "\"";
 
     // Add attributes
     if (!node.attributes.empty()) {
@@ -212,7 +238,7 @@ std::string node_to_json(const XmlNode& node, int indent = 0) {
         bool first_attr = true;
         for (const auto& attr : node.attributes) {
             if (!first_attr) json += ",\n";
-            json += indent_str + "    \"" + attr.first + "\": \"" + attr.second + "\"";
+            json += indent_str + "    \"" + escape_json(attr.first) + "\": \"" + escape_json(attr.second) + "\"";
             first_attr = false;
         }
         json += "\n" + indent_str + "  }";
@@ -220,7 +246,7 @@ std::string node_to_json(const XmlNode& node, int indent = 0) {
 
     // Add text
     if (!node.text.empty()) {
-        json += ",\n" + indent_str + "  \"_text\": \"" + node.text + "\"";
+        json += ",\n" + indent_str + "  \"_text\": \"" + escape_json(node.text) + "\"";
     }
 
     // Add children

@@ -9,6 +9,7 @@
 #include <cstring>
 #include <sys/stat.h>
 #include <zlib.h>
+#include <mutex>
 
 #ifdef HAVE_CURL
 #include <curl/curl.h>
@@ -33,6 +34,11 @@ static size_t BlzLutFileWriteCallback(char *contents, size_t size, size_t nmemb,
 #endif
 
 BlzLutLoader::BlzLutLoader() : is_loaded_(false), entry_count_(0) {
+}
+
+std::mutex& BlzLutLoader::GetMutex() {
+    static std::mutex mtx;
+    return mtx;
 }
 
 BlzLutLoader& BlzLutLoader::GetInstance() {
@@ -575,26 +581,28 @@ bool BlzLutLoader::Initialize(ClientContext &context) {
 }
 
 bool BlzLutLoader::LookupCheckMethod(const std::string& blz, uint8_t& method_id) {
-    // Lazy load LUT file on first lookup
+    // Lazy load LUT file on first lookup (thread-safe)
     if (!is_loaded_) {
-        std::string lut_path = GetLutFilePath();
-        if (!FileExists(lut_path)) {
-            // File doesn't exist, can't load
-            return false;
-        }
+        std::lock_guard<std::mutex> lock(GetMutex());
+        // Double-check after acquiring lock
+        if (!is_loaded_) {
+            std::string lut_path = GetLutFilePath();
+            if (!FileExists(lut_path)) {
+                return false;
+            }
 
-        if (!ParseLutFile(lut_path)) {
-            // Parsing failed
-            return false;
-        }
+            if (!ParseLutFile(lut_path)) {
+                return false;
+            }
 
-        is_loaded_ = true;
+            is_loaded_ = true;
+        }
     }
 
-    // Lookup in the hash map
+    // Lookup in the hash map (safe after is_loaded_ is true, map is read-only)
     auto it = blz_to_method_.find(blz);
     if (it == blz_to_method_.end()) {
-        return false;  // BLZ not found
+        return false;
     }
 
     method_id = it->second;
