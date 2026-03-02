@@ -208,7 +208,7 @@ static void ScanNextcloudRecursive(
             result.name = name;
             result.path = entry_path;
             result.type = "directory";
-            result.size = -1;
+            result.size = 0;
             result.modified_time = ParseHttpDate(entry.last_modified);
             result.extension = "";
             result.parent_directory = dir_path;
@@ -317,7 +317,7 @@ static unique_ptr<FunctionData> ScanNextcloudBind(
     // Output schema matches stps_scan
     names = {"name", "path", "type", "size", "modified_time", "extension", "parent_directory"};
     return_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR,
-                    LogicalType::BIGINT, LogicalType::BIGINT, LogicalType::VARCHAR, LogicalType::VARCHAR};
+                    LogicalType::BIGINT, LogicalType::TIMESTAMP, LogicalType::VARCHAR, LogicalType::VARCHAR};
 
     return std::move(result);
 }
@@ -356,9 +356,36 @@ static unique_ptr<GlobalTableFunctionState> ScanNextcloudInit(
     while (root_path.size() > 1 && root_path.back() == '/') root_path.pop_back();
 
     try {
+        // Always start with a Depth:1 scan to get top-level entries
         ScanNextcloudRecursive(url, root_path, opts, headers, base_url, 0, result->entries);
     } catch (const std::exception &e) {
         throw IOException("scan_nextcloud error: " + string(e.what()));
+    }
+
+    // Compute directory sizes by doing one recursive scan per directory
+    for (auto &entry : result->entries) {
+        if (entry.type == "directory") {
+            // Build the URL for this directory
+            std::string dir_url = base_url + PercentEncodePath(entry.path) + "/";
+            // Do a recursive scan of just this directory to sum all file sizes
+            ScanNextcloudOptions size_opts;
+            size_opts.recursive = true;
+            size_opts.max_depth = -1;
+            size_opts.include_hidden = opts.include_hidden;
+            std::vector<ScanNextcloudEntry> sub_entries;
+            try {
+                ScanNextcloudRecursive(dir_url, entry.path, size_opts, headers, base_url, 0, sub_entries);
+                int64_t total_size = 0;
+                for (auto &sub : sub_entries) {
+                    if (sub.type == "file" && sub.size > 0) {
+                        total_size += sub.size;
+                    }
+                }
+                entry.size = total_size;
+            } catch (...) {
+                entry.size = 0; // On error, show 0 rather than NULL
+            }
+        }
     }
 
     return std::move(result);
@@ -378,8 +405,13 @@ static void ScanNextcloudScan(
         output.SetValue(0, count, Value(entry.name));
         output.SetValue(1, count, Value(entry.path));
         output.SetValue(2, count, Value(entry.type));
-        output.SetValue(3, count, entry.size >= 0 ? Value::BIGINT(entry.size) : Value(LogicalType::BIGINT));
-        output.SetValue(4, count, entry.modified_time > 0 ? Value::BIGINT(entry.modified_time) : Value(LogicalType::BIGINT));
+        // Force directory size to always be a value (never NULL)
+        if (entry.type == "directory") {
+            output.SetValue(3, count, Value::BIGINT(entry.size >= 0 ? entry.size : 0));
+        } else {
+            output.SetValue(3, count, entry.size >= 0 ? Value::BIGINT(entry.size) : Value(LogicalType::BIGINT));
+        }
+        output.SetValue(4, count, entry.modified_time > 0 ? Value::TIMESTAMP(Timestamp::FromEpochSeconds(entry.modified_time)) : Value(LogicalType::TIMESTAMP));
         output.SetValue(5, count, Value(entry.extension));
         output.SetValue(6, count, Value(entry.parent_directory));
 
