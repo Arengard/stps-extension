@@ -11,9 +11,259 @@
 #include "../miniz/miniz.h"
 #include <sstream>
 #include <algorithm>
+#include "shared/archive_utils.hpp"
+#include <fstream>
+#include <cstdio>
+#include <cstdlib>
+#include <ctime>
+
+#ifdef _WIN32
+#define NOMINMAX
+#include <windows.h>
+#else
+#include <sys/stat.h>
+#include <dirent.h>
+#include <unistd.h>
+#endif
 
 namespace duckdb {
 namespace stps {
+
+// ============================================================================
+// 7z archive support helpers
+// ============================================================================
+
+// Find the 7z binary on the system. Returns empty string if not found.
+static std::string Find7zBinary() {
+#ifdef _WIN32
+    // Check common install locations
+    const char *candidates[] = {
+        "C:\\Program Files\\7-Zip\\7z.exe",
+        "C:\\Program Files (x86)\\7-Zip\\7z.exe"
+    };
+    for (auto &path : candidates) {
+        DWORD attrs = GetFileAttributesA(path);
+        if (attrs != INVALID_FILE_ATTRIBUTES && !(attrs & FILE_ATTRIBUTE_DIRECTORY)) {
+            return std::string(path);
+        }
+    }
+    // Try PATH via 'where'
+    FILE *pipe = _popen("where 7z.exe 2>nul", "r");
+    if (pipe) {
+        char buf[512];
+        std::string result;
+        while (fgets(buf, sizeof(buf), pipe)) {
+            result += buf;
+        }
+        _pclose(pipe);
+        // Take first line
+        size_t nl = result.find_first_of("\r\n");
+        if (nl != std::string::npos) result = result.substr(0, nl);
+        if (!result.empty()) return result;
+    }
+#else
+    // Try PATH via 'which'
+    FILE *pipe = popen("which 7z 2>/dev/null", "r");
+    if (pipe) {
+        char buf[512];
+        std::string result;
+        while (fgets(buf, sizeof(buf), pipe)) {
+            result += buf;
+        }
+        pclose(pipe);
+        size_t nl = result.find_first_of("\r\n");
+        if (nl != std::string::npos) result = result.substr(0, nl);
+        if (!result.empty()) return result;
+    }
+#endif
+    return "";
+}
+
+// Extract a 7z archive to a unique temporary directory. Returns the directory path.
+// Throws IOException if 7z is not found or extraction fails.
+static std::string Extract7zToDirectory(const std::string &archive_path) {
+    std::string seven_z = Find7zBinary();
+    if (seven_z.empty()) {
+        throw IOException("7z not found. Install 7-Zip to handle .7z archives. "
+                          "Checked: C:\\Program Files\\7-Zip\\7z.exe, C:\\Program Files (x86)\\7-Zip\\7z.exe, and PATH.");
+    }
+
+    // Create a unique temp directory
+    std::string temp_base = GetTempDirectory();
+    std::string extract_dir = temp_base + "gobd_7z_" + std::to_string(std::time(nullptr)) + "_" +
+                              std::to_string(reinterpret_cast<uintptr_t>(&archive_path));
+
+#ifdef _WIN32
+    CreateDirectoryA(extract_dir.c_str(), nullptr);
+#else
+    mkdir(extract_dir.c_str(), 0700);
+#endif
+
+    // Build command: 7z x archive.7z -ooutput_dir -y
+    // Quote paths to handle spaces
+    std::string cmd = "\"" + seven_z + "\" x \"" + archive_path + "\" -o\"" + extract_dir + "\" -y";
+#ifdef _WIN32
+    // On Windows, wrap entire command in quotes for system()
+    cmd = "\"" + cmd + "\"";
+#endif
+    cmd += " > ";
+#ifdef _WIN32
+    cmd += "nul 2>&1";
+#else
+    cmd += "/dev/null 2>&1";
+#endif
+
+    int ret = std::system(cmd.c_str());
+    if (ret != 0) {
+        // Clean up the empty directory on failure
+#ifdef _WIN32
+        RemoveDirectoryA(extract_dir.c_str());
+#else
+        rmdir(extract_dir.c_str());
+#endif
+        throw IOException("7z extraction failed (exit code " + std::to_string(ret) + ") for: " + archive_path);
+    }
+
+    return extract_dir;
+}
+
+// Recursively remove a directory and all its contents.
+static void CleanupDirectory(const std::string &dir_path) {
+    if (dir_path.empty()) return;
+#ifdef _WIN32
+    std::string cmd = "rmdir /s /q \"" + dir_path + "\" > nul 2>&1";
+    std::system(cmd.c_str());
+#else
+    std::string cmd = "rm -rf \"" + dir_path + "\" > /dev/null 2>&1";
+    std::system(cmd.c_str());
+#endif
+}
+
+// Read an entire file into a string.
+static std::string ReadFileToString(const std::string &path) {
+    std::ifstream ifs(path, std::ios::binary);
+    if (!ifs) return "";
+    std::ostringstream oss;
+    oss << ifs.rdbuf();
+    return oss.str();
+}
+
+// Recursively collect all files in a directory.
+// Returns vector of pairs: (relative_name, full_path).
+static void CollectFiles(const std::string &dir, std::vector<std::pair<std::string, std::string>> &files) {
+#ifdef _WIN32
+    std::string search_path = dir + "\\*";
+    WIN32_FIND_DATAA fd;
+    HANDLE hFind = FindFirstFileA(search_path.c_str(), &fd);
+    if (hFind == INVALID_HANDLE_VALUE) return;
+    do {
+        std::string name = fd.cFileName;
+        if (name == "." || name == "..") continue;
+        std::string full_path = dir + "\\" + name;
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+            CollectFiles(full_path, files);
+        } else {
+            files.push_back({name, full_path});
+        }
+    } while (FindNextFileA(hFind, &fd));
+    FindClose(hFind);
+#else
+    DIR *dp = opendir(dir.c_str());
+    if (!dp) return;
+    struct dirent *entry;
+    while ((entry = readdir(dp)) != nullptr) {
+        std::string name = entry->d_name;
+        if (name == "." || name == "..") continue;
+        std::string full_path = dir + "/" + name;
+        struct stat st;
+        if (stat(full_path.c_str(), &st) != 0) continue;
+        if (S_ISDIR(st.st_mode)) {
+            CollectFiles(full_path, files);
+        } else {
+            files.push_back({name, full_path});
+        }
+    }
+    closedir(dp);
+#endif
+}
+
+// Read GoBD data from an extracted directory (finds index.xml, parses it, reads CSVs).
+// Returns GobdImportData ready for ExecuteGobdImportPipeline.
+static GobdImportData ReadGobdFromDirectory(const std::string &dir_path, const std::string &url_for_errors) {
+    // Collect all files recursively
+    std::vector<std::pair<std::string, std::string>> all_files;
+    CollectFiles(dir_path, all_files);
+
+    // Find index.xml (case-insensitive)
+    std::string index_xml_path;
+    std::string index_xml_dir;
+    for (auto &f : all_files) {
+        std::string lower_name = f.first;
+        std::transform(lower_name.begin(), lower_name.end(), lower_name.begin(), ::tolower);
+        if (lower_name == "index.xml") {
+            index_xml_path = f.second;
+            // Get the directory containing index.xml
+            size_t sep = index_xml_path.find_last_of("/\\");
+            if (sep != std::string::npos) {
+                index_xml_dir = index_xml_path.substr(0, sep);
+            } else {
+                index_xml_dir = dir_path;
+            }
+            break;
+        }
+    }
+
+    if (index_xml_path.empty()) {
+        throw IOException("No index.xml found in extracted 7z archive: " + url_for_errors);
+    }
+
+    std::string xml_content = ReadFileToString(index_xml_path);
+    if (xml_content.empty()) {
+        throw IOException("index.xml is empty in extracted 7z archive: " + url_for_errors);
+    }
+
+    xml_content = EnsureUtf8(xml_content);
+
+    auto tables = ParseGobdIndexFromString(xml_content);
+    if (tables.empty()) {
+        throw BinderException("No tables found in GoBD index within 7z archive: " + url_for_errors);
+    }
+
+    GobdImportData import_data;
+    import_data.tables = tables;
+
+    // Read each CSV referenced by the tables
+    for (auto &table : tables) {
+        // Try direct path relative to index.xml directory
+        std::string csv_path = index_xml_dir;
+#ifdef _WIN32
+        csv_path += "\\" + table.url;
+#else
+        csv_path += "/" + table.url;
+#endif
+        std::string csv_content = ReadFileToString(csv_path);
+
+        // Fallback: search by filename (case-insensitive) among all collected files
+        if (csv_content.empty()) {
+            std::string target_lower = table.url;
+            std::transform(target_lower.begin(), target_lower.end(), target_lower.begin(), ::tolower);
+            for (auto &f : all_files) {
+                std::string lower_name = f.first;
+                std::transform(lower_name.begin(), lower_name.end(), lower_name.begin(), ::tolower);
+                if (lower_name == target_lower) {
+                    csv_content = ReadFileToString(f.second);
+                    break;
+                }
+            }
+        }
+
+        if (!csv_content.empty()) {
+            import_data.csv_contents[table.url] = csv_content;
+        }
+    }
+
+    return import_data;
+}
 
 // ============================================================================
 // Shared helpers
@@ -866,100 +1116,149 @@ static unique_ptr<FunctionData> GobdCloudZipAllBind(ClientContext &context, Tabl
         }
     }
 
-    // Download the ZIP file
-    std::string zip_data = DownloadFile(zip_url, username, password);
-    if (zip_data.empty()) {
-        throw IOException("Could not download ZIP file from: " + zip_url);
-    }
+    // Detect archive type from URL extension
+    std::string url_lower = zip_url;
+    std::transform(url_lower.begin(), url_lower.end(), url_lower.begin(), ::tolower);
+    bool is_7z = (url_lower.size() >= 3 && url_lower.substr(url_lower.size() - 3) == ".7z");
 
-    // Open ZIP from memory
-    mz_zip_archive zip_archive;
-    memset(&zip_archive, 0, sizeof(zip_archive));
+    GobdImportData import_data;
 
-    if (!mz_zip_reader_init_mem(&zip_archive, zip_data.data(), zip_data.size(), 0)) {
-        throw IOException("Failed to open ZIP archive from: " + zip_url);
-    }
-
-    // Find index.xml in the ZIP
-    std::string xml_content;
-    std::string index_dir;  // directory prefix containing index.xml
-    int num_files = mz_zip_reader_get_num_files(&zip_archive);
-
-    for (int i = 0; i < num_files; i++) {
-        mz_zip_archive_file_stat file_stat;
-        if (!mz_zip_reader_file_stat(&zip_archive, i, &file_stat)) continue;
-        if (mz_zip_reader_is_file_a_directory(&zip_archive, i)) continue;
-
-        std::string filename = file_stat.m_filename;
-        // Get just the filename part
-        std::string basename = filename;
-        size_t slash_pos = filename.find_last_of("/\\");
-        if (slash_pos != std::string::npos) {
-            basename = filename.substr(slash_pos + 1);
+    if (is_7z) {
+        // ---- 7z path: download to temp file, extract with 7z CLI ----
+        std::string archive_data = DownloadFile(zip_url, username, password);
+        if (archive_data.empty()) {
+            throw IOException("Could not download 7z file from: " + zip_url);
         }
 
-        // Case-insensitive check for index.xml
-        std::string lower_basename = basename;
-        std::transform(lower_basename.begin(), lower_basename.end(), lower_basename.begin(), ::tolower);
+        // Write to temp file
+        std::string temp_dir = GetTempDirectory();
+        std::string temp_file = temp_dir + "gobd_download_" + std::to_string(std::time(nullptr)) + ".7z";
+        {
+            std::ofstream ofs(temp_file, std::ios::binary);
+            if (!ofs) {
+                throw IOException("Failed to create temp file for 7z download: " + temp_file);
+            }
+            ofs.write(archive_data.data(), archive_data.size());
+            ofs.close();
+        }
 
-        if (lower_basename == "index.xml") {
-            // Extract this file
-            size_t file_size = 0;
-            void *file_data = mz_zip_reader_extract_to_heap(&zip_archive, i, &file_size, 0);
-            if (file_data) {
-                xml_content = std::string(static_cast<char*>(file_data), file_size);
-                mz_free(file_data);
+        // Free download memory early
+        archive_data.clear();
+        archive_data.shrink_to_fit();
 
-                // Remember the directory prefix
-                if (slash_pos != std::string::npos) {
-                    index_dir = filename.substr(0, slash_pos + 1);
+        std::string extract_dir;
+        try {
+            extract_dir = Extract7zToDirectory(temp_file);
+            // Remove the temp archive file (no longer needed)
+            std::remove(temp_file.c_str());
+
+            import_data = ReadGobdFromDirectory(extract_dir, zip_url);
+
+            // Clean up extracted directory
+            CleanupDirectory(extract_dir);
+        } catch (...) {
+            // Clean up on any error
+            std::remove(temp_file.c_str());
+            if (!extract_dir.empty()) {
+                CleanupDirectory(extract_dir);
+            }
+            throw;
+        }
+    } else {
+        // ---- ZIP path: in-memory extraction with miniz (existing logic) ----
+        std::string zip_data = DownloadFile(zip_url, username, password);
+        if (zip_data.empty()) {
+            throw IOException("Could not download ZIP file from: " + zip_url);
+        }
+
+        // Open ZIP from memory
+        mz_zip_archive zip_archive;
+        memset(&zip_archive, 0, sizeof(zip_archive));
+
+        if (!mz_zip_reader_init_mem(&zip_archive, zip_data.data(), zip_data.size(), 0)) {
+            throw IOException("Failed to open ZIP archive from: " + zip_url);
+        }
+
+        // Find index.xml in the ZIP
+        std::string xml_content;
+        std::string index_dir;  // directory prefix containing index.xml
+        int num_files = mz_zip_reader_get_num_files(&zip_archive);
+
+        for (int i = 0; i < num_files; i++) {
+            mz_zip_archive_file_stat file_stat;
+            if (!mz_zip_reader_file_stat(&zip_archive, i, &file_stat)) continue;
+            if (mz_zip_reader_is_file_a_directory(&zip_archive, i)) continue;
+
+            std::string filename = file_stat.m_filename;
+            // Get just the filename part
+            std::string basename = filename;
+            size_t slash_pos = filename.find_last_of("/\\");
+            if (slash_pos != std::string::npos) {
+                basename = filename.substr(slash_pos + 1);
+            }
+
+            // Case-insensitive check for index.xml
+            std::string lower_basename = basename;
+            std::transform(lower_basename.begin(), lower_basename.end(), lower_basename.begin(), ::tolower);
+
+            if (lower_basename == "index.xml") {
+                // Extract this file
+                size_t file_size = 0;
+                void *file_data = mz_zip_reader_extract_to_heap(&zip_archive, i, &file_size, 0);
+                if (file_data) {
+                    xml_content = std::string(static_cast<char*>(file_data), file_size);
+                    mz_free(file_data);
+
+                    // Remember the directory prefix
+                    if (slash_pos != std::string::npos) {
+                        index_dir = filename.substr(0, slash_pos + 1);
+                    }
+                }
+                break;
+            }
+        }
+
+        if (xml_content.empty()) {
+            mz_zip_reader_end(&zip_archive);
+            throw IOException("No index.xml found in ZIP archive: " + zip_url);
+        }
+
+        xml_content = EnsureUtf8(xml_content);
+
+        // Parse tables
+        auto tables = ParseGobdIndexFromString(xml_content);
+        if (tables.empty()) {
+            mz_zip_reader_end(&zip_archive);
+            throw BinderException("No tables found in GoBD index within ZIP: " + zip_url);
+        }
+
+        // Build import data: extract each CSV from ZIP
+        import_data.tables = tables;
+
+        for (auto &table : tables) {
+            // The CSV path in index.xml is relative to the index.xml location
+            std::string zip_path = index_dir + table.url;
+
+            int file_index = mz_zip_reader_locate_file(&zip_archive, zip_path.c_str(), nullptr, 0);
+            if (file_index < 0) {
+                // Try without directory prefix
+                file_index = mz_zip_reader_locate_file(&zip_archive, table.url.c_str(), nullptr, 0);
+            }
+
+            if (file_index >= 0) {
+                size_t file_size = 0;
+                void *file_data = mz_zip_reader_extract_to_heap(&zip_archive, file_index, &file_size, 0);
+                if (file_data) {
+                    import_data.csv_contents[table.url] = std::string(static_cast<char*>(file_data), file_size);
+                    mz_free(file_data);
                 }
             }
-            break;
         }
-    }
 
-    if (xml_content.empty()) {
         mz_zip_reader_end(&zip_archive);
-        throw IOException("No index.xml found in ZIP archive: " + zip_url);
     }
 
-    xml_content = EnsureUtf8(xml_content);
-
-    // Parse tables
-    auto tables = ParseGobdIndexFromString(xml_content);
-    if (tables.empty()) {
-        mz_zip_reader_end(&zip_archive);
-        throw BinderException("No tables found in GoBD index within ZIP: " + zip_url);
-    }
-
-    // Build import data: extract each CSV from ZIP
-    GobdImportData import_data;
-    import_data.tables = tables;
-
-    for (auto &table : tables) {
-        // The CSV path in index.xml is relative to the index.xml location
-        std::string zip_path = index_dir + table.url;
-
-        int file_index = mz_zip_reader_locate_file(&zip_archive, zip_path.c_str(), nullptr, 0);
-        if (file_index < 0) {
-            // Try without directory prefix
-            file_index = mz_zip_reader_locate_file(&zip_archive, table.url.c_str(), nullptr, 0);
-        }
-
-        if (file_index >= 0) {
-            size_t file_size = 0;
-            void *file_data = mz_zip_reader_extract_to_heap(&zip_archive, file_index, &file_size, 0);
-            if (file_data) {
-                import_data.csv_contents[table.url] = std::string(static_cast<char*>(file_data), file_size);
-                mz_free(file_data);
-            }
-        }
-    }
-
-    mz_zip_reader_end(&zip_archive);
-
-    // Execute shared pipeline
+    // Execute shared pipeline (both paths converge here)
     result->import_results = ExecuteGobdImportPipeline(context, import_data, delimiter, overwrite);
 
     // Output schema
