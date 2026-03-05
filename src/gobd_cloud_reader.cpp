@@ -189,33 +189,48 @@ static void CollectFiles(const std::string &dir, std::vector<std::pair<std::stri
 
 // Read GoBD data from an extracted directory (finds index.xml, parses it, reads CSVs).
 // Returns GobdImportData ready for ExecuteGobdImportPipeline.
-static GobdImportData ReadGobdFromDirectory(const std::string &dir_path, const std::string &url_for_errors) {
+static GobdImportData ReadGobdFromDirectory(const std::string &dir_path, const std::string &url_for_errors, int32_t read_folder = 0) {
     // Collect all files recursively
     std::vector<std::pair<std::string, std::string>> all_files;
     CollectFiles(dir_path, all_files);
 
-    // Find index.xml (case-insensitive)
-    std::string index_xml_path;
-    std::string index_xml_dir;
+    // Find ALL index.xml files (case-insensitive)
+    std::vector<std::pair<std::string, std::string>> index_xmls; // (full_path, dir containing it)
     for (auto &f : all_files) {
         std::string lower_name = f.first;
         std::transform(lower_name.begin(), lower_name.end(), lower_name.begin(), ::tolower);
         if (lower_name == "index.xml") {
-            index_xml_path = f.second;
-            // Get the directory containing index.xml
-            size_t sep = index_xml_path.find_last_of("/\\");
+            std::string xml_dir;
+            size_t sep = f.second.find_last_of("/\\");
             if (sep != std::string::npos) {
-                index_xml_dir = index_xml_path.substr(0, sep);
+                xml_dir = f.second.substr(0, sep);
             } else {
-                index_xml_dir = dir_path;
+                xml_dir = dir_path;
             }
-            break;
+            index_xmls.push_back({f.second, xml_dir});
         }
     }
 
-    if (index_xml_path.empty()) {
+    if (index_xmls.empty()) {
         throw IOException("No index.xml found in extracted 7z archive: " + url_for_errors);
     }
+
+    // Sort alphabetically by path
+    std::sort(index_xmls.begin(), index_xmls.end());
+
+    // Select the appropriate index.xml
+    size_t selected = 0;
+    if (read_folder > 0) {
+        if (static_cast<size_t>(read_folder) > index_xmls.size()) {
+            throw IOException("read_folder=" + std::to_string(read_folder) +
+                              " but only " + std::to_string(index_xmls.size()) +
+                              " folders with index.xml found in: " + url_for_errors);
+        }
+        selected = static_cast<size_t>(read_folder - 1);
+    }
+
+    std::string index_xml_path = index_xmls[selected].first;
+    std::string index_xml_dir = index_xmls[selected].second;
 
     std::string xml_content = ReadFileToString(index_xml_path);
     if (xml_content.empty()) {
@@ -1102,6 +1117,7 @@ static unique_ptr<FunctionData> GobdCloudZipAllBind(ClientContext &context, Tabl
     std::string username, password;
     char delimiter = ';';
     bool overwrite = false;
+    int32_t read_folder = 0;
 
     for (auto &kv : input.named_parameters) {
         if (kv.first == "username") {
@@ -1113,6 +1129,8 @@ static unique_ptr<FunctionData> GobdCloudZipAllBind(ClientContext &context, Tabl
             if (!delim_str.empty()) delimiter = delim_str[0];
         } else if (kv.first == "overwrite") {
             overwrite = BooleanValue::Get(kv.second);
+        } else if (kv.first == "read_folder") {
+            read_folder = IntegerValue::Get(kv.second);
         }
     }
 
@@ -1152,7 +1170,7 @@ static unique_ptr<FunctionData> GobdCloudZipAllBind(ClientContext &context, Tabl
             // Remove the temp archive file (no longer needed)
             std::remove(temp_file.c_str());
 
-            import_data = ReadGobdFromDirectory(extract_dir, zip_url);
+            import_data = ReadGobdFromDirectory(extract_dir, zip_url, read_folder);
 
             // Clean up extracted directory
             CleanupDirectory(extract_dir);
@@ -1179,9 +1197,13 @@ static unique_ptr<FunctionData> GobdCloudZipAllBind(ClientContext &context, Tabl
             throw IOException("Failed to open ZIP archive from: " + zip_url);
         }
 
-        // Find index.xml in the ZIP
-        std::string xml_content;
-        std::string index_dir;  // directory prefix containing index.xml
+        // Find ALL index.xml files in the ZIP
+        struct IndexXmlEntry {
+            int file_index;
+            std::string full_path;
+            std::string dir_prefix;
+        };
+        std::vector<IndexXmlEntry> index_entries;
         int num_files = mz_zip_reader_get_num_files(&zip_archive);
 
         for (int i = 0; i < num_files; i++) {
@@ -1190,31 +1212,56 @@ static unique_ptr<FunctionData> GobdCloudZipAllBind(ClientContext &context, Tabl
             if (mz_zip_reader_is_file_a_directory(&zip_archive, i)) continue;
 
             std::string filename = file_stat.m_filename;
-            // Get just the filename part
             std::string basename = filename;
             size_t slash_pos = filename.find_last_of("/\\");
             if (slash_pos != std::string::npos) {
                 basename = filename.substr(slash_pos + 1);
             }
 
-            // Case-insensitive check for index.xml
             std::string lower_basename = basename;
             std::transform(lower_basename.begin(), lower_basename.end(), lower_basename.begin(), ::tolower);
 
             if (lower_basename == "index.xml") {
-                // Extract this file
-                size_t file_size = 0;
-                void *file_data = mz_zip_reader_extract_to_heap(&zip_archive, i, &file_size, 0);
-                if (file_data) {
-                    xml_content = std::string(static_cast<char*>(file_data), file_size);
-                    mz_free(file_data);
+                IndexXmlEntry entry;
+                entry.file_index = i;
+                entry.full_path = filename;
+                entry.dir_prefix = (slash_pos != std::string::npos) ? filename.substr(0, slash_pos + 1) : "";
+                index_entries.push_back(entry);
+            }
+        }
 
-                    // Remember the directory prefix
-                    if (slash_pos != std::string::npos) {
-                        index_dir = filename.substr(0, slash_pos + 1);
-                    }
-                }
-                break;
+        if (index_entries.empty()) {
+            mz_zip_reader_end(&zip_archive);
+            throw IOException("No index.xml found in ZIP archive: " + zip_url);
+        }
+
+        // Sort alphabetically by path
+        std::sort(index_entries.begin(), index_entries.end(),
+                  [](const IndexXmlEntry &a, const IndexXmlEntry &b) {
+                      return a.full_path < b.full_path;
+                  });
+
+        // Select the appropriate index.xml
+        size_t selected = 0;
+        if (read_folder > 0) {
+            if (static_cast<size_t>(read_folder) > index_entries.size()) {
+                mz_zip_reader_end(&zip_archive);
+                throw IOException("read_folder=" + std::to_string(read_folder) +
+                                  " but only " + std::to_string(index_entries.size()) +
+                                  " folders with index.xml found in: " + zip_url);
+            }
+            selected = static_cast<size_t>(read_folder - 1);
+        }
+
+        // Extract the selected index.xml
+        std::string xml_content;
+        std::string index_dir = index_entries[selected].dir_prefix;
+        {
+            size_t file_size = 0;
+            void *file_data = mz_zip_reader_extract_to_heap(&zip_archive, index_entries[selected].file_index, &file_size, 0);
+            if (file_data) {
+                xml_content = std::string(static_cast<char*>(file_data), file_size);
+                mz_free(file_data);
             }
         }
 
@@ -1374,6 +1421,7 @@ void RegisterGobdCloudReaderFunctions(ExtensionLoader &loader) {
         func.named_parameters["password"] = LogicalType::VARCHAR;
         func.named_parameters["delimiter"] = LogicalType::VARCHAR;
         func.named_parameters["overwrite"] = LogicalType::BOOLEAN;
+        func.named_parameters["read_folder"] = LogicalType::INTEGER;
 
         CreateTableFunctionInfo info(func);
         loader.RegisterFunction(info);

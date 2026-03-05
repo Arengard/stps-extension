@@ -966,15 +966,30 @@ SELECT * FROM stps_read_gobd_cloud_all(
 SELECT * FROM buchungsstapel;
 ```
 
-#### `stps_read_gobd_cloud_zip_all(url VARCHAR, username := VARCHAR, password := VARCHAR, delimiter := VARCHAR, overwrite := BOOLEAN) → TABLE`
-Import **all tables** from a ZIP file hosted on cloud (WebDAV/Nextcloud). Downloads the ZIP, extracts `index.xml` and CSV files in-memory, then runs the same import pipeline: creates cleaned DuckDB tables with normalized column names, empty columns removed, and smart type casting.
+#### `stps_read_gobd_cloud_zip_all(url VARCHAR, username := VARCHAR, password := VARCHAR, delimiter := VARCHAR, overwrite := BOOLEAN, read_folder := INTEGER) → TABLE`
+Import **all tables** from a ZIP or 7z file hosted on cloud (WebDAV/Nextcloud). Downloads the archive, extracts `index.xml` and CSV files, then runs the same import pipeline: creates cleaned DuckDB tables with normalized column names, empty columns removed, and smart type casting.
+
+When the archive contains multiple top-level folders (each with its own `index.xml`), use `read_folder` to select which folder to import:
+- `read_folder := 0` (default) — uses the first `index.xml` found (current behavior)
+- `read_folder := 1` — first folder alphabetically
+- `read_folder := 2` — second folder alphabetically, etc.
+
 ```sql
+-- Import from archive (default: first index.xml found)
 SELECT * FROM stps_read_gobd_cloud_zip_all(
   'https://cloud.example.com/remote.php/dav/files/user/export.zip',
   username := 'myuser',
   password := 'mypassword'
 );
 -- Returns: table_name, rows_imported, columns_created, error
+
+-- Import from the second folder in a multi-folder archive
+SELECT * FROM stps_read_gobd_cloud_zip_all(
+  'https://cloud.example.com/remote.php/dav/files/user/Hotels.7z',
+  username := 'myuser',
+  password := 'mypassword',
+  read_folder := 2
+);
 ```
 
 **Notes (cloud GoBD functions):**
