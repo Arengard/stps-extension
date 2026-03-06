@@ -32,17 +32,24 @@ struct GobdImportData {
 
 // Result of importing a single table
 struct GobdImportResult {
+    string schema_name;     // DuckDB schema (empty for default schema)
     string table_name;      // snake_case DuckDB table name
     int64_t rows_imported;
     int32_t columns_created;
+    string archive_url;     // source archive URL (for folder mode)
     string error;           // empty if success
 };
 
 // Shared import pipeline: creates tables, normalizes columns, drops empty cols, smart-casts
+// When schema_name is non-empty, creates tables in that schema
 vector<GobdImportResult> ExecuteGobdImportPipeline(ClientContext &context,
                                                     const GobdImportData &data,
                                                     char delimiter,
-                                                    bool overwrite);
+                                                    bool overwrite,
+                                                    const string &schema_name = "");
+
+// Convert a string to snake_case (exposed for schema name normalization)
+string ToSnakeCase(const string &input);
 
 // Encoding helpers
 bool IsValidUtf8(const std::string &str);

@@ -10,6 +10,14 @@ namespace stps {
 
 CurlHandle::CurlHandle() {
     curl = curl_easy_init();
+#ifdef _WIN32
+    if (curl) {
+        // Use Windows native certificate store and disable revocation checking
+        // (revocation servers being offline causes SSL connect failures on Windows)
+        curl_easy_setopt(curl, CURLOPT_SSL_OPTIONS,
+                         CURLSSLOPT_NATIVE_CA | CURLSSLOPT_NO_REVOKE);
+    }
+#endif
 }
 
 CurlHandle::~CurlHandle() {

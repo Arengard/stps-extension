@@ -20,7 +20,7 @@ $env:PATH = ($env:PATH -split ';' | Select-Object -Unique) -join ';'
 
 Set-Location C:\stps-extension
 
-$vcpkgToolchain = "C:\Users\Ramon\vcpkg\scripts\buildsystems\vcpkg.cmake"
+$vcpkgToolchain = "C:\vcpkg\scripts\buildsystems\vcpkg.cmake"
 
 # Configure if needed (first build or clean build)
 if (-not $Quick -and -not (Test-Path "build\release\CMakeCache.txt")) {

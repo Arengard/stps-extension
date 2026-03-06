@@ -111,7 +111,11 @@ std::vector<std::string> split_words(const std::string& str) {
                 }
             } else if (last_was_lower) {
                 // Transition from lower to upper (e.g., "camelCase")
-                if (!current_word.empty()) {
+                // But don't split if this uppercase char is at the end of the word
+                // (e.g., "GmbH" should stay as one word, not "Gmb" + "H")
+                bool at_word_end = (i + 1 >= str.length()) ||
+                                   is_word_boundary(str[i + 1]);
+                if (!current_word.empty() && !at_word_end) {
                     words.push_back(current_word);
                     current_word.clear();
                 }

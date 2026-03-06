@@ -1109,46 +1109,406 @@ struct GobdCloudZipAllGlobalState : public GlobalTableFunctionState {
     idx_t MaxThreads() const override { return 1; }
 };
 
-static unique_ptr<FunctionData> GobdCloudZipAllBind(ClientContext &context, TableFunctionBindInput &input,
-                                                      vector<LogicalType> &return_types, vector<string> &names) {
-    auto result = make_uniq<GobdCloudZipAllBindData>();
+// Helper: check if URL looks like a direct archive file (ends in .zip or .7z)
+static bool IsArchiveUrl(const std::string &url) {
+    std::string url_lower = url;
+    std::transform(url_lower.begin(), url_lower.end(), url_lower.begin(), ::tolower);
+    return (url_lower.size() >= 4 && url_lower.substr(url_lower.size() - 4) == ".zip") ||
+           (url_lower.size() >= 3 && url_lower.substr(url_lower.size() - 3) == ".7z");
+}
 
-    std::string zip_url = input.inputs[0].ToString();
-    std::string username, password;
-    char delimiter = ';';
-    bool overwrite = false;
-    int32_t read_folder = 0;
+// Helper: check if URL ends in .7z (case-insensitive)
+static bool Is7zUrl(const std::string &url) {
+    std::string url_lower = url;
+    std::transform(url_lower.begin(), url_lower.end(), url_lower.begin(), ::tolower);
+    return (url_lower.size() >= 3 && url_lower.substr(url_lower.size() - 3) == ".7z");
+}
 
-    for (auto &kv : input.named_parameters) {
-        if (kv.first == "username") {
-            username = kv.second.ToString();
-        } else if (kv.first == "password") {
-            password = kv.second.ToString();
-        } else if (kv.first == "delimiter") {
-            string delim_str = kv.second.ToString();
-            if (!delim_str.empty()) delimiter = delim_str[0];
-        } else if (kv.first == "overwrite") {
-            overwrite = BooleanValue::Get(kv.second);
-        } else if (kv.first == "read_folder") {
-            read_folder = IntegerValue::Get(kv.second);
+// Helper: extract filename without extension from URL, returns snake_case
+// SQL escape helpers (duplicated from gobd_reader.cpp since they are static there)
+static string CloudEscapeIdentifier(const string &name) {
+    string escaped;
+    for (char c : name) {
+        if (c == '"') escaped += "\"\"";
+        else escaped += c;
+    }
+    return "\"" + escaped + "\"";
+}
+
+static string CloudEscapeStringLiteral(const string &value) {
+    string escaped;
+    for (char c : value) {
+        if (c == '\'') escaped += "''";
+        else escaped += c;
+    }
+    return "'" + escaped + "'";
+}
+
+// Get the last path segment (folder or file name) from a path
+static std::string GetLastSegment(const std::string &path) {
+    std::string p = path;
+    while (!p.empty() && (p.back() == '/' || p.back() == '\\')) p.pop_back();
+    size_t sep = p.find_last_of("/\\");
+    if (sep != std::string::npos) return p.substr(sep + 1);
+    return p;
+}
+
+// Extract the FIRST (top-level) folder name from a ZIP-internal path
+// e.g. "Hotels by HR GmbH/20260101/index.xml" → "Hotels by HR GmbH"
+// e.g. "20260101/index.xml" → "20260101"
+// e.g. "index.xml" → "" (root level)
+static std::string FirstFolderFromPath(const std::string &path) {
+    size_t first_sep = path.find_first_of("/\\");
+    if (first_sep == std::string::npos) return ""; // root level
+    return path.substr(0, first_sep);
+}
+
+// Extract ALL GoBD folders from a 7z archive (returns folder_name -> import_data pairs)
+static std::vector<std::pair<std::string, GobdImportData>> ReadAllGobdFromDirectory(
+        const std::string &dir_path, const std::string &url_for_errors) {
+    std::vector<std::pair<std::string, GobdImportData>> results;
+
+    std::vector<std::pair<std::string, std::string>> all_files;
+    CollectFiles(dir_path, all_files);
+
+    // Find ALL index.xml files
+    std::vector<std::pair<std::string, std::string>> index_xmls; // (full_path, xml_dir)
+    for (auto &f : all_files) {
+        std::string lower_name = f.first;
+        std::transform(lower_name.begin(), lower_name.end(), lower_name.begin(), ::tolower);
+        if (lower_name == "index.xml") {
+            std::string xml_dir;
+            size_t sep = f.second.find_last_of("/\\");
+            if (sep != std::string::npos) {
+                xml_dir = f.second.substr(0, sep);
+            } else {
+                xml_dir = dir_path;
+            }
+            index_xmls.push_back({f.second, xml_dir});
         }
     }
 
-    // Detect archive type from URL extension
-    std::string url_lower = zip_url;
-    std::transform(url_lower.begin(), url_lower.end(), url_lower.begin(), ::tolower);
-    bool is_7z = (url_lower.size() >= 3 && url_lower.substr(url_lower.size() - 3) == ".7z");
+    if (index_xmls.empty()) {
+        throw IOException("No index.xml found in extracted 7z archive: " + url_for_errors);
+    }
 
-    GobdImportData import_data;
+    std::sort(index_xmls.begin(), index_xmls.end());
 
-    if (is_7z) {
-        // ---- 7z path: download to temp file, extract with 7z CLI ----
-        std::string archive_data = DownloadFile(zip_url, username, password);
-        if (archive_data.empty()) {
-            throw IOException("Could not download 7z file from: " + zip_url);
+    for (auto &entry : index_xmls) {
+        const std::string &xml_path = entry.first;
+        const std::string &xml_dir = entry.second;
+
+        // Get relative path from extract root, then take the FIRST folder segment
+        // e.g. extract_root/CompanyName/20260101/ → relative = CompanyName/20260101 → first = CompanyName
+        std::string folder_name;
+        if (xml_dir.size() > dir_path.size() + 1) {
+            std::string relative = xml_dir.substr(dir_path.size());
+            // Strip leading separator
+            if (!relative.empty() && (relative[0] == '/' || relative[0] == '\\')) {
+                relative = relative.substr(1);
+            }
+            // Get first segment
+            size_t sep = relative.find_first_of("/\\");
+            folder_name = (sep != std::string::npos) ? relative.substr(0, sep) : relative;
+        }
+        // If at extract root, leave empty — caller will use archive name
+        if (xml_dir == dir_path) {
+            folder_name = "";
         }
 
-        // Write to temp file
+        std::string xml_content = ReadFileToString(xml_path);
+        if (xml_content.empty()) continue;
+        xml_content = EnsureUtf8(xml_content);
+
+        auto tables = ParseGobdIndexFromString(xml_content);
+        if (tables.empty()) continue;
+
+        GobdImportData import_data;
+        import_data.tables = tables;
+
+        for (auto &table : tables) {
+            std::string csv_path = xml_dir;
+#ifdef _WIN32
+            csv_path += "\\" + table.url;
+#else
+            csv_path += "/" + table.url;
+#endif
+            std::string csv_content = ReadFileToString(csv_path);
+
+            if (csv_content.empty()) {
+                std::string target_lower = table.url;
+                std::transform(target_lower.begin(), target_lower.end(), target_lower.begin(), ::tolower);
+                for (auto &f : all_files) {
+                    std::string lower_name = f.first;
+                    std::transform(lower_name.begin(), lower_name.end(), lower_name.begin(), ::tolower);
+                    if (lower_name == target_lower) {
+                        csv_content = ReadFileToString(f.second);
+                        break;
+                    }
+                }
+            }
+
+            if (!csv_content.empty()) {
+                import_data.csv_contents[table.url] = csv_content;
+            }
+        }
+
+        results.push_back({folder_name, std::move(import_data)});
+    }
+
+    return results;
+}
+
+// Extract ALL GoBD folders from a single archive URL
+// Returns: vector of (folder_name, GobdImportData) - one per index.xml found
+static std::vector<std::pair<std::string, GobdImportData>> ExtractAllGobdFromArchiveUrl(
+        const std::string &archive_url,
+        const std::string &username,
+        const std::string &password) {
+
+    if (Is7zUrl(archive_url)) {
+        // ---- 7z path ----
+        CurlHeaders dl_headers;
+        BuildAuthHeaders(dl_headers, username, password);
+        long dl_http_code = 0;
+        std::string dl_request_url = NormalizeRequestUrl(archive_url);
+        std::string archive_data = curl_get(dl_request_url, dl_headers, &dl_http_code);
+
+        if (dl_http_code >= 400 || archive_data.empty() || archive_data.find("ERROR:") == 0) {
+            throw IOException("Could not download 7z file from: " + archive_url);
+        }
+
+        std::string temp_dir = GetTempDirectory();
+        std::string temp_file = temp_dir + "gobd_download_" + std::to_string(std::time(nullptr)) + ".7z";
+        {
+            std::ofstream ofs(temp_file, std::ios::binary);
+            if (!ofs) throw IOException("Failed to create temp file: " + temp_file);
+            ofs.write(archive_data.data(), archive_data.size());
+            ofs.close();
+        }
+        archive_data.clear();
+        archive_data.shrink_to_fit();
+
+        std::string extract_dir;
+        std::vector<std::pair<std::string, GobdImportData>> results;
+        try {
+            extract_dir = Extract7zToDirectory(temp_file);
+            std::remove(temp_file.c_str());
+            results = ReadAllGobdFromDirectory(extract_dir, archive_url);
+            CleanupDirectory(extract_dir);
+        } catch (...) {
+            std::remove(temp_file.c_str());
+            if (!extract_dir.empty()) CleanupDirectory(extract_dir);
+            throw;
+        }
+        return results;
+    } else {
+        // ---- ZIP path ----
+        std::string zip_data = DownloadFile(archive_url, username, password);
+        if (zip_data.empty()) {
+            throw IOException("Could not download ZIP file from: " + archive_url);
+        }
+
+        mz_zip_archive zip_archive;
+        memset(&zip_archive, 0, sizeof(zip_archive));
+        if (!mz_zip_reader_init_mem(&zip_archive, zip_data.data(), zip_data.size(), 0)) {
+            throw IOException("Failed to open ZIP archive from: " + archive_url);
+        }
+
+        // Find ALL index.xml files
+        struct ZipIndexEntry {
+            int file_index;
+            std::string filename;
+            std::string index_dir; // directory prefix in zip (with trailing /)
+        };
+        std::vector<ZipIndexEntry> zip_index_xmls;
+        int num_files = mz_zip_reader_get_num_files(&zip_archive);
+
+        for (int i = 0; i < num_files; i++) {
+            mz_zip_archive_file_stat file_stat;
+            if (!mz_zip_reader_file_stat(&zip_archive, i, &file_stat)) continue;
+            if (mz_zip_reader_is_file_a_directory(&zip_archive, i)) continue;
+
+            std::string filename = file_stat.m_filename;
+            std::string basename = filename;
+            size_t slash_pos = filename.find_last_of("/\\");
+            if (slash_pos != std::string::npos) basename = filename.substr(slash_pos + 1);
+
+            std::string lower_basename = basename;
+            std::transform(lower_basename.begin(), lower_basename.end(), lower_basename.begin(), ::tolower);
+
+            if (lower_basename == "index.xml") {
+                ZipIndexEntry entry;
+                entry.file_index = i;
+                entry.filename = filename;
+                entry.index_dir = (slash_pos != std::string::npos) ? filename.substr(0, slash_pos + 1) : "";
+                zip_index_xmls.push_back(entry);
+            }
+        }
+
+        if (zip_index_xmls.empty()) {
+            mz_zip_reader_end(&zip_archive);
+            throw IOException("No index.xml found in ZIP archive: " + archive_url);
+        }
+
+        std::sort(zip_index_xmls.begin(), zip_index_xmls.end(),
+                  [](const ZipIndexEntry &a, const ZipIndexEntry &b) { return a.filename < b.filename; });
+
+        std::vector<std::pair<std::string, GobdImportData>> results;
+
+        for (auto &idx_entry : zip_index_xmls) {
+            // Extract folder name
+            std::string folder_name = FirstFolderFromPath(idx_entry.filename);
+
+            // Read index.xml
+            size_t file_size = 0;
+            void *file_data = mz_zip_reader_extract_to_heap(&zip_archive, idx_entry.file_index, &file_size, 0);
+            if (!file_data) continue;
+
+            std::string xml_content(static_cast<char*>(file_data), file_size);
+            mz_free(file_data);
+
+            xml_content = EnsureUtf8(xml_content);
+            auto tables = ParseGobdIndexFromString(xml_content);
+            if (tables.empty()) continue;
+
+            GobdImportData import_data;
+            import_data.tables = tables;
+
+            for (auto &table : tables) {
+                std::string zip_path = idx_entry.index_dir + table.url;
+                int fi = mz_zip_reader_locate_file(&zip_archive, zip_path.c_str(), nullptr, 0);
+                if (fi < 0) {
+                    fi = mz_zip_reader_locate_file(&zip_archive, table.url.c_str(), nullptr, 0);
+                }
+                if (fi >= 0) {
+                    size_t csv_size = 0;
+                    void *csv_data = mz_zip_reader_extract_to_heap(&zip_archive, fi, &csv_size, 0);
+                    if (csv_data) {
+                        import_data.csv_contents[table.url] = std::string(static_cast<char*>(csv_data), csv_size);
+                        mz_free(csv_data);
+                    }
+                }
+            }
+
+            results.push_back({folder_name, std::move(import_data)});
+        }
+
+        mz_zip_reader_end(&zip_archive);
+        return results;
+    }
+}
+
+// Get column names of a table
+static std::vector<std::string> GetTableColumns(Connection &conn, const std::string &schema, const std::string &table) {
+    std::string sql = "SELECT column_name FROM information_schema.columns WHERE table_schema = " +
+                      CloudEscapeStringLiteral(schema) + " AND table_name = " +
+                      CloudEscapeStringLiteral(table) + " ORDER BY ordinal_position";
+    auto result = conn.Query(sql);
+    std::vector<std::string> cols;
+    if (result && result->RowCount() > 0) {
+        for (idx_t i = 0; i < result->RowCount(); i++) {
+            cols.push_back(result->GetValue(0, i).ToString());
+        }
+    }
+    return cols;
+}
+
+// Enrich all tables in a schema with mandantendaten columns (cross join with 1-row mandantendaten)
+static void EnrichWithMandantendaten(Connection &conn, const std::string &schema_name,
+                                      const std::vector<std::string> &table_names) {
+    auto md_cols = GetTableColumns(conn, schema_name, "mandantendaten");
+    if (md_cols.empty()) return;
+
+    std::string escaped_schema = CloudEscapeIdentifier(schema_name);
+
+    for (auto &table_name : table_names) {
+        if (table_name == "mandantendaten") continue;
+
+        auto t_cols = GetTableColumns(conn, schema_name, table_name);
+        if (t_cols.empty()) continue;
+
+        // Build SELECT: mandantendaten cols not already in target table, then all target cols
+        std::set<std::string> t_col_set(t_cols.begin(), t_cols.end());
+        std::string select_list;
+        for (auto &mc : md_cols) {
+            if (t_col_set.count(mc) == 0) {
+                if (!select_list.empty()) select_list += ", ";
+                select_list += "m." + CloudEscapeIdentifier(mc);
+            }
+        }
+        if (select_list.empty()) continue;
+
+        select_list += ", t.*";
+
+        std::string sql = "CREATE OR REPLACE TABLE " + escaped_schema + "." + CloudEscapeIdentifier(table_name) +
+                          " AS SELECT " + select_list +
+                          " FROM " + escaped_schema + ".mandantendaten m, " +
+                          escaped_schema + "." + CloudEscapeIdentifier(table_name) + " t";
+        conn.Query(sql);
+    }
+}
+
+// Consolidate all schemas into main: for each table name, UNION ALL BY NAME from all schemas
+static void ConsolidateIntoMain(Connection &conn,
+                                 const std::vector<std::pair<std::string, std::vector<std::string>>> &schema_tables) {
+    // Collect table_name -> list of schemas that have it
+    std::map<std::string, std::vector<std::string>> table_to_schemas;
+    for (auto &st : schema_tables) {
+        for (auto &t : st.second) {
+            table_to_schemas[t].push_back(st.first);
+        }
+    }
+
+    for (auto &entry : table_to_schemas) {
+        const std::string &table_name = entry.first;
+        const std::vector<std::string> &schemas = entry.second;
+        if (schemas.empty()) continue;
+
+        std::string sql = "CREATE OR REPLACE TABLE main." + CloudEscapeIdentifier(table_name) + " AS ";
+        for (size_t i = 0; i < schemas.size(); i++) {
+            if (i > 0) sql += " UNION ALL BY NAME ";
+            sql += "SELECT * FROM " + CloudEscapeIdentifier(schemas[i]) + "." + CloudEscapeIdentifier(table_name);
+        }
+        conn.Query(sql);
+    }
+}
+
+static std::string ArchiveUrlToSchemaName(const std::string &url) {
+    // Get last path segment (filename)
+    std::string filename = GetLastPathSegment(url);
+    // Remove extension
+    size_t dot_pos = filename.find_last_of('.');
+    if (dot_pos != std::string::npos) {
+        filename = filename.substr(0, dot_pos);
+    }
+    // Percent-decode
+    filename = PercentDecodePath(filename);
+    return ToSnakeCase(filename);
+}
+
+// Helper: download and extract GoBD data from a single archive URL
+static GobdImportData ExtractGobdFromArchiveUrl(const std::string &archive_url,
+                                                  const std::string &username,
+                                                  const std::string &password,
+                                                  int32_t read_folder = 0) {
+    GobdImportData import_data;
+
+    if (Is7zUrl(archive_url)) {
+        // ---- 7z path: download to temp file, extract with 7z CLI ----
+        CurlHeaders dl_headers;
+        BuildAuthHeaders(dl_headers, username, password);
+        long dl_http_code = 0;
+        std::string dl_request_url = NormalizeRequestUrl(archive_url);
+        std::string archive_data = curl_get(dl_request_url, dl_headers, &dl_http_code);
+
+        if (dl_http_code >= 400 || archive_data.empty() || archive_data.find("ERROR:") == 0) {
+            throw IOException("Could not download 7z file from: " + archive_url +
+                              " (HTTP " + std::to_string(dl_http_code) +
+                              ", response_size=" + std::to_string(archive_data.size()) +
+                              (archive_data.size() < 500 ? ", body=" + archive_data : "") + ")");
+        }
+
         std::string temp_dir = GetTempDirectory();
         std::string temp_file = temp_dir + "gobd_download_" + std::to_string(std::time(nullptr)) + ".7z";
         {
@@ -1160,22 +1520,16 @@ static unique_ptr<FunctionData> GobdCloudZipAllBind(ClientContext &context, Tabl
             ofs.close();
         }
 
-        // Free download memory early
         archive_data.clear();
         archive_data.shrink_to_fit();
 
         std::string extract_dir;
         try {
             extract_dir = Extract7zToDirectory(temp_file);
-            // Remove the temp archive file (no longer needed)
             std::remove(temp_file.c_str());
-
-            import_data = ReadGobdFromDirectory(extract_dir, zip_url, read_folder);
-
-            // Clean up extracted directory
+            import_data = ReadGobdFromDirectory(extract_dir, archive_url, read_folder);
             CleanupDirectory(extract_dir);
         } catch (...) {
-            // Clean up on any error
             std::remove(temp_file.c_str());
             if (!extract_dir.empty()) {
                 CleanupDirectory(extract_dir);
@@ -1183,27 +1537,26 @@ static unique_ptr<FunctionData> GobdCloudZipAllBind(ClientContext &context, Tabl
             throw;
         }
     } else {
-        // ---- ZIP path: in-memory extraction with miniz (existing logic) ----
-        std::string zip_data = DownloadFile(zip_url, username, password);
+        // ---- ZIP path: in-memory extraction with miniz ----
+        std::string zip_data = DownloadFile(archive_url, username, password);
         if (zip_data.empty()) {
-            throw IOException("Could not download ZIP file from: " + zip_url);
+            throw IOException("Could not download ZIP file from: " + archive_url);
         }
 
-        // Open ZIP from memory
         mz_zip_archive zip_archive;
         memset(&zip_archive, 0, sizeof(zip_archive));
 
         if (!mz_zip_reader_init_mem(&zip_archive, zip_data.data(), zip_data.size(), 0)) {
-            throw IOException("Failed to open ZIP archive from: " + zip_url);
+            throw IOException("Failed to open ZIP archive from: " + archive_url);
         }
 
-        // Find ALL index.xml files in the ZIP
+        // Collect ALL index.xml files in the ZIP (case-insensitive)
         struct IndexXmlEntry {
             int file_index;
-            std::string full_path;
-            std::string dir_prefix;
+            std::string filename;
+            std::string index_dir;
         };
-        std::vector<IndexXmlEntry> index_entries;
+        std::vector<IndexXmlEntry> index_xmls;
         int num_files = mz_zip_reader_get_num_files(&zip_archive);
 
         for (int i = 0; i < num_files; i++) {
@@ -1224,41 +1577,38 @@ static unique_ptr<FunctionData> GobdCloudZipAllBind(ClientContext &context, Tabl
             if (lower_basename == "index.xml") {
                 IndexXmlEntry entry;
                 entry.file_index = i;
-                entry.full_path = filename;
-                entry.dir_prefix = (slash_pos != std::string::npos) ? filename.substr(0, slash_pos + 1) : "";
-                index_entries.push_back(entry);
+                entry.filename = filename;
+                entry.index_dir = (slash_pos != std::string::npos) ? filename.substr(0, slash_pos + 1) : "";
+                index_xmls.push_back(entry);
             }
         }
 
-        if (index_entries.empty()) {
+        if (index_xmls.empty()) {
             mz_zip_reader_end(&zip_archive);
-            throw IOException("No index.xml found in ZIP archive: " + zip_url);
+            throw IOException("No index.xml found in ZIP archive: " + archive_url);
         }
 
-        // Sort alphabetically by path
-        std::sort(index_entries.begin(), index_entries.end(),
-                  [](const IndexXmlEntry &a, const IndexXmlEntry &b) {
-                      return a.full_path < b.full_path;
-                  });
+        // Sort by filename for deterministic ordering
+        std::sort(index_xmls.begin(), index_xmls.end(),
+                  [](const IndexXmlEntry &a, const IndexXmlEntry &b) { return a.filename < b.filename; });
 
-        // Select the appropriate index.xml
+        // Select the appropriate index.xml based on read_folder
         size_t selected = 0;
         if (read_folder > 0) {
-            if (static_cast<size_t>(read_folder) > index_entries.size()) {
+            if (static_cast<size_t>(read_folder) > index_xmls.size()) {
                 mz_zip_reader_end(&zip_archive);
                 throw IOException("read_folder=" + std::to_string(read_folder) +
-                                  " but only " + std::to_string(index_entries.size()) +
-                                  " folders with index.xml found in: " + zip_url);
+                                  " but only " + std::to_string(index_xmls.size()) +
+                                  " folders with index.xml found in ZIP: " + archive_url);
             }
             selected = static_cast<size_t>(read_folder - 1);
         }
 
-        // Extract the selected index.xml
+        std::string index_dir = index_xmls[selected].index_dir;
         std::string xml_content;
-        std::string index_dir = index_entries[selected].dir_prefix;
         {
             size_t file_size = 0;
-            void *file_data = mz_zip_reader_extract_to_heap(&zip_archive, index_entries[selected].file_index, &file_size, 0);
+            void *file_data = mz_zip_reader_extract_to_heap(&zip_archive, index_xmls[selected].file_index, &file_size, 0);
             if (file_data) {
                 xml_content = std::string(static_cast<char*>(file_data), file_size);
                 mz_free(file_data);
@@ -1267,31 +1617,24 @@ static unique_ptr<FunctionData> GobdCloudZipAllBind(ClientContext &context, Tabl
 
         if (xml_content.empty()) {
             mz_zip_reader_end(&zip_archive);
-            throw IOException("No index.xml found in ZIP archive: " + zip_url);
+            throw IOException("Failed to extract index.xml from ZIP archive: " + archive_url);
         }
 
         xml_content = EnsureUtf8(xml_content);
-
-        // Parse tables
         auto tables = ParseGobdIndexFromString(xml_content);
         if (tables.empty()) {
             mz_zip_reader_end(&zip_archive);
-            throw BinderException("No tables found in GoBD index within ZIP: " + zip_url);
+            throw BinderException("No tables found in GoBD index within ZIP: " + archive_url);
         }
 
-        // Build import data: extract each CSV from ZIP
         import_data.tables = tables;
 
         for (auto &table : tables) {
-            // The CSV path in index.xml is relative to the index.xml location
             std::string zip_path = index_dir + table.url;
-
             int file_index = mz_zip_reader_locate_file(&zip_archive, zip_path.c_str(), nullptr, 0);
             if (file_index < 0) {
-                // Try without directory prefix
                 file_index = mz_zip_reader_locate_file(&zip_archive, table.url.c_str(), nullptr, 0);
             }
-
             if (file_index >= 0) {
                 size_t file_size = 0;
                 void *file_data = mz_zip_reader_extract_to_heap(&zip_archive, file_index, &file_size, 0);
@@ -1305,16 +1648,275 @@ static unique_ptr<FunctionData> GobdCloudZipAllBind(ClientContext &context, Tabl
         mz_zip_reader_end(&zip_archive);
     }
 
-    // Execute shared pipeline (both paths converge here)
-    result->import_results = ExecuteGobdImportPipeline(context, import_data, delimiter, overwrite);
+    return import_data;
+}
+
+static unique_ptr<FunctionData> GobdCloudZipAllBind(ClientContext &context, TableFunctionBindInput &input,
+                                                      vector<LogicalType> &return_types, vector<string> &names) {
+    auto result = make_uniq<GobdCloudZipAllBindData>();
+
+    std::string url = input.inputs[0].ToString();
+    std::string username, password;
+    char delimiter = ';';
+    bool overwrite = false;
+    int32_t read_folder = 0;
+
+    for (auto &kv : input.named_parameters) {
+        if (kv.first == "username") {
+            username = kv.second.ToString();
+        } else if (kv.first == "password") {
+            password = kv.second.ToString();
+        } else if (kv.first == "delimiter") {
+            string delim_str = kv.second.ToString();
+            if (!delim_str.empty()) delimiter = delim_str[0];
+        } else if (kv.first == "overwrite") {
+            overwrite = BooleanValue::Get(kv.second);
+        } else if (kv.first == "read_folder") {
+            read_folder = IntegerValue::Get(kv.second);
+        }
+    }
+
+    if (IsArchiveUrl(url)) {
+        if (read_folder > 0) {
+            // ---- Single folder mode: import only the specified folder (backward compat) ----
+            GobdImportData import_data = ExtractGobdFromArchiveUrl(url, username, password, read_folder);
+            result->import_results = ExecuteGobdImportPipeline(context, import_data, delimiter, overwrite);
+        } else {
+            // ---- All folders mode: import every index.xml folder into its own schema ----
+            auto all_folders = ExtractAllGobdFromArchiveUrl(url, username, password);
+            std::string archive_base = ArchiveUrlToSchemaName(url);
+
+            // Deduplicate schema names
+            std::set<std::string> used_schemas;
+            std::vector<std::pair<std::string, std::vector<std::string>>> schema_table_list; // for consolidation
+
+            for (auto &folder_pair : all_folders) {
+                std::string folder_name = folder_pair.first;
+                std::string schema_name = folder_name.empty()
+                    ? archive_base
+                    : ToSnakeCase(folder_name);
+
+                std::string base_schema = schema_name;
+                int suffix = 2;
+                while (used_schemas.count(schema_name)) {
+                    schema_name = base_schema + "_" + std::to_string(suffix++);
+                }
+                used_schemas.insert(schema_name);
+
+                try {
+                    auto archive_results = ExecuteGobdImportPipeline(context, folder_pair.second, delimiter, overwrite, schema_name);
+
+                    // Collect table names for enrichment + consolidation
+                    std::vector<std::string> table_names;
+                    for (auto &r : archive_results) {
+                        r.archive_url = url;
+                        if (r.error.empty()) {
+                            table_names.push_back(r.table_name);
+                        }
+                    }
+
+                    // Enrich tables with mandantendaten columns
+                    if (!table_names.empty()) {
+                        Connection conn(context.db->GetDatabase(context));
+                        EnrichWithMandantendaten(conn, schema_name, table_names);
+                    }
+
+                    schema_table_list.push_back({schema_name, table_names});
+
+                    result->import_results.insert(result->import_results.end(),
+                                                  archive_results.begin(), archive_results.end());
+                } catch (std::exception &e) {
+                    GobdImportResult err_result;
+                    err_result.schema_name = schema_name;
+                    err_result.table_name = "(folder)";
+                    err_result.rows_imported = 0;
+                    err_result.columns_created = 0;
+                    err_result.archive_url = url;
+                    err_result.error = e.what();
+                    result->import_results.push_back(err_result);
+                }
+            }
+
+            // Consolidate all schemas into main
+            if (!schema_table_list.empty()) {
+                Connection conn(context.db->GetDatabase(context));
+                ConsolidateIntoMain(conn, schema_table_list);
+            }
+        }
+    } else {
+        // ---- Folder mode: list folder, find all zip/7z files, create schema per archive ----
+
+        // Ensure URL ends with /
+        std::string folder_url = url;
+        if (!folder_url.empty() && folder_url.back() != '/') {
+            folder_url += '/';
+        }
+
+        // List folder contents via WebDAV PROPFIND
+        CurlHeaders headers;
+        BuildAuthHeaders(headers, username, password);
+        headers.append("Depth: 1");
+
+        std::string request_url = NormalizeRequestUrl(folder_url);
+        std::string propfind_response = curl_propfind(request_url, PROPFIND_BODY, headers);
+
+        if (propfind_response.empty() || propfind_response.find("ERROR:") == 0) {
+            throw IOException("Failed to list folder: " + folder_url +
+                              (propfind_response.size() < 500 ? " (" + propfind_response + ")" : ""));
+        }
+
+        auto entries = ParsePropfindResponse(propfind_response);
+
+        // Filter for .zip and .7z files (skip collections/directories)
+        std::vector<std::string> archive_urls;
+        std::string base_url = GetBaseUrl(folder_url);
+
+        for (auto &entry : entries) {
+            if (entry.is_collection) continue;
+
+            std::string entry_url_lower = entry.href;
+            std::transform(entry_url_lower.begin(), entry_url_lower.end(), entry_url_lower.begin(), ::tolower);
+
+            bool is_archive = (entry_url_lower.size() >= 4 && entry_url_lower.substr(entry_url_lower.size() - 4) == ".zip") ||
+                              (entry_url_lower.size() >= 3 && entry_url_lower.substr(entry_url_lower.size() - 3) == ".7z");
+
+            if (is_archive) {
+                // Build full URL from href
+                std::string full_url;
+                if (entry.href.find("://") != std::string::npos) {
+                    full_url = entry.href;
+                } else {
+                    full_url = base_url + entry.href;
+                }
+                archive_urls.push_back(full_url);
+            }
+        }
+
+        if (archive_urls.empty()) {
+            throw IOException("No .zip or .7z files found in folder: " + folder_url);
+        }
+
+        // Sort for deterministic ordering
+        std::sort(archive_urls.begin(), archive_urls.end());
+
+        // Deduplicate schema names
+        std::set<std::string> used_schemas;
+        std::vector<std::pair<std::string, std::string>> archive_schema_pairs; // (url, schema_name)
+
+        for (auto &archive_url : archive_urls) {
+            std::string schema = ArchiveUrlToSchemaName(archive_url);
+            std::string base_schema = schema;
+            int suffix = 2;
+            while (used_schemas.count(schema)) {
+                schema = base_schema + "_" + std::to_string(suffix++);
+            }
+            used_schemas.insert(schema);
+            archive_schema_pairs.push_back({archive_url, schema});
+        }
+
+        // Process each archive — extract all GoBD folders within each
+        std::vector<std::pair<std::string, std::vector<std::string>>> folder_schema_table_list;
+
+        for (auto &pair : archive_schema_pairs) {
+            const std::string &archive_url = pair.first;
+            const std::string &archive_schema = pair.second;
+
+            try {
+                if (read_folder > 0) {
+                    // Specific folder only
+                    GobdImportData import_data = ExtractGobdFromArchiveUrl(archive_url, username, password, read_folder);
+                    auto archive_results = ExecuteGobdImportPipeline(context, import_data, delimiter, overwrite, archive_schema);
+
+                    std::vector<std::string> table_names;
+                    for (auto &r : archive_results) {
+                        r.archive_url = archive_url;
+                        if (r.error.empty()) table_names.push_back(r.table_name);
+                    }
+
+                    if (!table_names.empty()) {
+                        Connection conn(context.db->GetDatabase(context));
+                        EnrichWithMandantendaten(conn, archive_schema, table_names);
+                    }
+                    folder_schema_table_list.push_back({archive_schema, table_names});
+                    result->import_results.insert(result->import_results.end(),
+                                                  archive_results.begin(), archive_results.end());
+                } else {
+                    // All folders within this archive
+                    auto all_folders = ExtractAllGobdFromArchiveUrl(archive_url, username, password);
+
+                    for (auto &folder_pair : all_folders) {
+                        std::string folder_name = folder_pair.first;
+                        // Schema: use folder name if available, otherwise archive name
+                        std::string schema_name = folder_name.empty()
+                            ? archive_schema
+                            : ToSnakeCase(folder_name);
+
+                        // Deduplicate
+                        std::string base_schema = schema_name;
+                        int suffix = 2;
+                        while (used_schemas.count(schema_name)) {
+                            schema_name = base_schema + "_" + std::to_string(suffix++);
+                        }
+                        used_schemas.insert(schema_name);
+
+                        try {
+                            auto folder_results = ExecuteGobdImportPipeline(context, folder_pair.second, delimiter, overwrite, schema_name);
+
+                            std::vector<std::string> table_names;
+                            for (auto &r : folder_results) {
+                                r.archive_url = archive_url;
+                                if (r.error.empty()) table_names.push_back(r.table_name);
+                            }
+
+                            if (!table_names.empty()) {
+                                Connection conn(context.db->GetDatabase(context));
+                                EnrichWithMandantendaten(conn, schema_name, table_names);
+                            }
+                            folder_schema_table_list.push_back({schema_name, table_names});
+                            result->import_results.insert(result->import_results.end(),
+                                                          folder_results.begin(), folder_results.end());
+                        } catch (std::exception &e) {
+                            GobdImportResult err_result;
+                            err_result.schema_name = schema_name;
+                            err_result.table_name = "(folder)";
+                            err_result.rows_imported = 0;
+                            err_result.columns_created = 0;
+                            err_result.archive_url = archive_url;
+                            err_result.error = e.what();
+                            result->import_results.push_back(err_result);
+                        }
+                    }
+                }
+            } catch (std::exception &e) {
+                GobdImportResult err_result;
+                err_result.schema_name = archive_schema;
+                err_result.table_name = "(archive)";
+                err_result.rows_imported = 0;
+                err_result.columns_created = 0;
+                err_result.archive_url = archive_url;
+                err_result.error = e.what();
+                result->import_results.push_back(err_result);
+            }
+        }
+
+        // Consolidate all schemas into main
+        if (!folder_schema_table_list.empty()) {
+            Connection conn(context.db->GetDatabase(context));
+            ConsolidateIntoMain(conn, folder_schema_table_list);
+        }
+    }
 
     // Output schema
+    names.emplace_back("schema_name");
+    return_types.emplace_back(LogicalType::VARCHAR);
     names.emplace_back("table_name");
     return_types.emplace_back(LogicalType::VARCHAR);
     names.emplace_back("rows_imported");
     return_types.emplace_back(LogicalType::BIGINT);
     names.emplace_back("columns_created");
     return_types.emplace_back(LogicalType::INTEGER);
+    names.emplace_back("archive_url");
+    return_types.emplace_back(LogicalType::VARCHAR);
     names.emplace_back("error");
     return_types.emplace_back(LogicalType::VARCHAR);
 
@@ -1332,10 +1934,12 @@ static void GobdCloudZipAllScan(ClientContext &context, TableFunctionInput &data
     idx_t count = 0;
     while (state.offset < bind_data.import_results.size() && count < STANDARD_VECTOR_SIZE) {
         auto &r = bind_data.import_results[state.offset];
-        output.SetValue(0, count, Value(r.table_name));
-        output.SetValue(1, count, Value::BIGINT(r.rows_imported));
-        output.SetValue(2, count, Value::INTEGER(r.columns_created));
-        output.SetValue(3, count, r.error.empty() ? Value() : Value(r.error));
+        output.SetValue(0, count, r.schema_name.empty() ? Value() : Value(r.schema_name));
+        output.SetValue(1, count, Value(r.table_name));
+        output.SetValue(2, count, Value::BIGINT(r.rows_imported));
+        output.SetValue(3, count, Value::INTEGER(r.columns_created));
+        output.SetValue(4, count, r.archive_url.empty() ? Value() : Value(r.archive_url));
+        output.SetValue(5, count, r.error.empty() ? Value() : Value(r.error));
         state.offset++;
         count++;
     }

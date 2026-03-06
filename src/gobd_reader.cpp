@@ -356,7 +356,7 @@ std::string ConvertToUtf8(const std::string &input, const std::string &encoding)
 // ============ Shared Import Pipeline ============
 
 // Convert a name to snake_case: lowercase, replace non-alphanumeric with _, collapse multiples
-static string ToSnakeCase(const string &input) {
+string ToSnakeCase(const string &input) {
     string result;
     result.reserve(input.size());
     bool last_was_underscore = false;
@@ -434,14 +434,24 @@ static string NormalizeSqlPath(const string &path) {
 vector<GobdImportResult> ExecuteGobdImportPipeline(ClientContext &context,
                                                     const GobdImportData &data,
                                                     char delimiter,
-                                                    bool overwrite) {
+                                                    bool overwrite,
+                                                    const string &schema_name) {
     vector<GobdImportResult> results;
     Connection conn(context.db->GetDatabase(context));
+
+    // Create schema if specified
+    string escaped_schema;
+    string table_prefix;  // "schema"."table" or just "table"
+    if (!schema_name.empty()) {
+        escaped_schema = EscapeIdentifier(schema_name);
+        conn.Query("CREATE SCHEMA IF NOT EXISTS " + escaped_schema);
+    }
 
     for (auto &table : data.tables) {
         GobdImportResult result;
         result.rows_imported = 0;
         result.columns_created = 0;
+        result.schema_name = schema_name;
 
         // Get CSV content for this table
         auto csv_it = data.csv_contents.find(table.url);
@@ -455,7 +465,9 @@ vector<GobdImportResult> ExecuteGobdImportPipeline(ClientContext &context,
         // Normalize table name
         string table_name = ToSnakeCase(table.name);
         result.table_name = table_name;
-        string escaped_table = EscapeIdentifier(table_name);
+        string escaped_table = schema_name.empty()
+            ? EscapeIdentifier(table_name)
+            : escaped_schema + "." + EscapeIdentifier(table_name);
 
         // Normalize column names, handle duplicates
         vector<string> normalized_cols;
@@ -479,8 +491,13 @@ vector<GobdImportResult> ExecuteGobdImportPipeline(ClientContext &context,
 
         // Check if table exists
         {
-            auto check = conn.Query("SELECT 1 FROM information_schema.tables WHERE table_name = " +
-                                    EscapeStringLiteral(table_name) + " LIMIT 1");
+            string check_sql = "SELECT 1 FROM information_schema.tables WHERE table_name = " +
+                               EscapeStringLiteral(table_name);
+            if (!schema_name.empty()) {
+                check_sql += " AND table_schema = " + EscapeStringLiteral(schema_name);
+            }
+            check_sql += " LIMIT 1";
+            auto check = conn.Query(check_sql);
             if (check && check->RowCount() > 0) {
                 if (overwrite) {
                     conn.Query("DROP TABLE IF EXISTS " + escaped_table);
@@ -666,8 +683,12 @@ vector<GobdImportResult> ExecuteGobdImportPipeline(ClientContext &context,
 
         // Step 4: Smart cast types
         if (result.rows_imported > 0) {
+            // stps_smart_cast needs schema-qualified name when using schemas
+            string smart_cast_arg = schema_name.empty()
+                ? EscapeStringLiteral(table_name)
+                : EscapeStringLiteral(schema_name + "." + table_name);
             string cast_sql = "CREATE OR REPLACE TABLE " + escaped_table +
-                              " AS SELECT * FROM stps_smart_cast(" + EscapeStringLiteral(table_name) + ")";
+                              " AS SELECT * FROM stps_smart_cast(" + smart_cast_arg + ")";
             auto cast_result = conn.Query(cast_sql);
             if (cast_result && cast_result->HasError()) {
                 // Smart cast failed - keep VARCHAR table, not a fatal error

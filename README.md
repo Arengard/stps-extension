@@ -967,30 +967,142 @@ SELECT * FROM buchungsstapel;
 ```
 
 #### `stps_read_gobd_cloud_zip_all(url VARCHAR, username := VARCHAR, password := VARCHAR, delimiter := VARCHAR, overwrite := BOOLEAN, read_folder := INTEGER) → TABLE`
-Import **all tables** from a ZIP or 7z file hosted on cloud (WebDAV/Nextcloud). Downloads the archive, extracts `index.xml` and CSV files, then runs the same import pipeline: creates cleaned DuckDB tables with normalized column names, empty columns removed, and smart type casting.
+Import **all tables** from a ZIP or 7z archive hosted on cloud (WebDAV/Nextcloud). Downloads the archive, extracts `index.xml` and CSV files, then runs the same import pipeline: creates cleaned DuckDB tables with normalized column names, empty columns removed, and smart type casting.
 
-When the archive contains multiple top-level folders (each with its own `index.xml`), use `read_folder` to select which folder to import:
-- `read_folder := 0` (default) — uses the first `index.xml` found (current behavior)
-- `read_folder := 1` — first folder alphabetically
-- `read_folder := 2` — second folder alphabetically, etc.
+> **Archive formats:** Supports both `.zip` and `.7z` archives, auto-detected from the URL extension. ZIP files are extracted in-memory; `.7z` files require 7-Zip installed on the system (`C:\Program Files\7-Zip\7z.exe` or `7z` in PATH).
+
+**Named Parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `username` | VARCHAR | — | WebDAV/Nextcloud username for HTTP Basic Auth |
+| `password` | VARCHAR | — | WebDAV/Nextcloud password for HTTP Basic Auth |
+| `delimiter` | VARCHAR | `';'` | CSV field delimiter (common GoBD exports use `;`) |
+| `overwrite` | BOOLEAN | `false` | Drop and recreate existing tables if they already exist |
+| `read_folder` | INTEGER | `0` | Which GoBD folder to import from a multi-folder archive. `0` = all folders (each gets its own schema), `1` = first folder only, `2` = second, etc. |
+
+**Returns:** `schema_name VARCHAR, table_name VARCHAR, rows_imported BIGINT, columns_created INTEGER, archive_url VARCHAR, error VARCHAR`
+
+---
+
+**Use Case 1: Single archive — all folders (default)**
+
+When a URL points to a `.zip` or `.7z` file and `read_folder` is `0` (default), the function finds **every** `index.xml` inside the archive and imports each GoBD folder into its own DuckDB schema. Schema names are derived from the **top-level folder** inside the archive (e.g. `Hotels by HR GmbH/20260101/index.xml` → schema `hotels_by_hr_gmbh`). Tables from all schemas are also consolidated into the `main` schema via `UNION ALL BY NAME`.
+
+If a `mandantendaten` (client master data) table exists in a schema, its columns are automatically cross-joined onto every other table in that schema — enriching transaction data with company metadata.
 
 ```sql
--- Import from archive (default: first index.xml found)
+-- Import all GoBD folders from a ZIP archive
 SELECT * FROM stps_read_gobd_cloud_zip_all(
   'https://cloud.example.com/remote.php/dav/files/user/export.zip',
   username := 'myuser',
   password := 'mypassword'
 );
--- Returns: table_name, rows_imported, columns_created, error
+-- Each index.xml folder creates its own schema:
+--   schema 'hotels_by_hr_gmbh' → buchungsstapel, konto, mandantendaten, ...
+--   schema 'restaurants_gmbh'  → buchungsstapel, konto, mandantendaten, ...
+-- Plus consolidated tables in main:
+--   main.buchungsstapel = UNION ALL BY NAME from all schemas
 
--- Import from the second folder in a multi-folder archive
+-- Query a specific schema:
+SELECT * FROM hotels_by_hr_gmbh.buchungsstapel;
+
+-- Query consolidated data across all companies:
+SELECT * FROM main.buchungsstapel;
+```
+
+```sql
+-- Same with .7z (requires 7-Zip installed)
 SELECT * FROM stps_read_gobd_cloud_zip_all(
-  'https://cloud.example.com/remote.php/dav/files/user/Hotels.7z',
+  'https://cloud.example.com/remote.php/dav/files/user/export.7z',
+  username := 'myuser',
+  password := 'mypassword'
+);
+```
+
+---
+
+**Use Case 2: Single archive — specific folder only**
+
+Use `read_folder` to import only the Nth GoBD folder from an archive (1-based). Useful when you only need one company's data from a multi-company archive.
+
+```sql
+-- Import only the first GoBD folder from the archive
+SELECT * FROM stps_read_gobd_cloud_zip_all(
+  'https://cloud.example.com/remote.php/dav/files/user/export.zip',
+  username := 'myuser',
+  password := 'mypassword',
+  read_folder := 1
+);
+
+-- Import the second folder
+SELECT * FROM stps_read_gobd_cloud_zip_all(
+  'https://cloud.example.com/remote.php/dav/files/user/export.zip',
   username := 'myuser',
   password := 'mypassword',
   read_folder := 2
 );
 ```
+
+---
+
+**Use Case 3: Folder mode — all archives, all folders (default)**
+
+When the URL does **not** end in `.zip` or `.7z`, the function treats it as a WebDAV folder. It scans for all `.zip` and `.7z` files in that folder, then processes each archive the same way as Use Case 1. Each GoBD folder within each archive gets its own schema. All schemas are consolidated into `main` via `UNION ALL BY NAME`.
+
+```sql
+-- Point to a folder with multiple GoBD archives
+SELECT * FROM stps_read_gobd_cloud_zip_all(
+  'https://cloud.example.com/remote.php/dav/files/user/GDPDU 2026-01/',
+  username := 'myuser',
+  password := 'mypassword'
+);
+-- Archive "Company A.7z" with folders "Hotel Berlin" and "Hotel Munich":
+--   schema 'hotel_berlin' → buchungsstapel, konto, ...
+--   schema 'hotel_munich' → buchungsstapel, konto, ...
+-- Archive "Company B.zip" with folder "Restaurant GmbH":
+--   schema 'restaurant_gmbh' → buchungsstapel, konto, ...
+-- Plus consolidated main tables
+
+-- Query per-company data:
+SELECT * FROM hotel_berlin.buchungsstapel;
+
+-- Query all companies combined:
+SELECT * FROM main.buchungsstapel;
+```
+
+---
+
+**Use Case 4: Folder mode — all archives, specific folder only**
+
+Combine folder mode with `read_folder` to import only the Nth GoBD folder from each archive in the folder.
+
+```sql
+-- Import only the first GoBD folder from each archive in the folder
+SELECT * FROM stps_read_gobd_cloud_zip_all(
+  'https://cloud.example.com/remote.php/dav/files/user/GDPDU 2026-01/',
+  username := 'myuser',
+  password := 'mypassword',
+  read_folder := 1
+);
+-- Each archive contributes one schema (named after the archive filename)
+```
+
+---
+
+> **Schema naming:**
+> - **Multi-folder archives** (`read_folder = 0`): schemas are named after the **top-level folder** inside the archive (e.g. `Hotels by HR GmbH/...` → `hotels_by_hr_gmbh`). If the archive has only a root-level `index.xml`, the archive filename is used instead.
+> - **Single-folder mode** (`read_folder > 0`): schemas are named after the **archive filename** (e.g. `Company A.zip` → `company_a`).
+> - **Deduplication:** If two folders/archives normalize to the same schema name, a suffix is appended (`_2`, `_3`, etc.).
+
+> **Mandantendaten enrichment:** When a schema contains a `mandantendaten` table (GoBD client master data), its columns are automatically added to every other table in that schema via cross join. This enriches transaction tables (buchungsstapel, konto, etc.) with company name, tax ID, and other metadata — useful when consolidating data from multiple companies.
+
+> **Consolidation into main:** After all schemas are created, each table name that appears across schemas is consolidated into `main` using `UNION ALL BY NAME`. This allows querying all companies' data from a single table while preserving per-company schemas for targeted access.
+
+> **Folder mode notes:**
+> - Only immediate folder contents are scanned (no recursive subfolder search).
+> - Archives are processed in alphabetical order for deterministic results.
+> - If an archive fails to process, the error is recorded and processing continues with the next archive.
 
 **Notes (cloud GoBD functions):**
 - Requires `curl` (functions are only available when the extension is built with libcurl).
