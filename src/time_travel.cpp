@@ -999,7 +999,7 @@ void RegisterTimeTravelOptimizer(DatabaseInstance &db) {
     tt_optimizer.optimize_function = TimeTravelPostOptimize;
 
     auto &config = DBConfig::GetConfig(db);
-    config.optimizer_extensions.push_back(std::move(tt_optimizer));
+    OptimizerExtension::Register(config, std::move(tt_optimizer));
 }
 
 //===--------------------------------------------------------------------===//
