@@ -1163,9 +1163,26 @@ static std::string FirstFolderFromPath(const std::string &path) {
     return path.substr(0, first_sep);
 }
 
+// Get the SECOND folder from a path (skip the top-level wrapper folder)
+// e.g. "TopWrapper/5081_Company/index.xml" -> "5081_Company"
+// e.g. "TopWrapper/5081_Company/2026/index.xml" -> "5081_Company"
+// Falls back to FirstFolderFromPath if there's no second folder
+static std::string SecondFolderFromPath(const std::string &path) {
+    size_t first_sep = path.find_first_of("/\\");
+    if (first_sep == std::string::npos) return ""; // root level, no folder at all
+
+    std::string rest = path.substr(first_sep + 1);
+    size_t second_sep = rest.find_first_of("/\\");
+    if (second_sep == std::string::npos) {
+        // Only one folder + filename (e.g. "Folder/index.xml") -> use first folder
+        return path.substr(0, first_sep);
+    }
+    return rest.substr(0, second_sep);
+}
+
 // Extract ALL GoBD folders from a 7z archive (returns folder_name -> import_data pairs)
 static std::vector<std::pair<std::string, GobdImportData>> ReadAllGobdFromDirectory(
-        const std::string &dir_path, const std::string &url_for_errors) {
+        const std::string &dir_path, const std::string &url_for_errors, bool use_subfolder = false) {
     std::vector<std::pair<std::string, GobdImportData>> results;
 
     std::vector<std::pair<std::string, std::string>> all_files;
@@ -1198,8 +1215,9 @@ static std::vector<std::pair<std::string, GobdImportData>> ReadAllGobdFromDirect
         const std::string &xml_path = entry.first;
         const std::string &xml_dir = entry.second;
 
-        // Get relative path from extract root, then take the FIRST folder segment
+        // Get relative path from extract root, then take the appropriate folder segment
         // e.g. extract_root/CompanyName/20260101/ → relative = CompanyName/20260101 → first = CompanyName
+        // With use_subfolder: extract_root/TopWrapper/SubFolder/... → relative = TopWrapper/SubFolder/... → subfolder = SubFolder
         std::string folder_name;
         if (xml_dir.size() > dir_path.size() + 1) {
             std::string relative = xml_dir.substr(dir_path.size());
@@ -1207,9 +1225,14 @@ static std::vector<std::pair<std::string, GobdImportData>> ReadAllGobdFromDirect
             if (!relative.empty() && (relative[0] == '/' || relative[0] == '\\')) {
                 relative = relative.substr(1);
             }
-            // Get first segment
-            size_t sep = relative.find_first_of("/\\");
-            folder_name = (sep != std::string::npos) ? relative.substr(0, sep) : relative;
+            if (use_subfolder) {
+                // Get second segment (skip top-level wrapper)
+                folder_name = SecondFolderFromPath(relative + "/dummy");
+            } else {
+                // Get first segment
+                size_t sep = relative.find_first_of("/\\");
+                folder_name = (sep != std::string::npos) ? relative.substr(0, sep) : relative;
+            }
         }
         // If at extract root, leave empty — caller will use archive name
         if (xml_dir == dir_path) {
@@ -1264,7 +1287,8 @@ static std::vector<std::pair<std::string, GobdImportData>> ReadAllGobdFromDirect
 static std::vector<std::pair<std::string, GobdImportData>> ExtractAllGobdFromArchiveUrl(
         const std::string &archive_url,
         const std::string &username,
-        const std::string &password) {
+        const std::string &password,
+        bool use_subfolder = false) {
 
     if (Is7zUrl(archive_url)) {
         // ---- 7z path ----
@@ -1294,7 +1318,7 @@ static std::vector<std::pair<std::string, GobdImportData>> ExtractAllGobdFromArc
         try {
             extract_dir = Extract7zToDirectory(temp_file);
             std::remove(temp_file.c_str());
-            results = ReadAllGobdFromDirectory(extract_dir, archive_url);
+            results = ReadAllGobdFromDirectory(extract_dir, archive_url, use_subfolder);
             CleanupDirectory(extract_dir);
         } catch (...) {
             std::remove(temp_file.c_str());
@@ -1358,7 +1382,9 @@ static std::vector<std::pair<std::string, GobdImportData>> ExtractAllGobdFromArc
 
         for (auto &idx_entry : zip_index_xmls) {
             // Extract folder name
-            std::string folder_name = FirstFolderFromPath(idx_entry.filename);
+            std::string folder_name = use_subfolder
+                ? SecondFolderFromPath(idx_entry.filename)
+                : FirstFolderFromPath(idx_entry.filename);
 
             // Read index.xml
             size_t file_size = 0;
@@ -1445,6 +1471,48 @@ static void EnrichWithMandantendaten(Connection &conn, const std::string &schema
                           " AS SELECT " + select_list +
                           " FROM " + escaped_schema + ".mandantendaten m, " +
                           escaped_schema + "." + CloudEscapeIdentifier(table_name) + " t";
+        conn.Query(sql);
+    }
+}
+
+// Escape a string value for use in SQL literals (double single quotes)
+static std::string EscapeSqlString(const std::string &s) {
+    std::string result;
+    result.reserve(s.size());
+    for (char c : s) {
+        if (c == '\'') result += "''";
+        else result += c;
+    }
+    return result;
+}
+
+// Consolidate all schemas into main WITH an ordner column containing original folder name
+static void ConsolidateIntoMainWithFolderColumn(
+    Connection &conn,
+    const std::vector<std::tuple<std::string, std::string, std::vector<std::string>>> &schema_folder_tables) {
+    // schema_folder_tables: (schema_name, original_folder_name, table_names)
+
+    // Collect table_name -> list of (schema, folder_name)
+    std::map<std::string, std::vector<std::pair<std::string, std::string>>> table_to_schema_folders;
+    for (auto &sft : schema_folder_tables) {
+        const auto &schema = std::get<0>(sft);
+        const auto &folder = std::get<1>(sft);
+        for (auto &t : std::get<2>(sft)) {
+            table_to_schema_folders[t].push_back({schema, folder});
+        }
+    }
+
+    for (auto &entry : table_to_schema_folders) {
+        const std::string &table_name = entry.first;
+        const auto &schema_folders = entry.second;
+        if (schema_folders.empty()) continue;
+
+        std::string sql = "CREATE OR REPLACE TABLE main." + CloudEscapeIdentifier(table_name) + " AS ";
+        for (size_t i = 0; i < schema_folders.size(); i++) {
+            if (i > 0) sql += " UNION ALL BY NAME ";
+            sql += "SELECT '" + EscapeSqlString(schema_folders[i].second) + "' AS ordner, * FROM " +
+                   CloudEscapeIdentifier(schema_folders[i].first) + "." + CloudEscapeIdentifier(table_name);
+        }
         conn.Query(sql);
     }
 }
@@ -1947,6 +2015,238 @@ static void GobdCloudZipAllScan(ClientContext &context, TableFunctionInput &data
 }
 
 // ============================================================================
+// stps_read_gobd_cloud_zip_read_folders_all — like zip_all but adds ordner column
+// ============================================================================
+
+static unique_ptr<FunctionData> GobdCloudZipReadFoldersAllBind(ClientContext &context, TableFunctionBindInput &input,
+                                                                vector<LogicalType> &return_types, vector<string> &names) {
+    auto result = make_uniq<GobdCloudZipAllBindData>();
+
+    std::string url = input.inputs[0].ToString();
+    std::string username, password;
+    char delimiter = ';';
+    bool overwrite = false;
+
+    for (auto &kv : input.named_parameters) {
+        if (kv.first == "username") {
+            username = kv.second.ToString();
+        } else if (kv.first == "password") {
+            password = kv.second.ToString();
+        } else if (kv.first == "delimiter") {
+            string delim_str = kv.second.ToString();
+            if (!delim_str.empty()) delimiter = delim_str[0];
+        } else if (kv.first == "overwrite") {
+            overwrite = BooleanValue::Get(kv.second);
+        }
+    }
+
+    if (IsArchiveUrl(url)) {
+        // ---- Direct archive URL: extract all folders (use subfolder names) ----
+        auto all_folders = ExtractAllGobdFromArchiveUrl(url, username, password, /*use_subfolder=*/true);
+        std::string archive_base = ArchiveUrlToSchemaName(url);
+
+        std::set<std::string> used_schemas;
+        std::vector<std::tuple<std::string, std::string, std::vector<std::string>>> schema_folder_table_list;
+
+        for (auto &folder_pair : all_folders) {
+            std::string folder_name = folder_pair.first;
+            std::string schema_name = folder_name.empty()
+                ? archive_base
+                : ToSnakeCase(folder_name);
+
+            std::string base_schema = schema_name;
+            int suffix = 2;
+            while (used_schemas.count(schema_name)) {
+                schema_name = base_schema + "_" + std::to_string(suffix++);
+            }
+            used_schemas.insert(schema_name);
+
+            // Use original folder name for ordner column; fall back to schema name if empty
+            std::string original_folder = folder_name.empty() ? schema_name : folder_name;
+
+            try {
+                auto archive_results = ExecuteGobdImportPipeline(context, folder_pair.second, delimiter, overwrite, schema_name);
+
+                std::vector<std::string> table_names;
+                for (auto &r : archive_results) {
+                    r.archive_url = url;
+                    if (r.error.empty()) {
+                        table_names.push_back(r.table_name);
+                    }
+                }
+
+                if (!table_names.empty()) {
+                    Connection conn(context.db->GetDatabase(context));
+                    EnrichWithMandantendaten(conn, schema_name, table_names);
+                }
+
+                schema_folder_table_list.push_back({schema_name, original_folder, table_names});
+
+                result->import_results.insert(result->import_results.end(),
+                                              archive_results.begin(), archive_results.end());
+            } catch (std::exception &e) {
+                GobdImportResult err_result;
+                err_result.schema_name = schema_name;
+                err_result.table_name = "(folder)";
+                err_result.rows_imported = 0;
+                err_result.columns_created = 0;
+                err_result.archive_url = url;
+                err_result.error = e.what();
+                result->import_results.push_back(err_result);
+            }
+        }
+
+        // Consolidate all schemas into main with ordner column
+        if (!schema_folder_table_list.empty()) {
+            Connection conn(context.db->GetDatabase(context));
+            ConsolidateIntoMainWithFolderColumn(conn, schema_folder_table_list);
+        }
+    } else {
+        // ---- Folder mode: list folder, find all zip/7z files ----
+        std::string folder_url = url;
+        if (!folder_url.empty() && folder_url.back() != '/') {
+            folder_url += '/';
+        }
+
+        CurlHeaders headers;
+        BuildAuthHeaders(headers, username, password);
+        headers.append("Depth: 1");
+
+        std::string request_url = NormalizeRequestUrl(folder_url);
+        std::string propfind_response = curl_propfind(request_url, PROPFIND_BODY, headers);
+
+        if (propfind_response.empty() || propfind_response.find("ERROR:") == 0) {
+            throw IOException("Failed to list folder: " + folder_url +
+                              (propfind_response.size() < 500 ? " (" + propfind_response + ")" : ""));
+        }
+
+        auto entries = ParsePropfindResponse(propfind_response);
+
+        std::vector<std::string> archive_urls;
+        std::string base_url = GetBaseUrl(folder_url);
+
+        for (auto &entry : entries) {
+            if (entry.is_collection) continue;
+
+            std::string entry_url_lower = entry.href;
+            std::transform(entry_url_lower.begin(), entry_url_lower.end(), entry_url_lower.begin(), ::tolower);
+
+            bool is_archive = (entry_url_lower.size() >= 4 && entry_url_lower.substr(entry_url_lower.size() - 4) == ".zip") ||
+                              (entry_url_lower.size() >= 3 && entry_url_lower.substr(entry_url_lower.size() - 3) == ".7z");
+
+            if (is_archive) {
+                std::string full_url;
+                if (entry.href.find("://") != std::string::npos) {
+                    full_url = entry.href;
+                } else {
+                    full_url = base_url + entry.href;
+                }
+                archive_urls.push_back(full_url);
+            }
+        }
+
+        if (archive_urls.empty()) {
+            throw IOException("No .zip or .7z files found in folder: " + folder_url);
+        }
+
+        std::sort(archive_urls.begin(), archive_urls.end());
+
+        std::set<std::string> used_schemas;
+        std::vector<std::tuple<std::string, std::string, std::vector<std::string>>> folder_schema_folder_table_list;
+
+        for (auto &archive_url : archive_urls) {
+            std::string archive_schema = ArchiveUrlToSchemaName(archive_url);
+            {
+                std::string base_schema = archive_schema;
+                int suffix = 2;
+                while (used_schemas.count(archive_schema)) {
+                    archive_schema = base_schema + "_" + std::to_string(suffix++);
+                }
+                used_schemas.insert(archive_schema);
+            }
+
+            try {
+                auto all_folders = ExtractAllGobdFromArchiveUrl(archive_url, username, password, /*use_subfolder=*/true);
+
+                for (auto &folder_pair : all_folders) {
+                    std::string folder_name = folder_pair.first;
+                    std::string schema_name = folder_name.empty()
+                        ? archive_schema
+                        : ToSnakeCase(folder_name);
+
+                    std::string base_schema = schema_name;
+                    int suffix = 2;
+                    while (used_schemas.count(schema_name)) {
+                        schema_name = base_schema + "_" + std::to_string(suffix++);
+                    }
+                    used_schemas.insert(schema_name);
+
+                    std::string original_folder = folder_name.empty() ? schema_name : folder_name;
+
+                    try {
+                        auto folder_results = ExecuteGobdImportPipeline(context, folder_pair.second, delimiter, overwrite, schema_name);
+
+                        std::vector<std::string> table_names;
+                        for (auto &r : folder_results) {
+                            r.archive_url = archive_url;
+                            if (r.error.empty()) table_names.push_back(r.table_name);
+                        }
+
+                        if (!table_names.empty()) {
+                            Connection conn(context.db->GetDatabase(context));
+                            EnrichWithMandantendaten(conn, schema_name, table_names);
+                        }
+                        folder_schema_folder_table_list.push_back({schema_name, original_folder, table_names});
+                        result->import_results.insert(result->import_results.end(),
+                                                      folder_results.begin(), folder_results.end());
+                    } catch (std::exception &e) {
+                        GobdImportResult err_result;
+                        err_result.schema_name = schema_name;
+                        err_result.table_name = "(folder)";
+                        err_result.rows_imported = 0;
+                        err_result.columns_created = 0;
+                        err_result.archive_url = archive_url;
+                        err_result.error = e.what();
+                        result->import_results.push_back(err_result);
+                    }
+                }
+            } catch (std::exception &e) {
+                GobdImportResult err_result;
+                err_result.schema_name = archive_schema;
+                err_result.table_name = "(archive)";
+                err_result.rows_imported = 0;
+                err_result.columns_created = 0;
+                err_result.archive_url = archive_url;
+                err_result.error = e.what();
+                result->import_results.push_back(err_result);
+            }
+        }
+
+        // Consolidate all schemas into main with ordner column
+        if (!folder_schema_folder_table_list.empty()) {
+            Connection conn(context.db->GetDatabase(context));
+            ConsolidateIntoMainWithFolderColumn(conn, folder_schema_folder_table_list);
+        }
+    }
+
+    // Output schema (same as zip_all)
+    names.emplace_back("schema_name");
+    return_types.emplace_back(LogicalType::VARCHAR);
+    names.emplace_back("table_name");
+    return_types.emplace_back(LogicalType::VARCHAR);
+    names.emplace_back("rows_imported");
+    return_types.emplace_back(LogicalType::BIGINT);
+    names.emplace_back("columns_created");
+    return_types.emplace_back(LogicalType::INTEGER);
+    names.emplace_back("archive_url");
+    return_types.emplace_back(LogicalType::VARCHAR);
+    names.emplace_back("error");
+    return_types.emplace_back(LogicalType::VARCHAR);
+
+    return std::move(result);
+}
+
+// ============================================================================
 // Registration
 // ============================================================================
 
@@ -2026,6 +2326,21 @@ void RegisterGobdCloudReaderFunctions(ExtensionLoader &loader) {
         func.named_parameters["delimiter"] = LogicalType::VARCHAR;
         func.named_parameters["overwrite"] = LogicalType::BOOLEAN;
         func.named_parameters["read_folder"] = LogicalType::INTEGER;
+
+        CreateTableFunctionInfo info(func);
+        loader.RegisterFunction(info);
+    }
+
+    // stps_read_gobd_cloud_zip_read_folders_all(url, username, password, delimiter, overwrite)
+    // Like zip_all but adds 'ordner' column with original folder name and consolidates into main
+    {
+        TableFunction func("stps_read_gobd_cloud_zip_read_folders_all",
+                          {LogicalType::VARCHAR},
+                          GobdCloudZipAllScan, GobdCloudZipReadFoldersAllBind, GobdCloudZipAllInit);
+        func.named_parameters["username"] = LogicalType::VARCHAR;
+        func.named_parameters["password"] = LogicalType::VARCHAR;
+        func.named_parameters["delimiter"] = LogicalType::VARCHAR;
+        func.named_parameters["overwrite"] = LogicalType::BOOLEAN;
 
         CreateTableFunctionInfo info(func);
         loader.RegisterFunction(info);
