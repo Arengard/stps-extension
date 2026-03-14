@@ -35,11 +35,7 @@ namespace stps {
 // Shared helpers (same patterns as gobd_reader.cpp)
 // ============================================================================
 
-// Use to_snake_case from case_transform.hpp instead of duplicating
-static string ToSnakeCase(const string &input) {
-    string result = to_snake_case(input);
-    return result.empty() ? "column" : result;
-}
+// ToSnakeCase is declared in gobd_reader.hpp and defined in gobd_reader.cpp
 
 static string EscapeIdentifier(const string &name) {
     string escaped;
